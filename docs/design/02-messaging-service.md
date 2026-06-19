@@ -3,7 +3,7 @@
 > Channels, threads, messages, reactions, read receipts, and real-time delivery.
 > Read [Platform Conventions](./00-platform-conventions.md) first.
 
-**Status:** Draft · **Runtime:** .NET 10 / ASP.NET Core + SignalR
+**Status:** Draft · **Runtime:** Python 3.12 / FastAPI + Socket.IO
 **Owns:** channels, membership, messages, threads, reactions, read receipts
 **Depends on:** PostgreSQL (own DB), Redis Real-time (R2), Redis Cache (R1), Redis Streams (R3)
 
@@ -23,9 +23,11 @@ search endpoint — see §3), file attachments (Asset Service owns blobs; messag
 ---
 
 ## 2. Runtime & Dependencies
-- ASP.NET Core REST + a SignalR hub (`MessagingHub`) with the R2 backplane (Conventions §6).
-- EF Core + Npgsql.
-- StackExchange.Redis for R1 (hot data), R2 (backplane/pub-sub), R3 (index jobs).
+- FastAPI REST + a Socket.IO server on the `/messaging` namespace, with the R2 backplane
+  (Conventions §6). The Socket.IO ASGI app is mounted alongside FastAPI on one Uvicorn process.
+- SQLAlchemy 2.0 (async) + asyncpg; Alembic migrations.
+- `redis-py` (`redis.asyncio`) for R1 (hot data), R2 (Socket.IO Redis manager / pub-sub),
+  R3 (index jobs).
 
 ---
 
@@ -44,7 +46,7 @@ search endpoint — see §3), file attachments (Asset Service owns blobs; messag
 | POST | `/channels/{id}/members` | channel admin | Add member(s). |
 | DELETE | `/channels/{id}/members/{userId}` | channel admin | Remove member. |
 | GET | `/channels/{id}/messages` | channel member | History, cursor paginated, newest-first. |
-| POST | `/channels/{id}/messages` | channel member | Send message (REST fallback; prefer hub). |
+| POST | `/channels/{id}/messages` | channel member | Send message (REST fallback; prefer the Socket.IO event). |
 | GET | `/messages/{id}` | channel member | Single message (+ thread root). |
 | PATCH | `/messages/{id}` | author | Edit message. |
 | DELETE | `/messages/{id}` | author or channel admin | Delete message. |
@@ -65,33 +67,37 @@ search endpoint — see §3), file attachments (Asset Service owns blobs; messag
 }
 ```
 
-### 3.2 SignalR Hub — `MessagingHub` (path `/hubs/messaging`)
+### 3.2 Socket.IO namespace — `/messaging`
+
+Real-time runs on the Socket.IO `/messaging` namespace (Conventions §6). Client→server
+events are verbs; server→client events are past-tense facts. `send_message` returns the
+created `Message` via the Socket.IO acknowledgement callback.
 
 **Client → Server**
 
-| Method | Args | Effect |
+| Event | Args | Effect |
 |--------|------|--------|
-| `JoinChannel(channelId)` | guid | Authorize + join group `channel:{id}`. |
-| `LeaveChannel(channelId)` | guid | Leave group. |
-| `SendMessage(channelId, body, threadRootId?, attachmentIds?)` | | Persist + broadcast. Returns the created `Message`. |
-| `EditMessage(messageId, body)` | | Author-only edit + broadcast. |
-| `DeleteMessage(messageId)` | | Author/admin delete + broadcast. |
-| `AddReaction(messageId, emoji)` / `RemoveReaction(messageId, emoji)` | | Broadcast reaction change. |
-| `MarkRead(channelId, messageId)` | | Update read receipt; broadcast to user's other sessions. |
-| `Typing(channelId)` | | Ephemeral; fan out `UserTyping` (not persisted). |
+| `join_channel` | channelId | Authorize + join room `channel:{id}`. |
+| `leave_channel` | channelId | Leave room. |
+| `send_message` | `{ channelId, body, threadRootId?, attachmentIds? }` | Persist + broadcast. Returns the created `Message` via ack. |
+| `edit_message` | `{ messageId, body }` | Author-only edit + broadcast. |
+| `delete_message` | `{ messageId }` | Author/admin delete + broadcast. |
+| `add_reaction` / `remove_reaction` | `{ messageId, emoji }` | Broadcast reaction change. |
+| `mark_read` | `{ channelId, messageId }` | Update read receipt; broadcast to user's other sessions. |
+| `typing` | `{ channelId }` | Ephemeral; fan out `user_typing` (not persisted). |
 
 **Server → Client (events)**
 
 | Event | Payload |
 |-------|---------|
-| `MessageReceived` | `Message` |
-| `MessageEdited` | `Message` |
-| `MessageDeleted` | `{ messageId, channelId }` |
-| `ReactionChanged` | `{ messageId, emoji, count, userId, added }` |
-| `ReadReceiptUpdated` | `{ channelId, userId, messageId }` |
-| `UserTyping` | `{ channelId, userId }` |
+| `message_received` | `Message` |
+| `message_edited` | `Message` |
+| `message_deleted` | `{ messageId, channelId }` |
+| `reaction_changed` | `{ messageId, emoji, count, userId, added }` |
+| `read_receipt_updated` | `{ channelId, userId, messageId }` |
+| `user_typing` | `{ channelId, userId }` |
 
-Groups and naming follow Conventions §6. Presence (online/away) is published to R2 and
+Rooms and naming follow Conventions §6. Presence (online/away) is published to R2 and
 mirrored to the Canvas service's presence as needed (shared R2).
 
 ---
@@ -150,17 +156,17 @@ replies still point at the root. Read state is a per-member pointer (`last_read_
 counts are derived (messages with `id > last_read_id`).
 
 ### 4.1 Redis usage
-- **R1:** cache channel membership sets and recent-message windows for fast hub authorization.
-- **R2:** SignalR backplane + presence pub/sub.
+- **R1:** cache channel membership sets and recent-message windows for fast event authorization.
+- **R2:** Socket.IO Redis manager (backplane) + presence pub/sub.
 - **R3:** `jobs:index` — one job per created/edited/deleted message for ES sync.
 
 ---
 
 ## 5. Internal Design — Send Message
 Mirrors the architecture's sequence diagram:
-1. Client calls `SendMessage` on the hub.
+1. Client emits the `send_message` event on the `/messaging` namespace.
 2. Persist to `messages` (PostgreSQL).
-3. Broadcast `MessageReceived` to `channel:{id}` via R2 backplane.
+3. Broadcast `message_received` to room `channel:{id}` via the R2 backplane.
 4. `XADD jobs:index` with payload `{ messageId, op: "upsert" }`.
 5. Worker consumes and indexes into Elasticsearch (Worker doc owns the mapping).
 
@@ -169,13 +175,13 @@ Edits/deletes follow the same persist → broadcast → enqueue(`op: upsert|dele
 ---
 
 ## 6. Configuration
-Common vars (Conventions §8): owns `ConnectionStrings__Postgres`, uses `Redis__Cache`,
-`Redis__Realtime`, `Redis__Streams`. Plus `Messaging__MaxBodyChars` (default 8000),
-`Messaging__MaxAttachments` (default 10).
+Common vars (Conventions §8): owns `POSTGRES_DSN`, uses `REDIS_CACHE_URL`,
+`REDIS_REALTIME_URL`, `REDIS_STREAMS_URL`. Plus `MESSAGING_MAX_BODY_CHARS` (default 8000),
+`MESSAGING_MAX_ATTACHMENTS` (default 10).
 
 ## 7. Cross-Cutting
 Auth, errors, pagination, observability, health per Conventions. Metrics:
-`messages_sent_total`, `messages_edited_total`, `reactions_total`, hub connection gauge.
+`messages_sent_total`, `messages_edited_total`, `reactions_total`, Socket.IO connection gauge.
 
 ## 8. Non-Functional & Limits
 - Real-time delivery p99 < 500 ms end-to-end.

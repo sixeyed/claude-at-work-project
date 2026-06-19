@@ -3,7 +3,7 @@
 > Identity, token issuance, and authorization source of truth.
 > Read [Platform Conventions](./00-platform-conventions.md) first.
 
-**Status:** Draft · **Runtime:** .NET 10 / ASP.NET Core
+**Status:** Draft · **Runtime:** Python 3.12 / FastAPI (Uvicorn)
 **Owns:** users, external identities, roles, workspace membership, tokens
 **Depends on:** PostgreSQL (own DB), Redis Cache (R1)
 
@@ -29,11 +29,12 @@ The Auth Service is the identity provider and authorization source of truth for 
 
 ## 2. Runtime & Dependencies
 
-- ASP.NET Core minimal APIs or controllers.
-- `Microsoft.AspNetCore.Authentication.OpenIdConnect`, `Sustainsys.Saml2` (or equivalent) for SAML.
-- `Microsoft.IdentityModel.Tokens` / `System.IdentityModel.Tokens.Jwt` for signing.
-- EF Core + Npgsql for PostgreSQL.
-- StackExchange.Redis for the R1 denylist + token cache.
+- FastAPI routers (Uvicorn ASGI server).
+- **Authlib** for the OpenID Connect client flow; **python3-saml** (or equivalent) for SAML.
+- **PyJWT** (or Authlib's JWT support) for RS256 signing and JWKS generation
+  (`cryptography` provides the underlying RSA primitives).
+- SQLAlchemy 2.0 (async) + asyncpg for PostgreSQL; Alembic for migrations.
+- `redis-py` (`redis.asyncio`) for the R1 denylist + token cache.
 - Signing keys: RSA key pair stored as a secret; supports key rotation (multiple `kid`s,
   one active for signing, several valid for verification).
 
@@ -134,6 +135,8 @@ CREATE TABLE refresh_tokens (
 CREATE INDEX ix_refresh_user ON refresh_tokens (user_id) WHERE revoked_at IS NULL;
 ```
 
+SQLAlchemy models map one-to-one to these tables; Alembic owns the migration history.
+
 ### 4.1 Redis (R1) usage
 - `auth:revoked:{jti}` → `"1"`, TTL = remaining access-token lifetime. Written on logout.
 - `auth:userinfo:{userId}` → cached profile blob, short TTL, to speed up `/userinfo`.
@@ -154,8 +157,9 @@ set `rotated_to` and `revoked_at` on the old row (reuse of a rotated token ⇒ r
 family and 401 — detects token theft).
 
 ### 5.3 Token verification (for other services)
-Other services do NOT call this service per request. They fetch JWKS and verify locally
-(Conventions §5). This service only needs to keep JWKS current and maintain the denylist.
+Other services do NOT call this service per request. They fetch JWKS and verify locally with
+PyJWT/Authlib (Conventions §5). This service only needs to keep JWKS current and maintain the
+denylist.
 
 ---
 
@@ -165,13 +169,13 @@ Common vars per Conventions §8, plus:
 
 | Var | Notes |
 |-----|-------|
-| `Auth__SigningKey` | PEM RSA private key (secret). Active `kid`. |
-| `Auth__PreviousKeys` | Prior public keys still valid for verification (rotation). |
-| `Auth__AccessTokenMinutes` | Default 15. |
-| `Auth__RefreshTokenDays` | Default 30. |
-| `Oidc__{provider}__Authority` / `__ClientId` / `__ClientSecret` | Per external IdP. |
-| `Saml__{provider}__MetadataUrl` | Per SAML IdP. |
-| `Spa__RedirectUri` | Allowed post-login redirect. |
+| `AUTH_SIGNING_KEY` | PEM RSA private key (secret). Active `kid`. |
+| `AUTH_PREVIOUS_KEYS` | Prior public keys still valid for verification (rotation). |
+| `AUTH_ACCESS_TOKEN_MINUTES` | Default 15. |
+| `AUTH_REFRESH_TOKEN_DAYS` | Default 30. |
+| `OIDC_{PROVIDER}_AUTHORITY` / `_CLIENT_ID` / `_CLIENT_SECRET` | Per external IdP. |
+| `SAML_{PROVIDER}_METADATA_URL` | Per SAML IdP. |
+| `SPA_REDIRECT_URI` | Allowed post-login redirect. |
 
 ---
 

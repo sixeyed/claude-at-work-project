@@ -4,7 +4,7 @@
 > instead of repeating cross-cutting rules. Read this first.
 
 **Status:** Draft · **Applies to:** Auth, Messaging, Canvas, Asset, Worker services
-**Stack baseline:** .NET 10 · ASP.NET Core · C# · Kubernetes
+**Stack baseline:** Python 3.12 · FastAPI · Uvicorn (ASGI) · Kubernetes
 
 ---
 
@@ -19,17 +19,18 @@ unless the service doc explicitly overrides a section and says so.
 
 ## 2. Repository & Project Layout
 
-Mono-repo, one solution, one project per service plus shared libraries.
+Mono-repo, one workspace (uv or Poetry), one installable package per service plus shared
+libraries.
 
 ```
-/src
-  /CollabHub.Shared            # Cross-cutting: Problem Details, auth handler, telemetry, job envelope
-  /CollabHub.Shared.Contracts  # DTOs + job payload records shared across service boundaries
-  /CollabHub.Auth
-  /CollabHub.Messaging
-  /CollabHub.Canvas
-  /CollabHub.Asset
-  /CollabHub.Worker
+/services
+  /collabhub-shared            # Cross-cutting: Problem Details, auth dependency, telemetry, job envelope
+  /collabhub-contracts         # Pydantic DTOs + job payload models shared across service boundaries
+  /collabhub-auth
+  /collabhub-messaging
+  /collabhub-canvas
+  /collabhub-asset
+  /collabhub-worker
 /deploy
   /helm                        # One chart per service + umbrella chart
   /k8s                         # Raw manifests / kustomize overlays (on-prem, azure)
@@ -38,7 +39,9 @@ Mono-repo, one solution, one project per service plus shared libraries.
 
 Each service is a separate container image, separately deployable, with its own
 Helm chart and its own database migration history. Services MUST NOT share a database
-schema; cross-service reads go through the owning service's API or through events.
+schema; cross-service reads go through the owning service's API or through events. Each
+service package has its own `pyproject.toml` and pinned dependency lock; the two shared
+packages (`collabhub-shared`, `collabhub-contracts`) are workspace dependencies.
 
 ---
 
@@ -51,7 +54,7 @@ schema; cross-service reads go through the owning service's API or through event
 - **Soft delete:** Mutable user-facing resources use `deleted_at timestamptz NULL`.
   Queries filter `deleted_at IS NULL` by default. Hard delete only via retention jobs.
 - **Optimistic concurrency:** Updatable rows carry a `version integer NOT NULL DEFAULT 0`,
-  incremented on every update. Updates use `WHERE id = @id AND version = @expectedVersion`;
+  incremented on every update. Updates use `WHERE id = :id AND version = :expected_version`;
   zero rows affected → `409 Conflict`.
 
 ---
@@ -101,8 +104,9 @@ All non-2xx responses return `application/problem+json`:
 - `type` is a stable URI per error class (table below). `traceId` is the W3C trace id.
 - Standard classes every service uses: `validation-error` (400), `unauthorized` (401),
   `forbidden` (403), `not-found` (404), `conflict` (409), `rate-limited` (429),
-  `internal` (500). Implement once in `CollabHub.Shared` as an exception-to-ProblemDetails
-  mapping middleware.
+  `internal` (500). Implement once in `collabhub-shared` as FastAPI exception handlers
+  that map domain and validation exceptions to Problem Details responses (including a
+  handler for FastAPI/Pydantic `RequestValidationError` → `validation-error`).
 - Never leak stack traces or internal messages in `detail` for 5xx.
 
 ---
@@ -116,7 +120,8 @@ other service. There is no per-request call to the Auth Service to validate a to
 
 - **Algorithm:** RS256. Auth Service publishes its public keys at
   `GET https://auth/.well-known/jwks.json`. Services fetch and cache the JWKS
-  (refresh on `kid` miss; hard refresh hourly).
+  (refresh on `kid` miss; hard refresh hourly). Verification uses PyJWT (with its
+  `PyJWKClient`) or Authlib's JWT support.
 - **Lifetime:** access token 15 minutes; refresh token 30 days, **rotating** (each refresh
   invalidates the previous refresh token).
 - **Claims:**
@@ -130,6 +135,10 @@ other service. There is no per-request call to the Auth Service to validate a to
   | `roles`  | Array of role strings within the active workspace |
   | `jti`    | Token ID (used for revocation) |
   | `iat`/`exp` | Issued / expiry (UTC epoch) |
+
+Verification is provided once in `collabhub-shared` as a FastAPI dependency
+(`Depends(require_user)`) that validates the signature, `iss`, `aud`, and expiry and yields
+the parsed principal.
 
 ### 5.2 Revocation (the one stateful part)
 
@@ -150,29 +159,33 @@ signature) and logs a warning — access tokens are short-lived enough that this
 
 ---
 
-## 6. Real-Time (SignalR) Conventions
+## 6. Real-Time (Socket.IO) Conventions
 
-Services that expose real-time features host a SignalR hub backed by the **Redis Real-time
-backplane (R2)** so that any pod can serve any client.
+Services that expose real-time features host a **Socket.IO** server (the `python-socketio`
+ASGI server, mounted alongside FastAPI on the same Uvicorn process) backed by the **Redis
+Real-time backplane (R2)** so that any pod can serve any client.
 
-- **Transport:** WebSockets preferred, automatic fallback to SSE / long-polling (SignalR default).
-- **Auth:** the access token is passed via `access_token` query string on the hub connection
-  (SignalR cannot set headers on the WS handshake in browsers). The hub validates it the same
-  way as REST.
-- **Group naming:** `<entity>:<id>` — e.g. `channel:{channelId}`, `doc:{documentId}`,
-  `presence:{documentId}`. A connection joins groups it is authorized for on connect or on
-  an explicit join method.
-- **Method naming:** client→server hub methods are verbs (`SendMessage`); server→client
-  events are past-tense facts (`MessageReceived`). Both documented per service.
-- **Backplane:** configure `AddStackExchangeRedis` against R2. Do not put SignalR backplane
-  traffic on R1 or R3.
+- **Transport:** WebSockets preferred, automatic fallback to HTTP long-polling
+  (Socket.IO default). The browser uses `socket.io-client`.
+- **Auth:** the access token is passed in the Socket.IO handshake `auth` payload
+  (`io(url, { auth: { token } })`); a query-string `access_token` is accepted as a fallback.
+  The server validates it in the `connect` handler the same way as REST.
+- **Namespaces & rooms:** one namespace per real-time domain (`/messaging`, `/canvas`).
+  Within a namespace, membership groups are Socket.IO **rooms** named `<entity>:<id>` —
+  e.g. `channel:{channelId}`, `doc:{documentId}`, `presence:{documentId}`. A connection
+  joins the rooms it is authorized for on connect or on an explicit join event.
+- **Event naming:** client→server events are verbs (`send_message`); server→client
+  events are past-tense facts (`message_received`). Both documented per service.
+- **Backplane:** construct the server with a Redis client manager —
+  `socketio.AsyncServer(client_manager=socketio.AsyncRedisManager(<R2 URL>))`.
+  Do not put backplane traffic on R1 or R3.
 
 ---
 
 ## 7. Asynchronous Jobs (Redis Streams)
 
 Background work flows through **Redis Streams (R3)**. Producers `XADD`; the Worker consumes
-via consumer groups.
+via consumer groups (using the `redis-py` async client).
 
 ### 7.1 Job envelope
 
@@ -185,7 +198,7 @@ Every stream entry has a single field `data` containing this JSON envelope:
   "version": 1,
   "occurredAt": "2026-06-03T10:15:00Z",
   "attempt": 1,
-  "payload": { /* type-specific, defined in CollabHub.Shared.Contracts */ }
+  "payload": { /* type-specific, defined in collabhub-contracts */ }
 }
 ```
 
@@ -204,21 +217,22 @@ Every stream entry has a single field `data` containing this JSON envelope:
 ## 8. Configuration & Secrets
 
 - All config comes from environment variables (12-factor). No config baked into images.
+  Each service loads and validates config with **pydantic-settings** (`BaseSettings`).
 - Non-secret config via Kubernetes ConfigMap; secrets via Sealed Secrets / Vault on-prem,
   Azure Key Vault (CSI driver) on Azure.
 - **Common env vars** (every service):
 
   | Var | Example | Notes |
   |-----|---------|-------|
-  | `ASPNETCORE_ENVIRONMENT` | `Production` | |
-  | `ConnectionStrings__Postgres` | `Host=pg;Database=collabhub;...` | Owning DB only |
-  | `Redis__Cache` | `redis-cache:6379` | R1 |
-  | `Redis__Realtime` | `redis-rt:6379` | R2 (only RT services) |
-  | `Redis__Streams` | `redis-streams:6379` | R3 |
-  | `Auth__Jwks` | `https://auth/.well-known/jwks.json` | |
-  | `Auth__Issuer` | `https://auth` | Expected `iss` |
-  | `Auth__Audience` | `collabhub` | Expected `aud` |
-  | `Otel__Endpoint` | `http://otel-collector:4317` | OTLP gRPC |
+  | `APP_ENV` | `production` | |
+  | `POSTGRES_DSN` | `postgresql+asyncpg://pg/collabhub` | Owning DB only (SQLAlchemy async URL) |
+  | `REDIS_CACHE_URL` | `redis://redis-cache:6379/0` | R1 |
+  | `REDIS_REALTIME_URL` | `redis://redis-rt:6379/0` | R2 (only RT services) |
+  | `REDIS_STREAMS_URL` | `redis://redis-streams:6379/0` | R3 |
+  | `AUTH_JWKS_URL` | `https://auth/.well-known/jwks.json` | |
+  | `AUTH_ISSUER` | `https://auth` | Expected `iss` |
+  | `AUTH_AUDIENCE` | `collabhub` | Expected `aud` |
+  | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-collector:4317` | OTLP gRPC |
 
 - No cloud-specific SDKs where an agnostic alternative exists. Object storage uses the
   S3-compatible API (MinIO on-prem, Azure Blob's S3 layer or an SDK swap behind an interface).
@@ -227,13 +241,15 @@ Every stream entry has a single field `data` containing this JSON envelope:
 
 ## 9. Observability
 
-- **Tracing:** OpenTelemetry SDK, OTLP exporter to the collector → Jaeger. Auto-instrument
-  ASP.NET Core, HttpClient, Npgsql, StackExchange.Redis. Propagate W3C `traceparent` across
-  REST, SignalR, and job envelopes (carry `traceId` in the envelope for continuity).
-- **Metrics:** OTel metrics → Prometheus. Standard service metrics + domain counters
-  (messages sent, jobs processed, snapshot writes). RED method (Rate, Errors, Duration).
-- **Logs:** structured JSON via Serilog → Loki. Always include `traceId`, `userId` (when
-  authenticated), `service`, `env`. No PII in logs beyond user IDs.
+- **Tracing:** OpenTelemetry SDK (`opentelemetry-sdk`), OTLP exporter to the collector →
+  Jaeger. Auto-instrument FastAPI/ASGI, the HTTP client (httpx/requests), SQLAlchemy +
+  asyncpg, and `redis`. Propagate W3C `traceparent` across REST, Socket.IO, and job
+  envelopes (carry `traceId` in the envelope for continuity).
+- **Metrics:** OTel metrics → Prometheus (`opentelemetry-exporter-prometheus` or the OTLP
+  metrics pipeline). Standard service metrics + domain counters (messages sent, jobs
+  processed, snapshot writes). RED method (Rate, Errors, Duration).
+- **Logs:** structured JSON via **structlog** → Loki. Always include `traceId`, `userId`
+  (when authenticated), `service`, `env`. No PII in logs beyond user IDs.
 - **Correlation:** accept and propagate `X-Correlation-Id`; generate one if absent.
 
 ---
@@ -244,7 +260,8 @@ Every stream entry has a single field `data` containing this JSON envelope:
 - `GET /health/ready` — readiness, checks owned dependencies (its Postgres, the Redis
   instances it uses). Returns 503 until healthy. Used by K8s readiness probe.
 - Graceful shutdown: stop accepting new work, drain in-flight requests / unacked stream
-  entries, then exit. Honour `SIGTERM`; K8s `terminationGracePeriodSeconds: 30`.
+  entries, then exit. Honour `SIGTERM` (handled via the FastAPI/ASGI lifespan and Uvicorn's
+  graceful shutdown); K8s `terminationGracePeriodSeconds: 30`.
 
 ---
 
@@ -252,10 +269,11 @@ Every stream entry has a single field `data` containing this JSON envelope:
 
 - `docker-compose.yml` at repo root brings up Postgres, the 3 Redis instances, MinIO,
   Elasticsearch, and an OTel collector for local runs.
-- Each service ships EF Core migrations; `dotnet ef database update` per service against
+- Each service ships **Alembic** migrations; `alembic upgrade head` per service against
   its own database (or schema-per-service on one local Postgres for convenience).
-- Test layers: unit (domain logic), integration (Testcontainers for Postgres/Redis/MinIO/ES),
-  contract (verify DTOs in `CollabHub.Shared.Contracts` against each side).
+- Test layers (pytest): unit (domain logic), integration (testcontainers-python for
+  Postgres/Redis/MinIO/ES), contract (verify the Pydantic models in `collabhub-contracts`
+  against each side).
 
 ---
 

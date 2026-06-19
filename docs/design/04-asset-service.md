@@ -3,7 +3,7 @@
 > File uploads, downloads, and metadata via presigned object-storage URLs.
 > Read [Platform Conventions](./00-platform-conventions.md) first.
 
-**Status:** Draft · **Runtime:** .NET 10 / ASP.NET Core
+**Status:** Draft · **Runtime:** Python 3.12 / FastAPI (Uvicorn)
 **Owns:** asset metadata, presigned URL issuance, bucket layout
 **Depends on:** PostgreSQL (own DB), MinIO (S3-compatible), Redis Streams (R3)
 
@@ -24,12 +24,12 @@ store asset IDs and decide what an asset belongs to).
 ---
 
 ## 2. Runtime & Dependencies
-- ASP.NET Core REST only (no SignalR).
-- S3-compatible client (`AWSSDK.S3` pointed at MinIO, or `Minio` .NET SDK) **behind an
-  `IObjectStore` interface** so MinIO ↔ Azure Blob is a config/implementation swap, not a code
-  change (Conventions §8).
-- EF Core + Npgsql.
-- StackExchange.Redis for R3.
+- FastAPI REST only (no Socket.IO).
+- S3-compatible client (`boto3` pointed at MinIO, or the `minio` Python SDK) **behind an
+  `ObjectStore` protocol/ABC** so MinIO ↔ Azure Blob is a config/implementation swap, not a
+  code change (Conventions §8).
+- SQLAlchemy 2.0 (async) + asyncpg; Alembic migrations.
+- `redis-py` (`redis.asyncio`) for R3.
 
 ---
 
@@ -114,12 +114,13 @@ CREATE TABLE asset_variants (
 ---
 
 ## 5. Internal Design — Upload & Process
-1. `POST /assets/upload-url`: insert `assets` row (`pending`), generate presigned PUT, return.
+1. `POST /assets/upload-url`: insert `assets` row (`pending`), generate presigned PUT
+   (via `boto3.generate_presigned_url`), return.
 2. Client `PUT`s bytes directly to MinIO.
 3. `POST /assets/{id}/confirm`: HEAD the object to confirm existence/size/ETag, set
    `status='ready'`, `confirmed_at`, `checksum`.
 4. `XADD jobs:thumbnail` with the variants to generate.
-5. Worker consumes, generates variants (ImageSharp), stores them in MinIO, records
+5. Worker consumes, generates variants (Pillow), stores them in MinIO, records
    `asset_variants`.
 
 Orphan cleanup: `pending` assets older than a TTL (no confirm) are swept by a retention job
@@ -132,12 +133,12 @@ Common vars (Conventions §8). Plus:
 
 | Var | Notes |
 |-----|-------|
-| `ObjectStore__Endpoint` | MinIO endpoint (or Azure Blob S3 endpoint). |
-| `ObjectStore__AccessKey` / `__SecretKey` | Secret. |
-| `ObjectStore__Bucket` | Default bucket. |
-| `ObjectStore__PresignTtlSeconds` | Default 900. |
-| `Asset__MaxUploadBytes` | e.g. 50 MB (per purpose overrides). |
-| `Asset__AllowedContentTypes` | Allow-list per purpose. |
+| `OBJECT_STORE_ENDPOINT` | MinIO endpoint (or Azure Blob S3 endpoint). |
+| `OBJECT_STORE_ACCESS_KEY` / `_SECRET_KEY` | Secret. |
+| `OBJECT_STORE_BUCKET` | Default bucket. |
+| `OBJECT_STORE_PRESIGN_TTL_SECONDS` | Default 900. |
+| `ASSET_MAX_UPLOAD_BYTES` | e.g. 50 MB (per purpose overrides). |
+| `ASSET_ALLOWED_CONTENT_TYPES` | Allow-list per purpose. |
 
 ## 7. Cross-Cutting
 Auth, errors, health, observability per Conventions. Metrics: `assets_uploaded_total`,

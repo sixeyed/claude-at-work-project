@@ -54,7 +54,7 @@ other. Details in the tables below (IDs in brackets).
 |----|----------|-----------------|----------------|-------|
 | D9 | Yjs state column type | 🟡 `bytea` (+ optional derived JSONB) — note: original architecture said JSONB | Confirm bytea; Yjs is binary | Cross-cutting (Canvas, Worker) |
 | D10 | Storage strategy: snapshot-only vs. snapshot + append log | 🟡 Append log mentioned | Recommend snapshot + append log (durability between snapshots) | Canvas |
-| D11 | Server-side Yjs (y-crdt .NET binding) vs. trust a debounced client full-state push | 🔴 Open | Server-side binding if crash-correctness matters | Canvas |
+| D11 | Server-side Yjs (`pycrdt` y-crdt binding) vs. trust a debounced client full-state push | 🔴 Open | Server-side binding if crash-correctness matters | Canvas |
 | D12 | Index canvas content in Elasticsearch? | 🔴 Open | Needs a Canvas → text projection; ties to D17 | Cross-cutting (Canvas, Worker) |
 
 ## Asset
@@ -64,7 +64,7 @@ other. Details in the tables below (IDs in brackets).
 | D13 | Avatars/exports in shared bucket vs. dedicated buckets | 🔴 Open | — | Asset |
 | D14 | How Worker reports generated variants back | 🟡 Internal endpoint `POST /assets/{id}/variants` | Internal endpoint (no shared DB) | Cross-cutting (Asset, Worker) |
 | D15 | Virus/malware scan before marking `ready` | 🔴 Open | Add a scan hook if uploads are user-shared | Asset |
-| D15b | Azure phase: direct Blob SDK vs. S3-compat layer | 🟡 S3-compat | Keep S3-compat behind `IObjectStore` | Asset |
+| D15b | Azure phase: direct Blob SDK vs. S3-compat layer | 🟡 S3-compat | Keep S3-compat behind the `ObjectStore` protocol | Asset |
 
 ## Worker
 
@@ -73,7 +73,7 @@ other. Details in the tables below (IDs in brackets).
 | D16 | Retention policy values (message days, pending-asset hours, etc.) | 🔴 Open | Set concrete numbers; coordinate with D8d | Worker (+ Messaging) |
 | D17 | Specialised worker pools vs. one deployment for all streams | 🟡 Single, split suggested | Split CPU-heavy (thumbnail/export) from IO-heavy (index/notify) | Worker |
 | D18 | Notification channels in v1 | 🔴 Open | In-app first; push/email later | Worker |
-| D19 | Canvas export rendering engine (headless renderer / server-side Yjs + skia) | 🔴 Open | Non-trivial; consider deferring | Worker |
+| D19 | Canvas export rendering engine (headless renderer / server-side Yjs via `pycrdt` + skia) | 🔴 Open | Non-trivial; consider deferring | Worker |
 
 ## Frontend SPA
 

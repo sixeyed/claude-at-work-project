@@ -3,7 +3,7 @@
 > Headless background processor: indexing, thumbnails, notifications, exports, retention.
 > Read [Platform Conventions](./00-platform-conventions.md) first.
 
-**Status:** Draft · **Runtime:** .NET 10 worker (headless, no HTTP except health)
+**Status:** Draft · **Runtime:** Python 3.12 worker (headless asyncio, no HTTP except health)
 **Owns:** all async job processing + the Elasticsearch index lifecycle
 **Depends on:** Redis Streams (R3), Elasticsearch, MinIO, PostgreSQL (read-mostly, see §5)
 
@@ -11,14 +11,14 @@
 
 ## 1. Purpose & Responsibilities
 
-A headless .NET worker that consumes jobs from **Redis Streams (R3)** and does the heavy,
+A headless Python worker that consumes jobs from **Redis Streams (R3)** and does the heavy,
 non-interactive work. Scales horizontally via **KEDA** based on stream depth.
 
 **Owns:**
 - Consuming all `jobs:*` streams (Conventions §7).
 - The **Elasticsearch index lifecycle**: mappings, aliases, reindexing, and writes. ES is
   write-only from the Worker; services read from ES directly (or via a search gateway).
-- Image thumbnailing/optimisation (ImageSharp).
+- Image thumbnailing/optimisation (Pillow).
 - Notification dispatch.
 - Export generation (canvas → PNG/SVG/PDF).
 - Data retention / cleanup sweeps.
@@ -29,13 +29,15 @@ writes back via the owning service's internal endpoint where possible — see §
 ---
 
 ## 2. Runtime & Dependencies
-- `Microsoft.Extensions.Hosting` `BackgroundService`, one hosted consumer per job type.
-- StackExchange.Redis (R3 consumer groups, `XREADGROUP` / `XAUTOCLAIM`).
-- `Elastic.Clients.Elasticsearch` for ES.
-- `SixLabors.ImageSharp` for image work.
-- S3-compatible client (`IObjectStore`) for MinIO (shared with Asset service via Shared lib).
-- Npgsql for read access where needed.
-- Exposes only `/health/live` and `/health/ready` (Conventions §10); no business HTTP.
+- A long-running **asyncio** process; one supervised consumer coroutine per job type
+  (no web framework for business logic).
+- `redis-py` (`redis.asyncio`) for R3 consumer groups (`XREADGROUP` / `XAUTOCLAIM`).
+- `elasticsearch` (the async `elasticsearch-py` client) for ES.
+- `Pillow` for image work.
+- The shared S3-compatible `ObjectStore` (boto3/minio) for MinIO, reused from `collabhub-shared`.
+- SQLAlchemy 2.0 (async) + asyncpg for read access where needed.
+- Exposes only `/health/live` and `/health/ready` (Conventions §10) via a minimal
+  Starlette/FastAPI health app; no business HTTP.
 
 ---
 
@@ -49,7 +51,7 @@ by `type`.
 | `jobs:index` | `message.upsert` / `message.delete` | `{ messageId, op }` | Read message (or accept payload), upsert/delete in `messages` ES index. |
 | `jobs:index` | `document.index` | `{ documentId, textProjection }` | Index canvas text projection (if canvas search enabled). |
 | `jobs:index` | `asset.index` | `{ assetId }` | Index file metadata for file search. |
-| `jobs:thumbnail` | `thumbnail.generate` | `{ assetId, objectKey, variants[] }` | Fetch from MinIO, generate variants (ImageSharp), store back, report variants to Asset svc. |
+| `jobs:thumbnail` | `thumbnail.generate` | `{ assetId, objectKey, variants[] }` | Fetch from MinIO, generate variants (Pillow), store back, report variants to Asset svc. |
 | `jobs:notify` | `notify.dispatch` | `{ userId, kind, data }` | Deliver notification (push/email/in-app). |
 | `jobs:export` | `canvas.export` | `{ documentId, format, requestedBy }` | Render document to PNG/SVG/PDF, store in MinIO, notify requester. |
 | `jobs:retention` | `retention.sweep` | `{ scope }` | Hard-delete soft-deleted rows/objects past policy; clean orphan `pending` assets. |
@@ -86,6 +88,9 @@ Worker owns mappings + aliases. Read-side queries (from Messaging/SPA) hit the a
 4. Periodically `XAUTOCLAIM` stale pending entries (crashed consumers) past the visibility
    timeout. After `maxAttempts` (5), `XADD` to `jobs:x:dead` and `XACK` the original.
 
+Each consumer runs as its own asyncio task; CPU-heavy handlers (thumbnail/export) offload the
+blocking work to a thread/process pool so they don't stall the event loop.
+
 ### 5.2 Write-back rule
 Worker must not write to another service's primary tables directly. For results that must
 update a service's DB (e.g. asset variants), call that service's internal endpoint
@@ -104,13 +109,13 @@ Common vars (Conventions §8). Plus:
 
 | Var | Notes |
 |-----|-------|
-| `Elasticsearch__Url` | ES endpoint. |
-| `Worker__Streams` | Which streams this deployment consumes (allows specialised worker pools). |
-| `Worker__MaxAttempts` | Default 5. |
-| `Worker__VisibilityTimeoutSeconds` | Reclaim threshold. |
-| `Worker__BatchSize` | `COUNT` per read. |
-| `Retention__MessageDays` / `__AssetPendingHours` / etc. | Retention policy knobs. |
-| `Notify__*` | Provider config for push/email. |
+| `ELASTICSEARCH_URL` | ES endpoint. |
+| `WORKER_STREAMS` | Which streams this deployment consumes (allows specialised worker pools). |
+| `WORKER_MAX_ATTEMPTS` | Default 5. |
+| `WORKER_VISIBILITY_TIMEOUT_SECONDS` | Reclaim threshold. |
+| `WORKER_BATCH_SIZE` | `COUNT` per read. |
+| `RETENTION_MESSAGE_DAYS` / `RETENTION_ASSET_PENDING_HOURS` / etc. | Retention policy knobs. |
+| `NOTIFY_*` | Provider config for push/email. |
 
 ## 7. Cross-Cutting
 No inbound auth (no business HTTP); uses a **service token** for outbound internal calls.
@@ -132,5 +137,5 @@ histograms, ES bulk latency.
 - Whether canvas search (`canvas` index) ships in v1 — depends on Canvas producing a text
   projection.
 - Result write-back mechanism (internal endpoint vs. event) — align with Asset doc.
-- Export rendering engine for canvas (headless renderer / server-side Yjs + skia) — non-trivial;
-  may defer.
+- Export rendering engine for canvas (headless renderer / server-side Yjs via `pycrdt` + skia) —
+  non-trivial; may defer.

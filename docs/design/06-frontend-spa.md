@@ -4,14 +4,14 @@
 > Read [Platform Conventions](./00-platform-conventions.md) first.
 
 **Status:** Draft · **Stack:** React + TypeScript (Vite) · React Native / PWA path for mobile
-**Talks to:** Auth, Messaging, Canvas, Asset services (REST + SignalR), MinIO (direct uploads)
+**Talks to:** Auth, Messaging, Canvas, Asset services (REST + Socket.IO), MinIO (direct uploads)
 
 ---
 
 ## 1. Purpose & Responsibilities
 
 The single client application. Combines a Slack-like chat experience and a Figma-like
-collaborative canvas in one app. Communicates over **REST** for standard CRUD and **SignalR**
+collaborative canvas in one app. Communicates over **REST** for standard CRUD and **Socket.IO**
 for all real-time interactions; runs the **Yjs CRDT** locally for the canvas (the backend is a
 relay — Canvas doc §1).
 
@@ -31,11 +31,11 @@ login flow (PKCE), and direct-to-MinIO uploads.
 | Routing | React Router | |
 | Server state / data fetching | TanStack Query | Caching, mutations, optimistic updates over REST. |
 | Client/UI state | Zustand (or Redux Toolkit) | Lightweight global state (current user, presence). |
-| Real-time | `@microsoft/signalr` | Two hub connections: messaging + canvas. |
-| CRDT | `yjs` + a SignalR provider (custom, see §5.3) | Canvas document state. |
+| Real-time | `socket.io-client` | Two connections: messaging (`/messaging`) + canvas (`/canvas`). |
+| CRDT | `yjs` + a Socket.IO provider (custom, see §5.3) | Canvas document state. |
 | Canvas rendering | `react-konva` / `pixi.js` / custom WebGL | Pick per perf needs (Open Decision). |
 | Auth | `oidc-client-ts` | Authorization Code + PKCE against Auth service. |
-| Forms / validation | React Hook Form + Zod | Zod schemas mirror `CollabHub.Shared.Contracts`. |
+| Forms / validation | React Hook Form + Zod | Zod schemas mirror `collabhub-contracts` (Pydantic models). |
 | Styling | (team choice) Tailwind / CSS Modules | |
 
 ---
@@ -47,9 +47,9 @@ login flow (PKCE), and direct-to-MinIO uploads.
   /app            # bootstrap, providers, router
   /lib
     /api          # typed REST clients per service (generated from OpenAPI ideally)
-    /realtime     # SignalR connection managers (messaging, canvas)
+    /realtime     # Socket.IO connection managers (messaging, canvas)
     /auth         # OIDC client, token storage, refresh, auth guard
-    /yjs          # Yjs doc factory + SignalR sync provider
+    /yjs          # Yjs doc factory + Socket.IO sync provider
   /features
     /channels     # channel list, channel view, composer
     /threads
@@ -57,7 +57,7 @@ login flow (PKCE), and direct-to-MinIO uploads.
     /presence     # online users, live cursors, awareness
     /assets       # upload widget, image/file rendering
   /components      # shared UI
-  /types           # shared DTO types (mirrors Shared.Contracts)
+  /types           # shared DTO types (mirrors collabhub-contracts)
 ```
 
 ---
@@ -72,37 +72,39 @@ login flow (PKCE), and direct-to-MinIO uploads.
    localStorage for refresh tokens).
 5. An Axios/fetch interceptor attaches `Authorization: Bearer`; on 401 it calls `/auth/refresh`
    once (rotation) and retries, else routes to login.
-6. SignalR connections pass the access token via the `accessTokenFactory` (sent as the
-   `access_token` query param per Conventions §6) and re-acquire on reconnect.
+6. Socket.IO connections pass the access token in the handshake `auth` payload (per Conventions
+   §6) and re-acquire it on reconnect.
 
 ---
 
 ## 5. Real-Time Integration
 
 ### 5.1 Connection management
-Two long-lived `HubConnection`s — `/hubs/messaging` and `/hubs/canvas` — created lazily,
-with automatic reconnect (exponential backoff). On reconnect, re-join the groups/documents the
-user was in and re-sync. A single shared "connection state" surfaces offline/reconnecting UI.
+Two long-lived Socket.IO connections — namespaces `/messaging` and `/canvas` — created lazily,
+with automatic reconnect (Socket.IO's built-in exponential backoff). On reconnect, re-join the
+rooms/documents the user was in and re-sync. A single shared "connection state" surfaces
+offline/reconnecting UI.
 
 ### 5.2 Messaging
-- On entering a channel: `JoinChannel(channelId)`; load history via REST
+- On entering a channel: emit `join_channel`; load history via REST
   `GET /channels/{id}/messages` (cursor paginated, newest-first) and merge.
-- Send via hub `SendMessage`; render **optimistically** with a temp id, reconcile on the
-  returned `Message` / `MessageReceived`.
-- Subscribe to `MessageReceived/Edited/Deleted`, `ReactionChanged`, `ReadReceiptUpdated`,
-  `UserTyping` and update TanStack Query caches.
-- Debounce `Typing`; throttle `MarkRead`.
+- Send via the `send_message` event; render **optimistically** with a temp id, reconcile on the
+  acknowledged `Message` / `message_received`.
+- Subscribe to `message_received`/`message_edited`/`message_deleted`, `reaction_changed`,
+  `read_receipt_updated`, `user_typing` and update TanStack Query caches.
+- Debounce `typing`; throttle `mark_read`.
 
-### 5.3 Canvas (Yjs over SignalR)
-- One `Y.Doc` per open document. A **custom SignalR provider** bridges Yjs ↔ `CanvasHub`:
-  - On `JoinDocument`, perform the sync handshake (`SyncStep1`/`SyncStep2`, Canvas doc §3.2),
+### 5.3 Canvas (Yjs over Socket.IO)
+- One `Y.Doc` per open document. A **custom Socket.IO provider** bridges Yjs ↔ the `/canvas`
+  namespace:
+  - On `join_document`, perform the sync handshake (`sync_step1`/`sync_step2`, Canvas doc §3.2),
     feeding the server's state into the local `Y.Doc`.
-  - Local Yjs `update` events → `SyncUpdate(documentId, update)`.
-  - Incoming `Update` → `Y.applyUpdate(doc, update)`.
-  - Yjs **awareness** (cursor, selection, user color) → `AwarenessUpdate`; incoming awareness
-    renders remote cursors; `PeerLeft` clears them.
-- Initial load may also use REST `GET /documents/{id}/snapshot` to seed before the hub
-  handshake on slow connections.
+  - Local Yjs `update` events → emit `sync_update(documentId, update)`.
+  - Incoming `update` → `Y.applyUpdate(doc, update)`.
+  - Yjs **awareness** (cursor, selection, user color) → `awareness_update`; incoming awareness
+    renders remote cursors; `peer_left` clears them.
+- Initial load may also use REST `GET /documents/{id}/snapshot` to seed before the handshake
+  on slow connections.
 - The renderer subscribes to the `Y.Doc` and redraws on change; all editing mutates the
   `Y.Doc`, never local-only state.
 
@@ -140,5 +142,5 @@ user was in and re-sync. A single shared "connection state" surfaces offline/rec
   expected document complexity.
 - **Refresh-token storage:** HttpOnly cookie vs. in-app secure storage.
 - **Typed clients:** generate REST clients + types from each service's OpenAPI doc vs.
-  hand-write against `Shared.Contracts`. Recommend generated.
+  hand-write against `collabhub-contracts`. Recommend generated.
 - State manager choice (Zustand vs. Redux Toolkit).
