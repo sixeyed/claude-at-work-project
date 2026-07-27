@@ -1,0 +1,22 @@
+{{- $component := .Values.components.frontend }}
+{{- if and $component.enabled $component.service.create }}
+{{- $ctx := dict "root" $ "name" "frontend" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "collabhub.componentFullname" $ctx }}
+  labels:
+    {{- include "collabhub.labels" $ctx | nindent 4 }}
+spec:
+  type: {{ $component.service.type }}
+  {{- with $component.service.sessionAffinity }}
+  sessionAffinity: {{ . }}
+  {{- end }}
+  ports:
+    - port: {{ $component.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "collabhub.selectorLabels" $ctx | nindent 4 }}
+{{- end }}

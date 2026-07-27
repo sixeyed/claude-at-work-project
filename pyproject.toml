@@ -1,0 +1,36 @@
+# uv workspace root. Not a package itself — it exists to tie the service
+# packages together and to own the single lockfile (uv.lock) that pins every
+# library version. Ranges live in each service's pyproject; exact versions live
+# in the lock.
+[project]
+name = "collabhub"
+version = "0.1.0"
+description = "CollabHub — team chat + collaborative canvas"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["src/services/*"]
+
+[tool.uv.sources]
+collabhub-shared = { workspace = true }
+collabhub-contracts = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.28",
+    "ruff>=0.8",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["src/services"]
+# Every service has a tests/test_health.py. The default "prepend" import mode
+# derives module names from the file path relative to the rootdir and they
+# collide; importlib mode keeps them distinct without needing __init__.py files.
+addopts = "--import-mode=importlib"

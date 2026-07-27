@@ -1,0 +1,26 @@
+[project]
+name = "collabhub-messaging"
+version = "0.1.0"
+description = "CollabHub Messaging service — channels, messages, threads, real-time delivery"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "collabhub-shared",
+    "collabhub-contracts",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "redis>=5.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["messaging"]
+
+[tool.uv.sources]
+collabhub-shared = { workspace = true }
+collabhub-contracts = { workspace = true }

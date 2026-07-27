@@ -29,7 +29,7 @@ ignore = [
 "**/tests/**" = ["T20"]
 
 [lint.isort]
-known-first-party = ["shared", "contracts"]
+known-first-party = ["shared", "contracts", "auth", "messaging", "canvas", "asset", "worker"]
 
 [format]
 quote-style = "double"

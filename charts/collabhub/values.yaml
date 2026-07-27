@@ -1,0 +1,221 @@
+# CollabHub — one chart, one release, all six components.
+#
+# Each component has its own templates under templates/<component>/, rather than
+# one set of templates ranging over this map. They start near-identical and are
+# meant to diverge: the Worker gets a KEDA ScaledObject, the real-time services
+# need session affinity, the frontend has no config at all.
+#
+# Deliberately absent: PostgreSQL, Redis, Elasticsearch and Garage. This chart
+# deploys CollabHub's own workloads and expects the data stores to already
+# exist — they have their own lifecycle, backups and upgrade cadence, and
+# bundling them would make `helm uninstall` a data-loss command.
+#
+# Also absent: an Ingress. Which hosts route where is a per-environment
+# decision, and anything under /api/v1/internal/ must never be routed from the
+# public ingress at all (Conventions §5.5).
+
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullPolicy: IfNotPresent
+terminationGracePeriodSeconds: 30
+
+# Applied to every component unless it overrides the same key.
+defaults:
+  podSecurityContext:
+    runAsNonRoot: true
+    runAsUser: 10001
+    fsGroup: 10001
+  containerSecurityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+        - ALL
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+components:
+  auth:
+    enabled: true
+    replicaCount: 2
+    port: 8000
+    image:
+      repository: collabhub/auth
+      # Empty means "use the chart's appVersion", keeping image and chart in step.
+      tag: ""
+    service:
+      create: true
+      type: ClusterIP
+      sessionAffinity: ""
+    probes:
+      live: /health/live
+      ready: /health/ready
+    env:
+      APP_ENV: production
+      LOG_LEVEL: info
+      AUTH_ISSUER: https://auth
+      AUTH_AUDIENCE: collabhub
+      AUTH_INTERNAL_AUDIENCE: collabhub-internal
+      AUTH_ACCESS_TOKEN_MINUTES: "15"
+      AUTH_REFRESH_TOKEN_DAYS: "30"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    # Supplies POSTGRES_DSN, REDIS_CACHE_URL, AUTH_SIGNING_KEY.
+    envFromSecrets:
+      - collabhub-auth
+
+  messaging:
+    enabled: true
+    replicaCount: 2
+    port: 8000
+    image:
+      repository: collabhub/messaging
+      tag: ""
+    service:
+      create: true
+      type: ClusterIP
+      # Socket.IO falls back to HTTP long-polling, and a polling session's
+      # requests must all land on the same pod. The R2 backplane lets any pod
+      # serve any room; it does not rescue a split polling handshake.
+      sessionAffinity: ClientIP
+    probes:
+      live: /health/live
+      ready: /health/ready
+    env:
+      APP_ENV: production
+      LOG_LEVEL: info
+      AUTH_ISSUER: https://auth
+      AUTH_AUDIENCE: collabhub
+      AUTH_JWKS_URL: http://collabhub-auth:8000/.well-known/jwks.json
+      MESSAGING_MAX_BODY_CHARS: "8000"
+      MESSAGING_MAX_ATTACHMENTS: "10"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    # Supplies POSTGRES_DSN and all three REDIS_*_URL values.
+    envFromSecrets:
+      - collabhub-messaging
+
+  canvas:
+    enabled: true
+    replicaCount: 2
+    port: 8000
+    image:
+      repository: collabhub/canvas
+      tag: ""
+    service:
+      create: true
+      type: ClusterIP
+      sessionAffinity: ClientIP
+    probes:
+      live: /health/live
+      ready: /health/ready
+    env:
+      APP_ENV: production
+      LOG_LEVEL: info
+      AUTH_ISSUER: https://auth
+      AUTH_AUDIENCE: collabhub
+      AUTH_JWKS_URL: http://collabhub-auth:8000/.well-known/jwks.json
+      CANVAS_SNAPSHOT_INTERVAL_SECONDS: "10"
+      CANVAS_SNAPSHOT_EVERY_UPDATES: "200"
+      CANVAS_MAX_DOC_BYTES: "26214400"
+      CANVAS_AWARENESS_TIMEOUT_SECONDS: "30"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    envFromSecrets:
+      - collabhub-canvas
+
+  asset:
+    enabled: true
+    replicaCount: 2
+    port: 8000
+    image:
+      repository: collabhub/asset
+      tag: ""
+    service:
+      create: true
+      type: ClusterIP
+      sessionAffinity: ""
+    probes:
+      live: /health/live
+      ready: /health/ready
+    env:
+      APP_ENV: production
+      LOG_LEVEL: info
+      AUTH_ISSUER: https://auth
+      AUTH_AUDIENCE: collabhub
+      AUTH_INTERNAL_AUDIENCE: collabhub-internal
+      AUTH_JWKS_URL: http://collabhub-auth:8000/.well-known/jwks.json
+      OBJECT_STORE_BUCKET: collabhub-assets
+      OBJECT_STORE_PRESIGN_TTL_SECONDS: "900"
+      ASSET_MAX_UPLOAD_BYTES: "52428800"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    # Supplies POSTGRES_DSN, REDIS_STREAMS_URL, OBJECT_STORE_*_KEY.
+    envFromSecrets:
+      - collabhub-asset
+
+  worker:
+    enabled: true
+    # Scaling is KEDA's job, driven by stream depth (design doc 05 §5.3). This is
+    # the floor until a ScaledObject exists.
+    replicaCount: 1
+    port: 8000
+    image:
+      repository: collabhub/worker
+      tag: ""
+    service:
+      # No Service: the Worker serves no traffic. Its port carries health probes
+      # only, and those are scraped from the pod (design doc 05 §2).
+      create: false
+      type: ClusterIP
+      sessionAffinity: ""
+    probes:
+      live: /health/live
+      ready: /health/ready
+    env:
+      APP_ENV: production
+      LOG_LEVEL: info
+      WORKER_STREAMS: jobs:index,jobs:thumbnail,jobs:notify,jobs:export,jobs:retention
+      WORKER_MAX_ATTEMPTS: "5"
+      WORKER_VISIBILITY_TIMEOUT_SECONDS: "60"
+      WORKER_BATCH_SIZE: "16"
+      OBJECT_STORE_BUCKET: collabhub-assets
+      ASSET_INTERNAL_URL: http://collabhub-asset:8000/api/v1/internal
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+    # Supplies REDIS_STREAMS_URL, ELASTICSEARCH_URL, OBJECT_STORE_*_KEY,
+    # SERVICE_TOKEN_URL and WORKER_SERVICE_CLIENT_SECRET.
+    envFromSecrets:
+      - collabhub-worker
+
+  frontend:
+    enabled: true
+    replicaCount: 2
+    # Nginx listens on 8080 because the pod runs it as UID 101 and non-root
+    # cannot bind a privileged port. See docker/frontend/nginx.conf.
+    port: 8080
+    image:
+      repository: collabhub/frontend
+      tag: ""
+    service:
+      create: true
+      type: ClusterIP
+      sessionAffinity: ""
+    probes:
+      # Static assets behind Nginx — no /health endpoints to probe.
+      live: /
+      ready: /
+    # No env and no ConfigMap: the SPA's settings are inlined into the bundle at
+    # build time as VITE_* build args, so there is nothing to configure at
+    # runtime. Changing them means rebuilding the image.
+    podSecurityContext:
+      runAsNonRoot: true
+      runAsUser: 101 # nginx
+      fsGroup: 101
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+      # Nginx writes its pid and proxy cache to disk.
+      readOnlyRootFilesystem: false
+      capabilities:
+        drop:
+          - ALL

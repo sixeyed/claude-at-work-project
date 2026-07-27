@@ -1,0 +1,25 @@
+{{- $component := .Values.components.asset }}
+{{- if and $component.enabled $component.service.create }}
+{{- $ctx := dict "root" $ "name" "asset" }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "collabhub.componentFullname" $ctx }}
+  labels:
+    {{- include "collabhub.labels" $ctx | nindent 4 }}
+spec:
+  type: {{ $component.service.type }}
+  # Carries /api/v1/internal/assets/{id}/variants, which the Worker calls with a
+  # service token. That path must never be routed from the public ingress
+  # (Conventions §5.5) — this Service is cluster-internal.
+  {{- with $component.service.sessionAffinity }}
+  sessionAffinity: {{ . }}
+  {{- end }}
+  ports:
+    - port: {{ $component.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "collabhub.selectorLabels" $ctx | nindent 4 }}
+{{- end }}
