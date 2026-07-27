@@ -5,7 +5,7 @@
 
 **Status:** Draft · **Runtime:** Python 3.12 worker (headless asyncio, no HTTP except health)
 **Owns:** all async job processing + the Elasticsearch index lifecycle
-**Depends on:** Redis Streams (R3), Elasticsearch, MinIO, PostgreSQL (read-mostly, see §5)
+**Depends on:** Redis Streams (R3), Elasticsearch, Garage, PostgreSQL (read-mostly, see §5)
 
 ---
 
@@ -34,7 +34,7 @@ writes back via the owning service's internal endpoint where possible — see §
 - `redis-py` (`redis.asyncio`) for R3 consumer groups (`XREADGROUP` / `XAUTOCLAIM`).
 - `elasticsearch` (the async `elasticsearch-py` client) for ES.
 - `Pillow` for image work.
-- The shared S3-compatible `ObjectStore` (boto3/minio) for MinIO, reused from `collabhub-shared`.
+- The shared S3-compatible `ObjectStore` (boto3) for Garage, reused from `collabhub-shared`.
 - SQLAlchemy 2.0 (async) + asyncpg for read access where needed.
 - Exposes only `/health/live` and `/health/ready` (Conventions §10) via a minimal
   Starlette/FastAPI health app; no business HTTP.
@@ -51,9 +51,9 @@ by `type`.
 | `jobs:index` | `message.upsert` / `message.delete` | `{ messageId, op }` | Read message (or accept payload), upsert/delete in `messages` ES index. |
 | `jobs:index` | `document.index` | `{ documentId, textProjection }` | Index canvas text projection (if canvas search enabled). |
 | `jobs:index` | `asset.index` | `{ assetId }` | Index file metadata for file search. |
-| `jobs:thumbnail` | `thumbnail.generate` | `{ assetId, objectKey, variants[] }` | Fetch from MinIO, generate variants (Pillow), store back, report variants to Asset svc. |
+| `jobs:thumbnail` | `thumbnail.generate` | `{ assetId, objectKey, variants[] }` | Fetch from Garage, generate variants (Pillow), store back, report variants to Asset svc. |
 | `jobs:notify` | `notify.dispatch` | `{ userId, kind, data }` | Deliver notification (push/email/in-app). |
-| `jobs:export` | `canvas.export` | `{ documentId, format, requestedBy }` | Render document to PNG/SVG/PDF, store in MinIO, notify requester. |
+| `jobs:export` | `canvas.export` | `{ documentId, format, requestedBy }` | Render document to PNG/SVG/PDF, store in Garage, notify requester. |
 | `jobs:retention` | `retention.sweep` | `{ scope }` | Hard-delete soft-deleted rows/objects past policy; clean orphan `pending` assets. |
 
 The Worker emits no events of its own except results delivered back through owning services
@@ -95,7 +95,7 @@ blocking work to a thread/process pool so they don't stall the event loop.
 Worker must not write to another service's primary tables directly. For results that must
 update a service's DB (e.g. asset variants), call that service's internal endpoint
 (`POST /assets/{id}/variants`) authenticated with a service token, or emit a result the owning
-service consumes. ES and MinIO are shared infrastructure the Worker is authorized to write.
+service consumes. ES and Garage are shared infrastructure the Worker is authorized to write.
 (See Asset Open Decisions.)
 
 ### 5.3 Scaling (KEDA)

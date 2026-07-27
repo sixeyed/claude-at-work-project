@@ -5,7 +5,7 @@
 
 **Status:** Draft · **Runtime:** Python 3.12 / FastAPI (Uvicorn)
 **Owns:** asset metadata, presigned URL issuance, bucket layout
-**Depends on:** PostgreSQL (own DB), MinIO (S3-compatible), Redis Streams (R3)
+**Depends on:** PostgreSQL (own DB), Garage (S3-compatible object storage), Redis Streams (R3)
 
 ---
 
@@ -13,7 +13,7 @@
 
 Handles all binary assets — images, fonts, exports, avatars, attachments. The defining design
 choice: **large blobs never transit the service**. Clients upload and download **directly to
-MinIO using presigned URLs**; the service only issues URLs and tracks metadata.
+Garage using presigned URLs**; the service only issues URLs and tracks metadata.
 
 **Owns:** asset metadata (owner, type, size, status), presigned URL generation, bucket/key
 layout, post-upload confirmation, enqueuing processing jobs.
@@ -25,9 +25,9 @@ store asset IDs and decide what an asset belongs to).
 
 ## 2. Runtime & Dependencies
 - FastAPI REST only (no Socket.IO).
-- S3-compatible client (`boto3` pointed at MinIO, or the `minio` Python SDK) **behind an
-  `ObjectStore` protocol/ABC** so MinIO ↔ Azure Blob is a config/implementation swap, not a
-  code change (Conventions §8).
+- S3-compatible client (`boto3` pointed at Garage) **behind an `ObjectStore` protocol/ABC**
+  so Garage ↔ Azure Blob is a config/implementation swap, not a code change (Conventions §8).
+  Use no Garage-specific APIs — only the S3 subset Garage implements.
 - SQLAlchemy 2.0 (async) + asyncpg; Alembic migrations.
 - `redis-py` (`redis.asyncio`) for R3.
 
@@ -35,7 +35,7 @@ store asset IDs and decide what an asset belongs to).
 
 ## 3. Public Interface (REST `/api/v1`)
 
-The upload is a three-step handshake so the blob goes client → MinIO directly.
+The upload is a three-step handshake so the blob goes client → Garage directly.
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
@@ -53,7 +53,7 @@ The upload is a three-step handshake so the blob goes client → MinIO directly.
 // response
 {
   "assetId": "uuid",
-  "uploadUrl": "https://minio/collabhub-uploads/...&X-Amz-Signature=...",
+  "uploadUrl": "https://objects/collabhub-uploads/...&X-Amz-Signature=...",
   "method": "PUT",
   "headers": { "Content-Type": "image/png" },
   "expiresAt": "2026-06-03T10:20:00Z"
@@ -61,7 +61,7 @@ The upload is a three-step handshake so the blob goes client → MinIO directly.
 ```
 
 Flow (matches the architecture sequence): client requests URL → uploads bytes straight to
-MinIO → calls `confirm` → service verifies the object, writes metadata, enqueues a thumbnail
+Garage → calls `confirm` → service verifies the object, writes metadata, enqueues a thumbnail
 job. Until confirmed, the asset is `status = 'pending'` and not downloadable.
 
 ---
@@ -99,7 +99,7 @@ CREATE TABLE asset_variants (
 );
 ```
 
-### 4.1 MinIO layout
+### 4.1 Object storage layout
 - Bucket `collabhub-assets` (or per-purpose buckets). Object key
   `{workspaceId}/{purpose}/{assetId}/{fileName}`. Variants under
   `{...}/{assetId}/variants/{kind}`.
@@ -108,7 +108,7 @@ CREATE TABLE asset_variants (
 
 ### 4.2 Redis usage
 - **R3:** `jobs:thumbnail` — `{ assetId, objectKey, variants: ["thumb-128","thumb-512"] }`
-  enqueued on confirm. Worker stores variants back in MinIO and inserts `asset_variants` rows
+  enqueued on confirm. Worker stores variants back in Garage and inserts `asset_variants` rows
   (or calls back via an internal endpoint — see Open Decisions).
 
 ---
@@ -116,11 +116,11 @@ CREATE TABLE asset_variants (
 ## 5. Internal Design — Upload & Process
 1. `POST /assets/upload-url`: insert `assets` row (`pending`), generate presigned PUT
    (via `boto3.generate_presigned_url`), return.
-2. Client `PUT`s bytes directly to MinIO.
+2. Client `PUT`s bytes directly to Garage.
 3. `POST /assets/{id}/confirm`: HEAD the object to confirm existence/size/ETag, set
    `status='ready'`, `confirmed_at`, `checksum`.
 4. `XADD jobs:thumbnail` with the variants to generate.
-5. Worker consumes, generates variants (Pillow), stores them in MinIO, records
+5. Worker consumes, generates variants (Pillow), stores them in Garage, records
    `asset_variants`.
 
 Orphan cleanup: `pending` assets older than a TTL (no confirm) are swept by a retention job
@@ -133,7 +133,7 @@ Common vars (Conventions §8). Plus:
 
 | Var | Notes |
 |-----|-------|
-| `OBJECT_STORE_ENDPOINT` | MinIO endpoint (or Azure Blob S3 endpoint). |
+| `OBJECT_STORE_ENDPOINT` | Garage endpoint (or Azure Blob S3 endpoint). |
 | `OBJECT_STORE_ACCESS_KEY` / `_SECRET_KEY` | Secret. |
 | `OBJECT_STORE_BUCKET` | Default bucket. |
 | `OBJECT_STORE_PRESIGN_TTL_SECONDS` | Default 900. |

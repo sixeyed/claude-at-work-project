@@ -235,21 +235,27 @@ Every stream entry has a single field `data` containing this JSON envelope:
   | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://otel-collector:4317` | OTLP gRPC |
 
 - No cloud-specific SDKs where an agnostic alternative exists. Object storage uses the
-  S3-compatible API (MinIO on-prem, Azure Blob's S3 layer or an SDK swap behind an interface).
+  S3-compatible API (Garage on-prem, Azure Blob's S3 layer or an SDK swap behind an interface).
 
 ---
 
 ## 9. Observability
 
+The backend is the Grafana **LGTM** stack — Loki, Grafana, Tempo, Mimir — behind a single
+OTel Collector. Services only ever speak OTLP to the collector; they never talk to a
+storage backend directly. See `docs/platform/versions.md` for pinned versions.
+
 - **Tracing:** OpenTelemetry SDK (`opentelemetry-sdk`), OTLP exporter to the collector →
-  Jaeger. Auto-instrument FastAPI/ASGI, the HTTP client (httpx/requests), SQLAlchemy +
+  **Tempo**. Auto-instrument FastAPI/ASGI, the HTTP client (httpx/requests), SQLAlchemy +
   asyncpg, and `redis`. Propagate W3C `traceparent` across REST, Socket.IO, and job
   envelopes (carry `traceId` in the envelope for continuity).
-- **Metrics:** OTel metrics → Prometheus (`opentelemetry-exporter-prometheus` or the OTLP
-  metrics pipeline). Standard service metrics + domain counters (messages sent, jobs
-  processed, snapshot writes). RED method (Rate, Errors, Duration).
-- **Logs:** structured JSON via **structlog** → Loki. Always include `traceId`, `userId`
+- **Metrics:** OTel metrics over OTLP → collector → **Mimir** (Prometheus-compatible
+  storage; query with PromQL). Standard service metrics + domain counters (messages sent,
+  jobs processed, snapshot writes). RED method (Rate, Errors, Duration).
+- **Logs:** structured JSON via **structlog** → **Loki**. Always include `traceId`, `userId`
   (when authenticated), `service`, `env`. No PII in logs beyond user IDs.
+- **Dashboards:** Grafana, querying all three. `traceId` on every log line is what makes
+  logs → traces navigable.
 - **Correlation:** accept and propagate `X-Correlation-Id`; generate one if absent.
 
 ---
@@ -267,12 +273,12 @@ Every stream entry has a single field `data` containing this JSON envelope:
 
 ## 11. Local Development & Testing
 
-- `docker-compose.yml` at repo root brings up Postgres, the 3 Redis instances, MinIO,
+- `docker-compose.yml` at repo root brings up Postgres, the 3 Redis instances, Garage,
   Elasticsearch, and an OTel collector for local runs.
 - Each service ships **Alembic** migrations; `alembic upgrade head` per service against
   its own database (or schema-per-service on one local Postgres for convenience).
 - Test layers (pytest): unit (domain logic), integration (testcontainers-python for
-  Postgres/Redis/MinIO/ES), contract (verify the Pydantic models in `collabhub-contracts`
+  Postgres/Redis/Garage/ES), contract (verify the Pydantic models in `collabhub-contracts`
   against each side).
 
 ---

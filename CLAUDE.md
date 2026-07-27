@@ -30,14 +30,11 @@ Service names drop the `collabhub-` prefix used in the design docs (`src/service
 - **pytest** with **testcontainers-python** for integration tests (real Postgres/Redis/Garage/Elasticsearch, not mocks).
 - Work on a feature branch and open a PR. Do not commit to `main`.
 
-## Where the docs contradict each other
+## Platform versions
 
-`docs/platform/versions.md` wins. Specifically:
+`docs/platform/versions.md` is the source of truth for base images and major versions, and wins over the design docs if they ever drift again. Object storage is **Garage** and telemetry is the **Grafana LGTM** stack (Tempo/Loki/Mimir) — the design docs originally said MinIO and Jaeger/Prometheus and were corrected on 2026-07-27.
 
-- Object storage is **Garage**, not MinIO (design docs 00/04/05/06 still say MinIO).
-- Telemetry backend is **Grafana LGTM** — Tempo/Loki/Mimir — not Jaeger/Prometheus (conventions §9 is stale).
-
-Pinned platform versions live in `docs/platform/versions.md`; treat it as the source of truth for base images and major versions. Library versions (FastAPI, SQLAlchemy, React) are out of its scope — pin those per service.
+Library versions (FastAPI, SQLAlchemy, React) are out of that file's scope — pin those per service.
 
 ## Conventions that are easy to get wrong
 
