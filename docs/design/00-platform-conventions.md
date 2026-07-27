@@ -131,7 +131,7 @@ other service. There is no per-request call to the Auth Service to validate a to
   | `sub`    | User ID (UUID) |
   | `name`   | Display name |
   | `email`  | Email |
-  | `wsp`    | Active workspace ID |
+  | `wsp`    | Active workspace ID — exactly one per token (see §5.4) |
   | `roles`  | Array of role strings within the active workspace |
   | `jti`    | Token ID (used for revocation) |
   | `iat`/`exp` | Issued / expiry (UTC epoch) |
@@ -144,10 +144,21 @@ the parsed principal.
 
 Stateless verification can't revoke a token before it expires. To support logout and
 forced sign-out, the Auth Service writes revoked `jti`s to a **denylist in Redis Cache (R1)**
-with TTL = remaining token lifetime, key `auth:revoked:{jti}`. Services MAY consult the
-denylist on each request via R1; if a service cannot reach R1, it fails open (accepts the
-signature) and logs a warning — access tokens are short-lived enough that this is acceptable.
-(Open decision — see §12.)
+with TTL = remaining token lifetime, key `auth:revoked:{jti}`. Services consult the denylist
+on each request via R1.
+
+**Decided 2026-07-27 (register D1).** Behaviour when R1 is unreachable depends on the
+operation:
+
+- **Ordinary requests fail open** — accept the signature and log a warning. Access tokens are
+  short-lived enough that this is an acceptable availability trade-off.
+- **Sensitive operations fail closed** — return 503 rather than proceed on a token that
+  cannot be checked. The sensitive set is: workspace membership changes, role grants and
+  revocations, and asset deletion. Services mark these routes explicitly; the default is
+  fail-open.
+
+The split keeps availability where request volume is and correctness where the damage is.
+Adding to the sensitive set is cheap; discovering it was needed after the fact is not.
 
 ### 5.3 Authorization model
 
@@ -156,6 +167,54 @@ signature) and logs a warning — access tokens are short-lived enough that this
   are owned by the resource's service in its own tables (see each service's data model).
   Services enforce their own resource permissions; the JWT only establishes identity +
   workspace membership + workspace role.
+
+### 5.4 Workspace scoping
+
+**Decided 2026-07-27 (register D2) — see
+[ADR](../adr/260727-single-active-workspace-per-token.md).**
+
+Users belong to many workspaces, but **an access token is scoped to exactly one**, named in
+`wsp`. `roles` describes the user's role in that workspace only. Every authorization check
+may therefore assume a single unambiguous workspace and must never accept a workspace
+identifier from the request in place of the claim.
+
+Refresh tokens are **not** workspace-scoped. Switching workspaces exchanges the refresh
+token plus a target workspace ID for a new access token, reusing the rotating-refresh
+machinery in §5.1.
+
+A Socket.IO connection inherits the workspace of the token that opened it. On switch, the
+client must drop and re-establish its `/messaging` and `/canvas` connections — a live
+connection must never continue serving a different workspace.
+
+### 5.5 Service tokens (internal calls)
+
+**Decided 2026-07-27 (register D14) — see
+[ADR](../adr/260727-service-tokens-for-internal-calls.md).**
+
+Background work needs to write into services it does not own (the Worker reporting asset
+variants, for example). Those calls use **service tokens**: RS256 JWTs from the same Auth
+signing keys and the same JWKS endpoint, so verification reuses the existing path.
+
+| | User token | Service token |
+|---|---|---|
+| `aud` | `collabhub` | `collabhub-internal` |
+| `sub` | User ID (UUID) | `service:{name}`, e.g. `service:worker` |
+| `wsp` | Active workspace | *absent* |
+| Authority | `roles` | `scp` — scopes, e.g. `assets:write-variants` |
+
+The distinct `aud` is what enforces the boundary: a user token can never satisfy an internal
+endpoint and a service token can never satisfy a user endpoint, using the audience check
+that already runs on every request.
+
+- Internal endpoints live under `/api/v1/internal/`, are **not exposed through the public
+  ingress**, and are guarded by `Depends(require_service("scope"))` from `collabhub-shared`.
+  **No route carries both `require_user` and `require_service`.**
+- Services obtain tokens by client-credentials exchange against Auth using
+  `SERVICE_CLIENT_ID` / `SERVICE_CLIENT_SECRET`, and cache them in memory until shortly
+  before expiry.
+- Revocation is secret rotation, not the denylist — service token lifetimes are minutes.
+- Log the originating user ID from the job envelope alongside `sub` so a background write
+  traces back to the user action that caused it.
 
 ---
 
@@ -285,11 +344,12 @@ storage backend directly. See `docs/platform/versions.md` for pinned versions.
 
 ## 12. Open Decisions (confirm before/while building)
 
-1. **Denylist consultation** — do all services check the Redis denylist on every request
-   (stronger revocation, R1 dependency) or rely purely on short token lifetime (simpler,
-   weaker)? Default assumed: check-with-fail-open (§5.2).
-2. **Workspace/tenancy** — `wsp` claim assumes a single active workspace per token. Confirm
-   whether users belong to multiple workspaces and how switching works.
+~~1. **Denylist consultation**~~ — 🟢 **Decided 2026-07-27.** Check-with-fail-open, except a
+   named set of sensitive operations that fail closed. See §5.2.
+
+~~2. **Workspace/tenancy**~~ — 🟢 **Decided 2026-07-27.** Many-to-many membership, one
+   workspace per access token, switch via refresh exchange. See §5.4.
+
 3. **ID generation** — UUID v7 assumed over bigint/ULID. Confirm.
 4. **Schema-per-service vs database-per-service** in production. Doc assumes logically
    separate databases; on-prem you may co-locate.

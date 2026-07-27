@@ -75,6 +75,23 @@ login flow (PKCE), and direct-to-Garage uploads.
 6. Socket.IO connections pass the access token in the handshake `auth` payload (per Conventions
    §6) and re-acquire it on reconnect.
 
+### Workspace switching
+
+Access tokens are scoped to one workspace (Conventions §5.4,
+[ADR](../adr/260727-single-active-workspace-per-token.md)), so switching is a real state
+transition, not a UI filter. The SPA must:
+
+1. `POST /auth/switch-workspace` with the refresh token and target workspace ID.
+2. Cancel in-flight requests and **clear the TanStack Query cache** — cached data belongs to
+   the old workspace.
+3. **Tear down and re-establish both Socket.IO connections.** A connection authenticated for
+   one workspace must never keep serving another; this is the most likely source of bugs
+   here and is worth an explicit test.
+4. Reset Yjs documents and awareness state for any open canvas.
+
+Cross-workspace views (unified search, an all-workspaces unread badge) cannot be served by a
+single token and are out of scope until a dedicated aggregate endpoint exists.
+
 ---
 
 ## 5. Real-Time Integration

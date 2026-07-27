@@ -93,10 +93,16 @@ blocking work to a thread/process pool so they don't stall the event loop.
 
 ### 5.2 Write-back rule
 Worker must not write to another service's primary tables directly. For results that must
-update a service's DB (e.g. asset variants), call that service's internal endpoint
-(`POST /assets/{id}/variants`) authenticated with a service token, or emit a result the owning
-service consumes. ES and Garage are shared infrastructure the Worker is authorized to write.
-(See Asset Open Decisions.)
+update a service's DB (e.g. asset variants), call that service's internal endpoint —
+`POST /api/v1/internal/assets/{id}/variants` — authenticated with a **service token**
+(Conventions §5.5; scope `assets:write-variants`). ES and Garage are shared infrastructure
+the Worker is authorized to write.
+
+🟢 **Decided 2026-07-27 (register D14)** — internal endpoint, not an event and not a direct
+write. See the [ADR](../adr/260727-service-tokens-for-internal-calls.md). Note this makes
+Auth a runtime dependency of the Worker: fetch a token at startup and refresh before expiry,
+retrying with backoff. A job whose write-back fails is left unacked and reclaimed, so an
+Auth outage delays processing rather than losing work.
 
 ### 5.3 Scaling (KEDA)
 `ScaledObject` with the Redis Streams scaler on `pendingEntriesCount` per stream; scale 0→N
@@ -136,6 +142,7 @@ histograms, ES bulk latency.
 - Notification channels in scope for v1 (in-app only vs. push + email).
 - Whether canvas search (`canvas` index) ships in v1 — depends on Canvas producing a text
   projection.
-- Result write-back mechanism (internal endpoint vs. event) — align with Asset doc.
+- ~~Result write-back mechanism~~ — 🟢 **Decided 2026-07-27:** internal endpoint + service
+  token. See §5.2.
 - Export rendering engine for canvas (headless renderer / server-side Yjs via `pycrdt` + skia) —
   non-trivial; may defer.

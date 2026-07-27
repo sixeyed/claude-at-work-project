@@ -23,6 +23,8 @@ docs/
 
 Service names drop the `collabhub-` prefix used in the design docs (`src/services/auth`, not `collabhub-auth`).
 
+`.env.example` at the root is the full env var contract for local runs — add any new variable there when you introduce one.
+
 ## Stack decisions not recorded in the docs
 
 - **uv** is the package manager (the docs and ADR say "uv or Poetry" — it's uv). One workspace; each service has its own `pyproject.toml`; `shared` and `contracts` are workspace dependencies.
@@ -45,6 +47,9 @@ Library versions (FastAPI, SQLAlchemy, React) are out of that file's scope — p
 - **JSON is camelCase; SQL columns are snake_case.**
 - **Three logically separate Redis instances**, and they are not interchangeable: R1 cache/token denylist, R2 Socket.IO backplane, R3 job streams.
 - **Auth is stateless.** Services verify RS256 JWTs against cached JWKS — there is no per-request call to the Auth service. Use the shared `Depends(require_user)`.
+- **A token is scoped to one workspace** (`wsp` claim). Authorization reads the claim and never takes a workspace ID from the request path or body in its place — that substitution is a tenancy leak.
+- **Internal endpoints are different.** Anything under `/api/v1/internal/` is called by another service, guarded by `Depends(require_service("scope"))`, and uses audience `collabhub-internal` rather than `collabhub`. Never put `require_user` and `require_service` on the same route. See Conventions §5.5.
+- **The token denylist fails open, except where it doesn't.** Ordinary requests accept the token when R1 is unreachable; workspace membership changes, role grants and asset deletion return 503 instead. See Conventions §5.2.
 - **Socket.IO event naming:** client→server are verbs (`send_message`); server→client are past-tense facts (`message_received`). Canvas is the documented exception — it follows the Yjs sync protocol names.
 - **Jobs are fire-and-forget onto Redis Streams and handlers must be idempotent** (`jobId` is the idempotency key). Producers never block on the Worker; the Worker never writes to another service's tables.
 - **All config comes from environment variables**, loaded with pydantic-settings. Nothing baked into images. `SCREAMING_SNAKE_CASE`.
@@ -54,9 +59,11 @@ Library versions (FastAPI, SQLAlchemy, React) are out of that file's scope — p
 
 ## Open decisions
 
-`docs/design/07-open-decisions-register.md` tracks 24 decisions and **none are settled yet**. Items marked 🟡 have a working default baked into the design docs — proceed on those. Items marked 🔴 have no answer: stop and ask rather than picking one silently. Update the register's status when a decision gets made, and reflect it back into the source doc.
+`docs/design/07-open-decisions-register.md` is the live register. 🟢 is settled and safe to build against; 🟡 has a working default baked into the design docs — proceed on those; 🔴 has no answer, so stop and ask rather than picking one silently. Most of the register is still 🟡 or 🔴.
 
-Significant technical decisions get an ADR in `docs/adr/` — use the `adr-writer` skill.
+Settled so far: D1 denylist fail-open with a fail-closed set, D2 one workspace per token, D9 canvas state as `bytea`, D14 Worker write-back via internal endpoint plus service token.
+
+When a decision gets made: update the register's status, reflect it back into the source design doc, and write an ADR in `docs/adr/` with the `adr-writer` skill if it's significant.
 
 ## Migrations
 

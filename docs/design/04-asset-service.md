@@ -109,7 +109,7 @@ CREATE TABLE asset_variants (
 ### 4.2 Redis usage
 - **R3:** `jobs:thumbnail` — `{ assetId, objectKey, variants: ["thumb-128","thumb-512"] }`
   enqueued on confirm. Worker stores variants back in Garage and inserts `asset_variants` rows
-  (or calls back via an internal endpoint — see Open Decisions).
+  by calling back via the internal endpoint (Conventions §5.5).
 
 ---
 
@@ -150,9 +150,10 @@ Auth, errors, health, observability per Conventions. Metrics: `assets_uploaded_t
 - Download URLs are short-lived and per-request; no public buckets.
 
 ## 9. Open Decisions
-- **Worker → variants callback:** Worker writes `asset_variants` directly to this service's DB
-  (breaks the no-shared-DB rule) vs. calls an internal `POST /assets/{id}/variants` endpoint
-  (preferred) vs. emits an event the Asset service consumes. Recommend an internal endpoint.
+- ~~**Worker → variants callback**~~ — 🟢 **Decided 2026-07-27 (register D14).** The Worker
+  calls `POST /api/v1/internal/assets/{id}/variants`, authenticated with an Auth-issued
+  service token scoped `assets:write-variants`. See Conventions §5.5 and the
+  [ADR](../adr/260727-service-tokens-for-internal-calls.md).
 - Whether avatars/exports use the same bucket or dedicated buckets.
 - Virus/malware scanning of uploads before marking `ready`.
 - Direct Azure Blob SDK vs. S3-compat layer for the Azure phase (Conventions favours S3-compat).

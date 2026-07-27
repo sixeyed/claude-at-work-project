@@ -29,7 +29,7 @@ doc, opaque to the backend), thumbnails/exports (Asset + Worker), font/image blo
 ## 2. Runtime & Dependencies
 - FastAPI REST (metadata + lifecycle) + a Socket.IO server on the `/canvas` namespace, on
   the R2 backplane. Both run on one Uvicorn process.
-- SQLAlchemy 2.0 (async) + asyncpg; Yjs state stored as `bytea`/JSONB (see §4). Alembic migrations.
+- SQLAlchemy 2.0 (async) + asyncpg; Yjs state stored as `bytea` (see §4). Alembic migrations.
 - `redis-py` (`redis.asyncio`): R2 (relay backplane + awareness), R1 (active-doc cache).
 - The server treats Yjs updates as opaque `bytes`. It does **not** need a server-side Yjs
   implementation for correctness; an optional server-side **`pycrdt`** (y-crdt Python binding)
@@ -129,9 +129,11 @@ CREATE TABLE document_updates (
 );
 ```
 
-> The architecture mentions storing canvas docs as **JSONB**. Yjs state is binary, so `bytea`
-> is the natural fit; a JSONB column can hold a *derived, human-readable* representation for
-> search indexing if needed. Confirm in Open Decisions.
+> 🟢 **Decided 2026-07-27 (register D9): `bytea`.** The original architecture said JSONB;
+> Yjs state is binary and this service is a relay that never interprets document structure,
+> so JSONB would store something that is not the source of truth. The "optional derived
+> JSONB" idea is dropped. If canvas search lands (register D12), the text projection is a
+> separate derived artefact produced by the Worker — not a change to this column.
 
 ### 4.1 Redis usage
 - **R2:** Socket.IO backplane for relaying `update`/`awareness_update`; awareness is ephemeral
@@ -179,7 +181,7 @@ observability per Conventions. Metrics: `canvas_updates_relayed_total`,
   (b) snapshot + append log replayed on recovery (stronger durability). Recommend (b).
 - **Server-side Yjs:** use the `pycrdt` (y-crdt) binding to compute snapshots server-side, vs.
   trust a debounced full-state push from a designated client. Affects correctness on crash.
-- **JSONB vs bytea** for `yjs_state` (architecture says JSONB; binary suggests bytea + optional
-  derived JSONB for search).
+- ~~**JSONB vs bytea** for `yjs_state`~~ — 🟢 **Decided 2026-07-27:** `bytea`, no derived
+  JSONB. See §4.
 - Whether canvas content is indexed in Elasticsearch (the architecture lists "canvas content"
   under search) — requires a derived text projection produced by the Worker.

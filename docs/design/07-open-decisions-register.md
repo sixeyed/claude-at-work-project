@@ -14,16 +14,18 @@
 These span service boundaries; deciding them keeps the individual docs consistent with each
 other. Details in the tables below (IDs in brackets).
 
-- **Auth revocation model** [D1] — whether every service checks the Redis denylist per request.
-  Touches Conventions + all services.
-- **Multi-workspace tenancy** [D2] — single vs. multiple active workspaces; shapes the `wsp`
-  JWT claim. Touches Conventions + Auth + every service's authorization.
-- **Canvas state storage** [D9] — JSONB (per original architecture) vs. bytea + durability
-  strategy. Touches Canvas + Worker (canvas search).
-- **Worker result write-back** [D14] — how the Worker reports results into a service's DB
-  without sharing schemas. Touches Asset + Worker.
-- **Canvas search in Elasticsearch** [D12/D17] — requires Canvas to emit a text projection the
-  Worker indexes. Touches Canvas + Worker.
+**Settled 2026-07-27:** D1, D2, D9 and D14 are now 🟢 and safe to build against.
+
+- 🟢 **Auth revocation model** [D1] — check-with-fail-open, except a named set of sensitive
+  operations that fail closed. Conventions §5.2 updated.
+- 🟢 **Multi-workspace tenancy** [D2] — many-to-many membership, one workspace per access
+  token, switch via refresh exchange.
+  [ADR](../adr/260727-single-active-workspace-per-token.md)
+- 🟢 **Canvas state storage** [D9] — `bytea`, no derived JSONB.
+- 🟢 **Worker result write-back** [D14] — internal endpoint plus service token.
+  [ADR](../adr/260727-service-tokens-for-internal-calls.md)
+- 🔴 **Canvas search in Elasticsearch** [D12/D17] — still open. Requires Canvas to emit a text
+  projection the Worker indexes. Touches Canvas + Worker.
 
 ---
 
@@ -31,8 +33,8 @@ other. Details in the tables below (IDs in brackets).
 
 | ID | Decision | Default in docs | Recommendation | Scope |
 |----|----------|-----------------|----------------|-------|
-| D1 | Do all services consult the Redis denylist on every request, or rely only on short token lifetime? | 🟡 Check-with-fail-open (Conv §5.2) | Confirm; fail-open is a security trade-off worth an explicit sign-off | Cross-cutting |
-| D2 | Single active workspace per token, or multiple with a switch flow? | 🟡 Single (`wsp` claim) | Decide early — drives token shape and every authz check | Cross-cutting (Conv, Auth) |
+| D1 | Do all services consult the Redis denylist on every request, or rely only on short token lifetime? | 🟢 **Decided (2026-07-27):** check-with-fail-open for ordinary requests; a named set of sensitive operations fails **closed** (503) when R1 is unreachable | Sensitive set: workspace member changes, role grants, asset deletion. Conv §5.2 updated | Cross-cutting |
+| D2 | Single active workspace per token, or multiple with a switch flow? | 🟢 **Decided (2026-07-27):** many-to-many membership; each access token scoped to one workspace via `wsp`; switch by exchanging the refresh token | See [ADR 260727](../adr/260727-single-active-workspace-per-token.md) | Cross-cutting (Conv, Auth) |
 | D3 | Primary-key type | 🟡 UUID v7 | Keep unless there's a reason for bigint/ULID | Cross-cutting |
 | D4 | Schema-per-service vs database-per-service in production | 🟡 Logically separate DBs | On-prem may co-locate; doesn't change app code | Cross-cutting |
 | D5 | Auth acts as full OIDC OP for first-party clients, or only federates to an upstream IdP? | 🔴 Open | — | Auth |
@@ -52,7 +54,7 @@ other. Details in the tables below (IDs in brackets).
 
 | ID | Decision | Default in docs | Recommendation | Scope |
 |----|----------|-----------------|----------------|-------|
-| D9 | Yjs state column type | 🟡 `bytea` (+ optional derived JSONB) — note: original architecture said JSONB | Confirm bytea; Yjs is binary | Cross-cutting (Canvas, Worker) |
+| D9 | Yjs state column type | 🟢 **Decided (2026-07-27):** `bytea`. The derived-JSONB option is dropped — Canvas is a relay and never interprets document structure | Any text projection for search (D12) is a separate derived artefact, not a column-type change | Cross-cutting (Canvas, Worker) |
 | D10 | Storage strategy: snapshot-only vs. snapshot + append log | 🟡 Append log mentioned | Recommend snapshot + append log (durability between snapshots) | Canvas |
 | D11 | Server-side Yjs (`pycrdt` y-crdt binding) vs. trust a debounced client full-state push | 🔴 Open | Server-side binding if crash-correctness matters | Canvas |
 | D12 | Index canvas content in Elasticsearch? | 🔴 Open | Needs a Canvas → text projection; ties to D17 | Cross-cutting (Canvas, Worker) |
@@ -62,7 +64,7 @@ other. Details in the tables below (IDs in brackets).
 | ID | Decision | Default in docs | Recommendation | Scope |
 |----|----------|-----------------|----------------|-------|
 | D13 | Avatars/exports in shared bucket vs. dedicated buckets | 🔴 Open | — | Asset |
-| D14 | How Worker reports generated variants back | 🟡 Internal endpoint `POST /assets/{id}/variants` | Internal endpoint (no shared DB) | Cross-cutting (Asset, Worker) |
+| D14 | How Worker reports generated variants back | 🟢 **Decided (2026-07-27):** internal endpoint `POST /api/v1/internal/assets/{id}/variants`, authenticated with an Auth-issued service token | See [ADR 260727](../adr/260727-service-tokens-for-internal-calls.md) | Cross-cutting (Asset, Worker) |
 | D15 | Virus/malware scan before marking `ready` | 🔴 Open | Add a scan hook if uploads are user-shared | Asset |
 | D15b | Azure phase: direct Blob SDK vs. S3-compat layer | 🟡 S3-compat | Keep S3-compat behind the `ObjectStore` protocol | Asset |
 
