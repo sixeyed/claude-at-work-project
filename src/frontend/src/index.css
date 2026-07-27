@@ -1,0 +1,27 @@
+/* Scaffold styling only. The styling approach is a team choice that design doc
+   06 §2 leaves open (Tailwind vs CSS Modules), so this commits to neither. */
+
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+}
+
+main {
+  margin: 0 auto;
+  max-width: 42rem;
+  padding: 2rem 1.5rem;
+}
+
+nav {
+  margin-bottom: 1.5rem;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.9em;
+}

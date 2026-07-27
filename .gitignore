@@ -12,8 +12,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
 parts/
 sdist/
 var/
@@ -55,6 +53,18 @@ pip-log.txt
 pip-delete-this-directory.txt
 .pdm-python
 __pypackages__/
+
+# Frontend (Node / Vite)
+# `lib/` and `lib64/` used to be listed above, inherited from a Python template
+# where they meant the virtualenv's lib directory. `.venv/` already covers that,
+# and the unanchored pattern would have silently ignored src/frontend/src/lib —
+# a directory design doc 06 §3 plans for.
+node_modules/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
 # Environment / secrets
 .env

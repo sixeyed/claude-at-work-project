@@ -1,0 +1,57 @@
+{{- $component := .Values.components.auth }}
+{{- if $component.enabled }}
+{{- $ctx := dict "root" $ "name" "auth" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "collabhub.componentFullname" $ctx }}
+  labels:
+    {{- include "collabhub.labels" $ctx | nindent 4 }}
+spec:
+  replicas: {{ $component.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "collabhub.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Roll this component's pods when its own config changes — scoped to the
+        # component so an Auth config edit does not restart Messaging.
+        checksum/config: {{ toYaml $component.env | sha256sum }}
+      labels:
+        {{- include "collabhub.selectorLabels" $ctx | nindent 8 }}
+    spec:
+      # Conventions §10: drain in-flight work before exiting.
+      terminationGracePeriodSeconds: {{ $.Values.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- toYaml ($component.podSecurityContext | default $.Values.defaults.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: auth
+          image: "{{ $component.image.repository }}:{{ $component.image.tag | default $.Chart.AppVersion }}"
+          imagePullPolicy: {{ $.Values.imagePullPolicy }}
+          securityContext:
+            {{- toYaml ($component.containerSecurityContext | default $.Values.defaults.containerSecurityContext) | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ $component.port }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "collabhub.componentFullname" $ctx }}
+            {{- range $component.envFromSecrets }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          livenessProbe:
+            httpGet:
+              path: {{ $component.probes.live }}
+              port: http
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: {{ $component.probes.ready }}
+              port: http
+            periodSeconds: 10
+          resources:
+            {{- toYaml ($component.resources | default $.Values.defaults.resources) | nindent 12 }}
+{{- end }}

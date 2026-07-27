@@ -4,7 +4,7 @@
 > Read [Platform Conventions](./00-platform-conventions.md) first.
 
 **Status:** Draft · **Stack:** React + TypeScript (Vite) · React Native / PWA path for mobile
-**Talks to:** Auth, Messaging, Canvas, Asset services (REST + Socket.IO), MinIO (direct uploads)
+**Talks to:** Auth, Messaging, Canvas, Asset services (REST + Socket.IO), Garage (direct uploads)
 
 ---
 
@@ -16,7 +16,7 @@ for all real-time interactions; runs the **Yjs CRDT** locally for the canvas (th
 relay — Canvas doc §1).
 
 **Owns:** all UI, client-side CRDT state, optimistic updates, presence rendering, the OIDC
-login flow (PKCE), and direct-to-MinIO uploads.
+login flow (PKCE), and direct-to-Garage uploads.
 **Does NOT own:** merge conflict resolution beyond what Yjs provides; any persistence
 (everything authoritative lives server-side).
 
@@ -75,6 +75,23 @@ login flow (PKCE), and direct-to-MinIO uploads.
 6. Socket.IO connections pass the access token in the handshake `auth` payload (per Conventions
    §6) and re-acquire it on reconnect.
 
+### Workspace switching
+
+Access tokens are scoped to one workspace (Conventions §5.4,
+[ADR](../adr/260727-single-active-workspace-per-token.md)), so switching is a real state
+transition, not a UI filter. The SPA must:
+
+1. `POST /auth/switch-workspace` with the refresh token and target workspace ID.
+2. Cancel in-flight requests and **clear the TanStack Query cache** — cached data belongs to
+   the old workspace.
+3. **Tear down and re-establish both Socket.IO connections.** A connection authenticated for
+   one workspace must never keep serving another; this is the most likely source of bugs
+   here and is worth an explicit test.
+4. Reset Yjs documents and awareness state for any open canvas.
+
+Cross-workspace views (unified search, an all-workspaces unread badge) cannot be served by a
+single token and are out of scope until a dedicated aggregate endpoint exists.
+
 ---
 
 ## 5. Real-Time Integration
@@ -112,7 +129,7 @@ offline/reconnecting UI.
 
 ## 6. Assets (direct upload)
 1. `POST /assets/upload-url` → presigned PUT.
-2. `PUT` the file bytes **directly to MinIO** (show progress).
+2. `PUT` the file bytes **directly to Garage** (show progress).
 3. `POST /assets/{id}/confirm`.
 4. Reference the returned `assetId` in a message (`attachments`) or canvas image node.
 5. Render via `GET /assets/{id}/download-url` / `thumbnail-url` (short-lived URLs; refetch on

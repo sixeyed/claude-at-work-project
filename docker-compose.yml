@@ -1,0 +1,244 @@
+# CollabHub local development stack (Conventions §11).
+#
+# Copy .env.example to .env first — every value below comes from there.
+# Image versions are pinned from docs/platform/versions.md, which wins over the
+# design docs.
+#
+# The three Redis instances are separate containers, not three databases on one
+# instance, because they are not interchangeable (Conventions §6, §7): R1 is the
+# cache and token denylist, R2 the Socket.IO backplane, R3 the job streams.
+# Running them apart locally is what stops them being conflated in code.
+
+name: collabhub
+
+x-service-common: &service-common
+  restart: unless-stopped
+  env_file: .env
+  environment: &service-env
+    APP_ENV: ${APP_ENV}
+    LOG_LEVEL: ${LOG_LEVEL}
+    AUTH_ISSUER: ${AUTH_ISSUER}
+    AUTH_AUDIENCE: ${AUTH_AUDIENCE}
+    AUTH_JWKS_URL: ${AUTH_JWKS_URL}
+    OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+
+x-http-healthcheck: &http-healthcheck
+  healthcheck:
+    test:
+      [
+        "CMD",
+        "python",
+        "-c",
+        "import urllib.request;urllib.request.urlopen('http://localhost:8000/health/live')",
+      ]
+    interval: 10s
+    timeout: 3s
+    retries: 5
+    start_period: 10s
+
+services:
+  # ---------------------------------------------------------------------------
+  # Infrastructure
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:18
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_USER}
+    volumes:
+      # Postgres 18 stores data in a major-version subdirectory, so the mount
+      # goes at /var/lib/postgresql — not /var/lib/postgresql/data as it did
+      # before 18. Mounting the old path makes the image refuse to start.
+      - postgres-data:/var/lib/postgresql
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/10-databases.sql:ro
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis-cache: # R1 — cache and token denylist
+    image: redis:8
+    restart: unless-stopped
+    volumes:
+      - redis-cache-data:/data
+    healthcheck: &redis-healthcheck
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis-rt: # R2 — Socket.IO backplane. Ephemeral by nature; no volume.
+    image: redis:8
+    restart: unless-stopped
+    healthcheck: *redis-healthcheck
+
+  redis-streams: # R3 — async job streams. Persisted: unacked jobs are work.
+    image: redis:8
+    restart: unless-stopped
+    volumes:
+      - redis-streams-data:/data
+    healthcheck: *redis-healthcheck
+
+  garage:
+    image: dxflrs/garage:v2.3.0
+    restart: unless-stopped
+    volumes:
+      - ./docker/garage/garage.toml:/etc/garage.toml:ro
+      - garage-meta:/var/lib/garage/meta
+      - garage-data:/var/lib/garage/data
+    ports:
+      - "3900:3900" # S3 API
+      - "3903:3903" # admin API
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:9.4.3
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fs http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.156.0
+    restart: unless-stopped
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./docker/otel-collector/config.yaml:/etc/otel/config.yaml:ro
+    ports:
+      - "4317:4317" # OTLP gRPC
+      - "4318:4318" # OTLP HTTP
+
+  # ---------------------------------------------------------------------------
+  # Services
+  # ---------------------------------------------------------------------------
+  auth:
+    <<: [*service-common, *http-healthcheck]
+    build:
+      context: .
+      dockerfile: docker/auth/Dockerfile
+    environment:
+      <<: *service-env
+      # .env namespaces the DSNs per service; each container sees only its own,
+      # under the name Conventions §8 specifies.
+      POSTGRES_DSN: ${AUTH_POSTGRES_DSN}
+      REDIS_CACHE_URL: ${REDIS_CACHE_URL}
+    ports:
+      - "${AUTH_PORT}:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis-cache: {condition: service_healthy}
+
+  messaging:
+    <<: [*service-common, *http-healthcheck]
+    build:
+      context: .
+      dockerfile: docker/messaging/Dockerfile
+    environment:
+      <<: *service-env
+      POSTGRES_DSN: ${MESSAGING_POSTGRES_DSN}
+      REDIS_CACHE_URL: ${REDIS_CACHE_URL}
+      REDIS_REALTIME_URL: ${REDIS_REALTIME_URL}
+      REDIS_STREAMS_URL: ${REDIS_STREAMS_URL}
+    ports:
+      - "${MESSAGING_PORT}:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis-cache: {condition: service_healthy}
+      redis-rt: {condition: service_healthy}
+      redis-streams: {condition: service_healthy}
+
+  canvas:
+    <<: [*service-common, *http-healthcheck]
+    build:
+      context: .
+      dockerfile: docker/canvas/Dockerfile
+    environment:
+      <<: *service-env
+      POSTGRES_DSN: ${CANVAS_POSTGRES_DSN}
+      REDIS_CACHE_URL: ${REDIS_CACHE_URL}
+      REDIS_REALTIME_URL: ${REDIS_REALTIME_URL}
+    ports:
+      - "${CANVAS_PORT}:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis-cache: {condition: service_healthy}
+      redis-rt: {condition: service_healthy}
+
+  asset:
+    <<: [*service-common, *http-healthcheck]
+    build:
+      context: .
+      dockerfile: docker/asset/Dockerfile
+    environment:
+      <<: *service-env
+      POSTGRES_DSN: ${ASSET_POSTGRES_DSN}
+      REDIS_STREAMS_URL: ${REDIS_STREAMS_URL}
+      OBJECT_STORE_ENDPOINT: ${OBJECT_STORE_ENDPOINT}
+      OBJECT_STORE_ACCESS_KEY: ${OBJECT_STORE_ACCESS_KEY}
+      OBJECT_STORE_SECRET_KEY: ${OBJECT_STORE_SECRET_KEY}
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET}
+    ports:
+      - "${ASSET_PORT}:8000"
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis-streams: {condition: service_healthy}
+      garage: {condition: service_started}
+
+  worker:
+    <<: [*service-common, *http-healthcheck]
+    build:
+      context: .
+      dockerfile: docker/worker/Dockerfile
+    environment:
+      <<: *service-env
+      REDIS_STREAMS_URL: ${REDIS_STREAMS_URL}
+      ELASTICSEARCH_URL: ${ELASTICSEARCH_URL}
+      OBJECT_STORE_ENDPOINT: ${OBJECT_STORE_ENDPOINT}
+      OBJECT_STORE_ACCESS_KEY: ${OBJECT_STORE_ACCESS_KEY}
+      OBJECT_STORE_SECRET_KEY: ${OBJECT_STORE_SECRET_KEY}
+      OBJECT_STORE_BUCKET: ${OBJECT_STORE_BUCKET}
+      SERVICE_TOKEN_URL: ${SERVICE_TOKEN_URL}
+      ASSET_INTERNAL_URL: ${ASSET_INTERNAL_URL}
+    ports:
+      - "${WORKER_PORT}:8000" # health only; the Worker exposes no API
+    depends_on:
+      redis-streams: {condition: service_healthy}
+      elasticsearch: {condition: service_healthy}
+
+  frontend:
+    restart: unless-stopped
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+      # Only VITE_-prefixed vars reach the bundle, and they are baked at build
+      # time — never put a secret here.
+      args:
+        VITE_AUTH_URL: ${VITE_AUTH_URL}
+        VITE_MESSAGING_URL: ${VITE_MESSAGING_URL}
+        VITE_CANVAS_URL: ${VITE_CANVAS_URL}
+        VITE_ASSET_URL: ${VITE_ASSET_URL}
+    ports:
+      - "${FRONTEND_PORT}:8080"
+
+volumes:
+  postgres-data:
+  redis-cache-data:
+  redis-streams-data:
+  garage-meta:
+  garage-data:
+  elasticsearch-data:

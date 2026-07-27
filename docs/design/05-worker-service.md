@@ -5,7 +5,7 @@
 
 **Status:** Draft · **Runtime:** Python 3.12 worker (headless asyncio, no HTTP except health)
 **Owns:** all async job processing + the Elasticsearch index lifecycle
-**Depends on:** Redis Streams (R3), Elasticsearch, MinIO, PostgreSQL (read-mostly, see §5)
+**Depends on:** Redis Streams (R3), Elasticsearch, Garage, Auth (service tokens) — **no PostgreSQL**
 
 ---
 
@@ -23,8 +23,8 @@ non-interactive work. Scales horizontally via **KEDA** based on stream depth.
 - Export generation (canvas → PNG/SVG/PDF).
 - Data retention / cleanup sweeps.
 
-**Does NOT:** serve user requests, own any service's primary database (it reads to enrich jobs;
-writes back via the owning service's internal endpoint where possible — see §5).
+**Does NOT:** serve user requests, or touch any service's database in either direction. Data
+arrives in the job payload or through the owning service's internal endpoint (§5.2).
 
 ---
 
@@ -34,8 +34,9 @@ writes back via the owning service's internal endpoint where possible — see §
 - `redis-py` (`redis.asyncio`) for R3 consumer groups (`XREADGROUP` / `XAUTOCLAIM`).
 - `elasticsearch` (the async `elasticsearch-py` client) for ES.
 - `Pillow` for image work.
-- The shared S3-compatible `ObjectStore` (boto3/minio) for MinIO, reused from `collabhub-shared`.
-- SQLAlchemy 2.0 (async) + asyncpg for read access where needed.
+- The shared S3-compatible `ObjectStore` (boto3) for Garage, reused from `collabhub-shared`.
+- `httpx` for internal calls to owning services. **No SQLAlchemy and no database driver** —
+  🟢 **Decided 2026-07-27 (register D25):** the Worker connects to no service database. See §5.2.
 - Exposes only `/health/live` and `/health/ready` (Conventions §10) via a minimal
   Starlette/FastAPI health app; no business HTTP.
 
@@ -48,13 +49,21 @@ by `type`.
 
 | Stream | `type` | Payload | Handler action |
 |--------|--------|---------|----------------|
-| `jobs:index` | `message.upsert` / `message.delete` | `{ messageId, op }` | Read message (or accept payload), upsert/delete in `messages` ES index. |
-| `jobs:index` | `document.index` | `{ documentId, textProjection }` | Index canvas text projection (if canvas search enabled). |
-| `jobs:index` | `asset.index` | `{ assetId }` | Index file metadata for file search. |
-| `jobs:thumbnail` | `thumbnail.generate` | `{ assetId, objectKey, variants[] }` | Fetch from MinIO, generate variants (Pillow), store back, report variants to Asset svc. |
-| `jobs:notify` | `notify.dispatch` | `{ userId, kind, data }` | Deliver notification (push/email/in-app). |
-| `jobs:export` | `canvas.export` | `{ documentId, format, requestedBy }` | Render document to PNG/SVG/PDF, store in MinIO, notify requester. |
-| `jobs:retention` | `retention.sweep` | `{ scope }` | Hard-delete soft-deleted rows/objects past policy; clean orphan `pending` assets. |
+| `jobs:index` | `message.upsert` / `message.delete` | `{ messageId, channelId, workspaceId, authorId, body, createdAt, version, op }` | Build the ES document from the payload alone and upsert/delete in `messages`. |
+| `jobs:index` | `document.index` | `{ documentId, workspaceId, name, textProjection, version }` | Index canvas text projection (if canvas search enabled). |
+| `jobs:index` | `asset.index` | `{ assetId, workspaceId, fileName, contentType, ownerId, createdAt, version }` | Index file metadata for file search. |
+| `jobs:thumbnail` | `thumbnail.generate` | `{ assetId, objectKey, variants[] }` | Fetch from Garage, generate variants (Pillow), store back, report variants to Asset svc. |
+| `jobs:notify` | `notify.dispatch` | `{ userId, kind, data }` | Resolve the recipient via Auth's internal endpoint, then deliver. |
+| `jobs:export` | `canvas.export` | `{ documentId, format, requestedBy }` | Fetch document state from Canvas's internal endpoint, render, store in Garage, notify requester. |
+| `jobs:retention` | `retention.sweep` | `{ scope }` | Call the owning service's internal sweep endpoint. The Worker deletes nothing itself. |
+
+🟢 **Decided 2026-07-27 (register D25).** Index payloads carry the whole document rather than
+an identifier, because the producer already holds it and the read-back would land on the
+busiest path in the system. `version` is a monotonic value from the source row, used as the
+Elasticsearch external version so a late-arriving older document is rejected instead of
+applied — without it, two rapid edits can be indexed out of order. Note `messages` has no
+`version` column yet; adding one is part of implementing this. See the
+[ADR](../adr/260727-worker-never-reads-service-databases.md).
 
 The Worker emits no events of its own except results delivered back through owning services
 (e.g. Asset `POST /assets/{id}/variants`) or notifications.
@@ -91,12 +100,35 @@ Worker owns mappings + aliases. Read-side queries (from Messaging/SPA) hit the a
 Each consumer runs as its own asyncio task; CPU-heavy handlers (thumbnail/export) offload the
 blocking work to a thread/process pool so they don't stall the event loop.
 
-### 5.2 Write-back rule
-Worker must not write to another service's primary tables directly. For results that must
-update a service's DB (e.g. asset variants), call that service's internal endpoint
-(`POST /assets/{id}/variants`) authenticated with a service token, or emit a result the owning
-service consumes. ES and MinIO are shared infrastructure the Worker is authorized to write.
-(See Asset Open Decisions.)
+### 5.2 Data access rule
+The Worker touches no service database, in either direction. Everything a handler needs
+arrives one of two ways:
+
+- **In the job payload**, where the producing service already held it — index jobs carry the
+  full document (§3).
+- **From the owning service's internal endpoint**, where it could not travel in the payload —
+  too large (canvas state), too live (a user's notification address), or a deletion that only
+  the owner should perform. These calls are authenticated with a **service token**
+  (Conventions §5.5), which is the same mechanism as the variant write-back.
+
+Results that must update a service's database follow the same rule: call the internal
+endpoint, e.g. `POST /api/v1/internal/assets/{id}/variants` with scope
+`assets:write-variants`. Retention inverts — the Worker calls each service's internal sweep
+endpoint and that service deletes its own rows.
+
+ES and Garage are shared infrastructure the Worker is authorized to write directly.
+
+🟢 **Decided 2026-07-27 (register D14)** — internal endpoint, not an event and not a direct
+write. See the [ADR](../adr/260727-service-tokens-for-internal-calls.md). Note this makes
+Auth a runtime dependency of the Worker: fetch a token at startup and refresh before expiry,
+retrying with backoff. A job whose write-back fails is left unacked and reclaimed, so an
+Auth outage delays processing rather than losing work.
+
+🟢 **Decided 2026-07-27 (register D25)** — the read side follows the same shape, and the
+Worker gets no database connection at all. That widens the Auth coupling above: notification
+and export handlers now need a service token too, so an Auth outage delays more of the
+Worker's surface. The failure mode is unchanged — delay, not loss. See the
+[ADR](../adr/260727-worker-never-reads-service-databases.md).
 
 ### 5.3 Scaling (KEDA)
 `ScaledObject` with the Redis Streams scaler on `pendingEntriesCount` per stream; scale 0→N
@@ -128,14 +160,21 @@ histograms, ES bulk latency.
 - No user-facing latency contract except `jobs:notify` (target < 5 s p95).
 - Back-pressure handled by stream depth + KEDA, never by dropping jobs.
 - Poison messages land in `*:dead` for inspection, never block the stream.
+- Index payloads now carry message bodies, so `jobs:index` and `jobs:index:dead` hold user
+  content. Set `MAXLEN` trimming deliberately rather than by default, and treat dead-letter
+  retention and access as handling user data (register D25).
 
 ## 9. Open Decisions
+- ~~**Whether the Worker reads service databases**~~ — 🟢 **Decided 2026-07-27 (register
+  D25).** It does not. Fat job payloads plus internal endpoints. See §5.2 and the
+  [ADR](../adr/260727-worker-never-reads-service-databases.md).
 - **Specialised worker pools** (separate deployments per stream for independent scaling) vs.
   one deployment consuming all streams. Recommend splitting CPU-heavy (thumbnail/export) from
   IO-heavy (index/notify).
 - Notification channels in scope for v1 (in-app only vs. push + email).
 - Whether canvas search (`canvas` index) ships in v1 — depends on Canvas producing a text
   projection.
-- Result write-back mechanism (internal endpoint vs. event) — align with Asset doc.
+- ~~Result write-back mechanism~~ — 🟢 **Decided 2026-07-27:** internal endpoint + service
+  token. See §5.2.
 - Export rendering engine for canvas (headless renderer / server-side Yjs via `pycrdt` + skia) —
   non-trivial; may defer.

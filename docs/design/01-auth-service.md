@@ -61,6 +61,13 @@ Base path `/api/v1`. Token endpoints and JWKS are unauthenticated; all others re
 | POST | `/workspaces/{id}/members` | Bearer (admin) | Invite/add member. |
 | PATCH | `/workspaces/{id}/members/{userId}` | Bearer (admin) | Change role. |
 | DELETE | `/workspaces/{id}/members/{userId}` | Bearer (admin) | Remove member. |
+| GET | `/workspaces` | Bearer | Workspaces the current user belongs to (for the switcher). |
+| POST | `/auth/switch-workspace` | none | Exchange refresh token + target workspace → new token pair scoped to that workspace. |
+| POST | `/auth/service-token` | none | Client-credentials grant for internal service tokens (Conventions §5.5). |
+
+The three `/workspaces/{id}/members` write endpoints are in the **fail-closed** set for
+denylist checks (Conventions §5.2) — they must return 503 rather than proceed when R1 is
+unreachable.
 
 ### 3.1 Token endpoint payloads
 
@@ -77,6 +84,25 @@ Base path `/api/v1`. Token endpoints and JWKS are unauthenticated; all others re
 // request
 { "refresh_token": "def..." }
 // response — same shape as /auth/token; old refresh_token is now invalid (rotation)
+```
+
+`POST /auth/switch-workspace` — the workspace-switch flow (Conventions §5.4). Rotates the
+refresh token exactly as `/auth/refresh` does; the only difference is the `wsp` and `roles`
+claims on the new access token. Rejects with 403 if the user is not a member of the target.
+```json
+// request
+{ "refresh_token": "def...", "workspaceId": "uuid" }
+// response — same shape as /auth/token
+```
+
+`POST /auth/service-token` — internal callers only; not exposed through the public ingress.
+Issues a short-lived token with `aud: collabhub-internal` and the scopes granted to that
+client (Conventions §5.5).
+```json
+// request
+{ "grant_type": "client_credentials", "client_id": "worker", "client_secret": "..." }
+// response
+{ "access_token": "ey...", "token_type": "Bearer", "expires_in": 600 }
 ```
 
 Access-token claims follow Conventions §5.1. The Auth Service is the only issuer.
@@ -194,7 +220,9 @@ Emit metric `auth_tokens_issued_total`, `auth_logins_total{provider}`, `auth_ref
 
 ## 9. Open Decisions
 - Acting as a full OIDC OP for first-party clients vs. only federating to an upstream IdP.
-- Multi-workspace membership and the workspace-switch flow (affects the `wsp` claim — see
-  Conventions §12.2).
+- ~~Multi-workspace membership and the workspace-switch flow~~ — 🟢 **Decided 2026-07-27
+  (register D2).** Many-to-many membership; one workspace per access token; switch via
+  `POST /auth/switch-workspace`. See Conventions §5.4 and the
+  [ADR](../adr/260727-single-active-workspace-per-token.md).
 - Whether SAML is in scope for v1 or deferred.
 - Refresh tokens stored hashed in Postgres here; could move to R1 — confirm durability need.

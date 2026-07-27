@@ -1,0 +1,19 @@
+{{- $component := .Values.components.auth }}
+{{- if $component.enabled }}
+{{- $ctx := dict "root" $ "name" "auth" }}
+# Auth — identity, token issuance, workspace membership.
+#
+# Non-secret config only (Conventions §8). Secrets are never templated into this
+# chart — they come from Sealed Secrets or Vault on-prem and Key Vault on Azure,
+# and are referenced by name in this component's envFromSecrets.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "collabhub.componentFullname" $ctx }}
+  labels:
+    {{- include "collabhub.labels" $ctx | nindent 4 }}
+data:
+  {{- range $key, $value := $component.env }}
+  {{ $key }}: {{ $value | quote }}
+  {{- end }}
+{{- end }}

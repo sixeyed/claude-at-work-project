@@ -1,0 +1,35 @@
+# Root ruff config — inherited by every service under src/services.
+target-version = "py312"
+line-length = 100
+
+[lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "A",    # flake8-builtins
+    "C4",   # flake8-comprehensions
+    "DTZ",  # flake8-datetimez — enforces timezone-aware datetimes
+    "T20",  # flake8-print — no stray print(); use structlog
+    "SIM",  # flake8-simplify
+    "ASYNC",# flake8-async
+    "RUF",
+]
+ignore = [
+    "E501",  # line length is handled by the formatter
+    "B008",  # FastAPI's Depends() in defaults is idiomatic
+]
+
+[lint.per-file-ignores]
+"**/migrations/**" = ["I", "N", "UP"]  # Alembic-generated revisions
+"**/tests/**" = ["T20"]
+
+[lint.isort]
+known-first-party = ["shared", "contracts", "auth", "messaging", "canvas", "asset", "worker"]
+
+[format]
+quote-style = "double"
