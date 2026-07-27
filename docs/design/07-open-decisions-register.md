@@ -14,7 +14,7 @@
 These span service boundaries; deciding them keeps the individual docs consistent with each
 other. Details in the tables below (IDs in brackets).
 
-**Settled 2026-07-27:** D1, D2, D9 and D14 are now 🟢 and safe to build against.
+**Settled 2026-07-27:** D1, D2, D9, D14 and D25 are now 🟢 and safe to build against.
 
 - 🟢 **Auth revocation model** [D1] — check-with-fail-open, except a named set of sensitive
   operations that fail closed. Conventions §5.2 updated.
@@ -24,6 +24,9 @@ other. Details in the tables below (IDs in brackets).
 - 🟢 **Canvas state storage** [D9] — `bytea`, no derived JSONB.
 - 🟢 **Worker result write-back** [D14] — internal endpoint plus service token.
   [ADR](../adr/260727-service-tokens-for-internal-calls.md)
+- 🟢 **Worker data access** [D25] — job payloads carry what the producer already holds;
+  anything else comes from the owning service's internal endpoint. The Worker connects to no
+  service database. [ADR](../adr/260727-worker-never-reads-service-databases.md)
 - 🔴 **Canvas search in Elasticsearch** [D12/D17] — still open. Requires Canvas to emit a text
   projection the Worker indexes. Touches Canvas + Worker.
 
@@ -76,6 +79,7 @@ other. Details in the tables below (IDs in brackets).
 | D17 | Specialised worker pools vs. one deployment for all streams | 🟡 Single, split suggested | Split CPU-heavy (thumbnail/export) from IO-heavy (index/notify) | Worker |
 | D18 | Notification channels in v1 | 🔴 Open | In-app first; push/email later | Worker |
 | D19 | Canvas export rendering engine (headless renderer / server-side Yjs via `pycrdt` + skia) | 🔴 Open | Non-trivial; consider deferring | Worker |
+| D25 | How the Worker gets the data its handlers need | 🟢 **Decided (2026-07-27):** producers put what they already hold into the job payload; anything else is fetched from the owning service's internal endpoint with a service token. No database connection, and retention inverts to a per-service internal sweep endpoint | Index jobs need a monotonic version for Elasticsearch external versioning; `messages` has no `version` column yet. See [ADR 260727](../adr/260727-worker-never-reads-service-databases.md) | Cross-cutting (Worker, Messaging, Canvas, Asset, Auth) |
 
 ## Frontend SPA
 

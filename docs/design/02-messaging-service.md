@@ -137,7 +137,8 @@ CREATE TABLE messages (
     attachments    uuid[] NOT NULL DEFAULT '{}',     -- Asset service IDs
     created_at     timestamptz NOT NULL DEFAULT now(),
     edited_at      timestamptz NULL,
-    deleted_at     timestamptz NULL
+    deleted_at     timestamptz NULL,
+    version        integer NOT NULL DEFAULT 0   -- bumped on edit/delete
 );
 CREATE INDEX ix_messages_channel_time ON messages (channel_id, id DESC) WHERE deleted_at IS NULL;
 CREATE INDEX ix_messages_thread ON messages (thread_root_id, id) WHERE thread_root_id IS NOT NULL;
@@ -151,6 +152,10 @@ CREATE TABLE reactions (
 );
 ```
 
+`version` serves double duty. It is the optimistic-concurrency column Conventions §3 requires
+of any updatable row, and it is what `jobs:index` carries as the Elasticsearch external
+version (register D25). Bump it on every edit and on delete.
+
 Threading is single-level: a reply sets `thread_root_id` to the top-level message; replies to
 replies still point at the root. Read state is a per-member pointer (`last_read_id`); unread
 counts are derived (messages with `id > last_read_id`).
@@ -158,7 +163,9 @@ counts are derived (messages with `id > last_read_id`).
 ### 4.1 Redis usage
 - **R1:** cache channel membership sets and recent-message windows for fast event authorization.
 - **R2:** Socket.IO Redis manager (backplane) + presence pub/sub.
-- **R3:** `jobs:index` — one job per created/edited/deleted message for ES sync.
+- **R3:** `jobs:index` — one job per created/edited/deleted message for ES sync. The payload
+  carries the whole document (§5), so these entries contain user-authored message bodies —
+  see the retention and trimming note in Worker doc §8.
 
 ---
 
@@ -167,7 +174,13 @@ Mirrors the architecture's sequence diagram:
 1. Client emits the `send_message` event on the `/messaging` namespace.
 2. Persist to `messages` (PostgreSQL).
 3. Broadcast `message_received` to room `channel:{id}` via the R2 backplane.
-4. `XADD jobs:index` with payload `{ messageId, op: "upsert" }`.
+4. `XADD jobs:index` with the **full indexable document**, not just an identifier:
+   `{ messageId, channelId, workspaceId, authorId, body, createdAt, version, op: "upsert" }`.
+   🟢 Register D25 — the Worker holds no database connection, and Messaging already has the
+   message in hand here, so a read-back would add load to this exact path for nothing.
+   `version` is the row's version, used as the Elasticsearch external version so two rapid
+   edits cannot be indexed out of order. See the
+   [ADR](../adr/260727-worker-never-reads-service-databases.md).
 5. Worker consumes and indexes into Elasticsearch (Worker doc owns the mapping).
 
 Edits/deletes follow the same persist → broadcast → enqueue(`op: upsert|delete`) pattern.

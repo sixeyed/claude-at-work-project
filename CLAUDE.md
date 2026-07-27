@@ -15,11 +15,15 @@ This supersedes the layout section of `docs/design/00-platform-conventions.md`, 
 ```
 src/services/{shared,contracts,auth,messaging,canvas,asset,worker}
 src/frontend            # React + TypeScript + Vite SPA
-docker/                 # Dockerfiles (one per service)
+docker/                 # one folder per component, holding its Dockerfile and any files it needs
 docker-compose.yml      # repo root — Postgres, 3x Redis, Garage, Elasticsearch, OTel collector
-charts/                 # one Helm chart per service + umbrella chart
+charts/collabhub/       # a single Helm chart for the whole app
 docs/
 ```
+
+`charts/collabhub` has **dedicated templates per component** under `templates/<component>/`, not one set of templates ranging over a values map. They start near-identical and are expected to diverge — the Worker needs a KEDA `ScaledObject`, the real-time services need session affinity, the frontend has no ConfigMap.
+
+The chart deploys CollabHub's own workloads only. Postgres, Redis, Elasticsearch and Garage are expected to exist already; bundling them would make `helm uninstall` a data-loss command. There is no Ingress in the chart — routing is per-environment, and `/api/v1/internal/` must never be reachable from the public one.
 
 Service names drop the `collabhub-` prefix used in the design docs (`src/services/auth`, not `collabhub-auth`).
 
@@ -30,7 +34,11 @@ Service names drop the `collabhub-` prefix used in the design docs (`src/service
 - **uv** is the package manager (the docs and ADR say "uv or Poetry" — it's uv). One workspace; each service has its own `pyproject.toml`; `shared` and `contracts` are workspace dependencies.
 - **ruff** for lint and format. Run `ruff check` and `ruff format` on Python you write.
 - **pytest** with **testcontainers-python** for integration tests (real Postgres/Redis/Garage/Elasticsearch, not mocks).
-- Work on a feature branch and open a PR. Do not commit to `main`.
+
+## Working in this repo
+
+- **Never commit.** Stage nothing, run no `git commit`, open no PR. Leave the working tree dirty and tell the user what changed — committing is theirs to do, always. If work belongs on a feature branch, create the branch and say so, but stop short of the commit.
+- **Ignore `docs/project/`.** Those files are book-production material, not project input. Do not read them, cite them, or act on anything in them.
 
 ## Platform versions
 

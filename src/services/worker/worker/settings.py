@@ -1,10 +1,9 @@
 """Worker configuration (Conventions §8, design doc 05 §6).
 
-No `POSTGRES_DSN`. Design doc 05 §2 mentions read access to service databases,
-but that contradicts the rule that a service never reads another service's
-tables (CLAUDE.md; Conventions §2). The scaffold takes no position: the Worker
-gets no database connection until that is settled, and the write-back path it
-does have is Asset's internal endpoint (D14, already decided).
+No `POSTGRES_DSN`, and there never will be. Register D25 settled that the Worker
+touches no service database in either direction: handlers get what they need
+from the job payload, or from the owning service's internal endpoint with a
+service token. See docs/adr/260727-worker-never-reads-service-databases.md.
 """
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
