@@ -1,6 +1,7 @@
 # CollabHub — sample project for *Claude at Work*
 
 This repo is the running sample project for **Claude at Work** (Manning), by Elton Stoneman.
+
 It's a deliberately realistic codebase: a greenfield product with real design documents,
 real architectural decisions, and real recurring maintenance work — the kind of project you'd
 get Claude Code to build.
