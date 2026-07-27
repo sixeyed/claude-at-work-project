@@ -3,7 +3,7 @@
 This repo is the running sample project for **Claude at Work** (Manning), by Elton Stoneman.
 It's a deliberately realistic codebase: a greenfield product with real design documents,
 real architectural decisions, and real recurring maintenance work — the kind of project you'd
-actually point Claude Code at.
+get Claude Code to build.
 
 > [Claude at Work - repo](https://github.com/sixeyed/claude-at-work)
 
