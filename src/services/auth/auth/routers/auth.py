@@ -7,7 +7,12 @@ coming up:
   the caller asked for (Conventions §5.4);
 * refresh rotates, and a replayed token takes its whole family down with it;
 * service tokens are a different audience entirely, so nothing issued here can
-  be used as the other kind.
+  be used as the other kind;
+* **the refresh token is never in a request or response body.** It arrives as an
+  `HttpOnly` cookie and leaves as one (register D22), so `/refresh` takes no body
+  at all and `/switch-workspace` takes only the workspace to move to. A caller
+  cannot present someone else's refresh token here because it cannot present a
+  refresh token at all — the browser decides what to send.
 """
 
 from __future__ import annotations
@@ -17,12 +22,10 @@ import secrets
 from fastapi import APIRouter, Depends, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from auth import identities, sessions
+from auth import cookies, identities, sessions
 from auth.db import session as db_session
 from auth.models import RefreshToken
 from auth.schemas import (
-    LogoutRequest,
-    RefreshRequest,
     ServiceTokenRequest,
     ServiceTokenResponse,
     SwitchWorkspaceRequest,
@@ -54,12 +57,23 @@ def _invalid_grant() -> ProblemException:
     return ProblemException.unauthorized("The credentials presented are not valid.")
 
 
-def _as_response(pair: sessions.TokenPair) -> TokenResponse:
-    return TokenResponse(
-        access_token=pair.access_token,
-        refresh_token=pair.refresh_token,
-        expires_in=pair.expires_in,
+def _as_response(pair: sessions.TokenPair, response: Response, settings: Settings) -> TokenResponse:
+    """Return the access token, and rotate the cookie carrying the refresh one."""
+    cookies.issue(
+        response,
+        pair.refresh_token,
+        refresh_token_days=settings.auth_refresh_token_days,
+        secure=settings.auth_cookie_secure,
     )
+    return TokenResponse(access_token=pair.access_token, expires_in=pair.expires_in)
+
+
+def _presented_token(request: Request) -> str:
+    """The refresh token from the cookie, or a 401 if the browser sent none."""
+    token = cookies.read(request)
+    if not token:
+        raise _invalid_grant()
+    return token
 
 
 async def _spend(session: AsyncSession, token: str) -> RefreshToken:
@@ -79,12 +93,16 @@ async def _spend(session: AsyncSession, token: str) -> RefreshToken:
 
 @router.post("/refresh", response_model=TokenResponse)
 async def refresh(
-    body: RefreshRequest, request: Request, session: AsyncSession = Depends(db_session)
+    request: Request, response: Response, session: AsyncSession = Depends(db_session)
 ) -> TokenResponse:
-    """Exchange a refresh token for a new pair, keeping the same workspace."""
+    """Renew a session from the refresh cookie, keeping the same workspace.
+
+    No request body: the only session this can renew is the one the browser
+    already holds a cookie for.
+    """
     settings = _settings(request)
 
-    presented = await _spend(session, body.refresh_token)
+    presented = await _spend(session, _presented_token(request))
 
     user = await identities.find_user(session, presented.user_id)
     if user is None:
@@ -108,12 +126,15 @@ async def refresh(
     )
     await session.commit()
 
-    return _as_response(pair)
+    return _as_response(pair, response, settings)
 
 
 @router.post("/switch-workspace", response_model=TokenResponse)
 async def switch_workspace(
-    body: SwitchWorkspaceRequest, request: Request, session: AsyncSession = Depends(db_session)
+    body: SwitchWorkspaceRequest,
+    request: Request,
+    response: Response,
+    session: AsyncSession = Depends(db_session),
 ) -> TokenResponse:
     """Re-scope a session to another workspace (Conventions §5.4).
 
@@ -124,7 +145,7 @@ async def switch_workspace(
     """
     settings = _settings(request)
 
-    presented = await _spend(session, body.refresh_token)
+    presented = await _spend(session, _presented_token(request))
 
     user = await identities.find_user(session, presented.user_id)
     if user is None:
@@ -144,17 +165,16 @@ async def switch_workspace(
     )
     await session.commit()
 
-    return _as_response(pair)
+    return _as_response(pair, response, settings)
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def logout(
-    body: LogoutRequest,
     request: Request,
     principal: UserPrincipal = Depends(require_user),
     session: AsyncSession = Depends(db_session),
 ) -> Response:
-    """Revoke this access token now, and the refresh token if one is supplied.
+    """Revoke this access token now, and the refresh token the cookie carries.
 
     The access token stays cryptographically valid until it expires — that is
     what stateless verification means — so revocation is the denylist entry
@@ -166,11 +186,17 @@ async def logout(
         expires_at=principal.expires_at,
     )
 
-    if body.refresh_token:
-        await sessions.revoke_refresh_token(session, body.refresh_token)
+    presented = cookies.read(request)
+    if presented:
+        await sessions.revoke_refresh_token(session, presented)
         await session.commit()
 
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
+    # Clear the cookie whether or not there was a token to revoke: a browser
+    # left holding one it can no longer spend looks signed in until the next
+    # renewal fails.
+    response = Response(status_code=status.HTTP_204_NO_CONTENT)
+    cookies.clear(response, secure=_settings(request).auth_cookie_secure)
+    return response
 
 
 @router.get("/userinfo", response_model=UserInfoResponse)

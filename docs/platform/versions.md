@@ -116,6 +116,28 @@ this file so the same release is never announced twice.
     self-hosted now, with AWS S3 or Azure Blob as swappable S3-compatible backends
     behind the same interface.
 
+- id: dex
+  name: Dex
+  category: identity-provider
+  used_for: >
+    Upstream OpenID Connect provider that the Auth service federates to (register D5).
+    Local development only — deployed environments federate to whatever IdP the
+    organisation already runs. CollabHub is always the relying party, never the provider.
+  pinned_track: "2"
+  current_stable: "2.45.1"
+  last_notified: "2.45.1"   # watermark: last version announced to #stack-updates; skill only alerts when upstream > this
+  released: "2026-03-03"
+  license: Apache-2.0
+  base_image_hint: "ghcr.io/dexidp/dex:v2.45.1"
+  check_url: https://github.com/dexidp/dex/releases
+  eol_url: https://dexidp.io/docs/
+  notes: >
+    Local stack only, so a lagging version is not a production exposure — but it is on
+    the sign-in path for every developer, and a break here blocks all local work.
+    Config lives in docker/dex/config.yaml. Two things there are version-sensitive:
+    `hashFromEnv` on static passwords, and the login form markup that the Auth
+    integration tests script. Re-run the auth test suite when bumping.
+
 - id: nodejs
   name: Node.js
   category: frontend-build-runtime

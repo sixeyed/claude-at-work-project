@@ -113,6 +113,35 @@ services:
       retries: 20
       start_period: 30s
 
+  dex:
+    # The upstream identity provider (register D5). CollabHub's Auth service
+    # federates to this; it is never an OIDC provider itself.
+    image: ghcr.io/dexidp/dex:v2.45.1
+    restart: unless-stopped
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    environment:
+      # Referenced by `hashFromEnv` in the config. Dex expands environment
+      # variables only in its storage, signer and connector blocks, and only
+      # behind a feature flag, so this indirection is how a password hash gets
+      # in — and it keeps a string starting `$2b$` out of a file that might one
+      # day be expanded.
+      DEX_PASSWORD_HASH: ${DEX_PASSWORD_HASH}
+    volumes:
+      - ./docker/dex/config.yaml:/etc/dex/config.yaml:ro
+    ports:
+      # The host port must match the port inside the issuer URL. An OIDC issuer
+      # is an identity, not an address: it is what Dex puts in `iss` and what
+      # Auth checks the id_token against, so the browser and the token have to
+      # agree on it. Changing DEX_PORT means changing `issuer` in
+      # docker/dex/config.yaml too.
+      - "${DEX_PORT}:5556"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:5558/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.156.0
     restart: unless-stopped
@@ -137,11 +166,15 @@ services:
       # under the name Conventions §8 specifies.
       POSTGRES_DSN: ${AUTH_POSTGRES_DSN}
       REDIS_CACHE_URL: ${REDIS_CACHE_URL}
+      OIDC_PROVIDERS: ${OIDC_PROVIDERS}
+      SPA_REDIRECT_URI: ${SPA_REDIRECT_URI}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
     ports:
       - "${AUTH_PORT}:8000"
     depends_on:
       postgres: {condition: service_healthy}
       redis-cache: {condition: service_healthy}
+      dex: {condition: service_healthy}
 
   messaging:
     <<: [*service-common, *http-healthcheck]

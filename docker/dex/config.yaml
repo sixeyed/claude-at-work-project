@@ -1,0 +1,63 @@
+# Dex — the upstream identity provider for local development (register D5).
+#
+# CollabHub's Auth service is an OIDC *relying party*, never a provider. Locally
+# that upstream is this Dex instance; in a deployed environment it is whatever
+# the organisation already runs, and nothing in the Auth service changes but
+# configuration.
+#
+# The issuer is the public URL, because it is what lands in the `iss` claim and
+# where the browser is sent. The Auth container cannot reach `localhost:5556`,
+# so it makes its back-channel calls to `http://dex:5556/dex` — see
+# OIDC_PROVIDERS in .env.example, which carries both.
+
+issuer: http://localhost:5556/dex
+
+storage:
+  # Local users are configuration, not data: everything here is recreated from
+  # this file on every start, so there is nothing worth a volume.
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+telemetry:
+  # /healthz lives here, not on the main listener, which is what the compose
+  # healthcheck probes.
+  http: 0.0.0.0:5558
+
+oauth2:
+  responseTypes: ["code"]
+  # No consent screen for a first-party client we control. The screen exists to
+  # protect users from third-party clients; there are none here.
+  skipApprovalScreen: true
+
+staticClients:
+  - id: collabhub-auth
+    name: CollabHub
+    # Not read from the environment: Dex only expands env vars in its storage,
+    # signer and connector blocks, and only behind a feature flag. Keep this in
+    # step with DEX_CLIENT_SECRET in .env — Auth is the side that sends it.
+    secret: collabhub-local-secret
+    redirectURIs:
+      - http://localhost:8001/api/v1/auth/callback/dex
+
+enablePasswordDB: true
+
+# Three accounts, because one is not enough to test anything interesting: the
+# workspace switcher, adding a member, and changing someone's role all need a
+# second and third person. All three share one password, supplied through
+# `hashFromEnv` — a literal bcrypt hash here would start `$2b$` and be mangled
+# the moment anyone turned Dex's env-expansion flag on.
+staticPasswords:
+  - email: ada@collabhub.dev
+    username: ada
+    userID: 6f9619ff-8b86-d011-b42d-00c04fc964ff
+    hashFromEnv: DEX_PASSWORD_HASH
+  - email: grace@collabhub.dev
+    username: grace
+    userID: 7a9619ff-8b86-d011-b42d-00c04fc964ff
+    hashFromEnv: DEX_PASSWORD_HASH
+  - email: alan@collabhub.dev
+    username: alan
+    userID: 8b9619ff-8b86-d011-b42d-00c04fc964ff
+    hashFromEnv: DEX_PASSWORD_HASH

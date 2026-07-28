@@ -13,47 +13,47 @@ Slack-like chat experience with a Figma-like collaborative canvas in a single ap
 
 ## Current state
 
-Early-stage. **Auth is built and working**; the other four services are still scaffold —
-a process that reads its configuration and answers `/health/live` and `/health/ready`, with
-no models, migrations, routes, Socket.IO namespaces or job handlers. Chapters of the book
-add code, configuration and automation to this repo as they go.
+Early-stage. **Auth is complete**, including federated sign-in through Dex; the other four
+services are still scaffold — a process that reads its configuration and answers
+`/health/live` and `/health/ready`, with no models, migrations, routes, Socket.IO namespaces
+or job handlers. The SPA has sign-in and a workspace switcher and nothing else. Chapters of
+the book add code, configuration and automation to this repo as they go.
 
-The Auth service issues and verifies real tokens: sign-in, JWKS, refresh with rotation and
-replay detection, workspace switching, logout through the Redis denylist, and the
-client-credentials grant for internal service tokens. See
-[`src/services/auth/api.http`](src/services/auth/api.http) to drive the whole flow by hand.
-Its own database is migrated with Alembic.
+Two register decisions were settled on 2026-07-28. **D5** — whether Auth federates to an
+upstream IdP or acts as one: it federates, and is never an OpenID Provider
+([ADR](docs/adr/260728-federate-to-an-upstream-oidc-provider.md)). **D22** — where the
+browser keeps the refresh token: an `HttpOnly; Secure; SameSite=Strict` cookie, which means
+the SPA stores nothing at all and **the SPA and API must be deployed same-site**
+([ADR](docs/adr/260728-refresh-token-in-an-httponly-cookie.md)). Both are explained in the
+[Auth service README](src/services/auth/README.md).
 
-That work pulled the cross-cutting layer into `collabhub-shared`, so the next service
-inherits it: RFC 7807 Problem Details, UUID v7, JWKS-backed verification with
-`require_user` / `require_user_sensitive` / `require_service`, and the token denylist.
-Cursor pagination, the job envelope and the `ObjectStore` protocol are still to come, and
+`collabhub-shared` carries the cross-cutting layer so the next service inherits it: RFC 7807
+Problem Details, UUID v7, JWKS-backed verification, the token denylist, cursor pagination and
+CORS. The job envelope and the `ObjectStore` protocol are still to come, and
 `collabhub-contracts` is still empty.
 
-No 🔴 decision in the [register](docs/design/07-open-decisions-register.md) has been
-resolved. Auth deliberately **defers** D5 — whether it federates to an upstream IdP or acts
-as one — behind a local-only `POST /auth/dev-login` that mints a real token pair with no
-credential. It is registered only when `APP_ENV=local`, so it does not exist in a deployed
-environment. Everything downstream of identity is built and does not change with the answer.
+## Where to read next
 
-## What's here
+| | |
+|---|---|
+| [`docs/design/00-platform-conventions.md`](docs/design/00-platform-conventions.md) | **Start here.** The cross-service contract every service doc builds on. |
+| [`docs/design/07-open-decisions-register.md`](docs/design/07-open-decisions-register.md) | What is still undecided, and what has been settled. |
+| [`docs/adr/`](docs/adr/) | One file per significant decision, with the rejected options. |
+| [`docs/platform/versions.md`](docs/platform/versions.md) | Tracked upstream versions for every platform component. |
 
-```
-docs/design/      Architecture and per-service design docs (start with 00-platform-conventions.md)
-docs/adr/         Architecture Decision Records — one file per significant decision
-docs/platform/    versions.md — tracked upstream versions for every platform component
-src/services/     shared, contracts, and the five backend services (one uv workspace)
-src/frontend/     React + TypeScript SPA (Vite)
-docker/           One folder per component: its Dockerfile and any files it needs
-charts/collabhub/ Helm chart covering every component
-.claude/skills/   Project skills: adr-writer, stack-update-checker
-```
+Each component documents itself — how to run it, what it owns, and the rules that are easy
+to get wrong:
 
-Read [`docs/design/00-platform-conventions.md`](docs/design/00-platform-conventions.md) first —
-it's the shared baseline every service doc builds on. The
-[open decisions register](docs/design/07-open-decisions-register.md) lists what's still undecided.
+| Component | Design doc | Service README |
+|-----------|-----------|----------------|
+| Auth | [01](docs/design/01-auth-service.md) | [src/services/auth](src/services/auth/README.md) |
+| Messaging | [02](docs/design/02-messaging-service.md) | *scaffold* |
+| Canvas | [03](docs/design/03-canvas-service.md) | *scaffold* |
+| Asset | [04](docs/design/04-asset-service.md) | *scaffold* |
+| Worker | [05](docs/design/05-worker-service.md) | *scaffold* |
+| Frontend SPA | [06](docs/design/06-frontend-spa.md) | *scaffold* |
 
-## Planned architecture
+## Architecture
 
 Five backend services, each independently deployable with its own database and its own
 container image, plus a single-page frontend:
@@ -69,10 +69,21 @@ container image, plus a single-page frontend:
 
 **Stack:** Python 3.12 · FastAPI / Uvicorn · SQLAlchemy + Alembic · Socket.IO · PostgreSQL ·
 Redis (cache, real-time backplane, and job streams) · Elasticsearch · S3-compatible object
-storage (Garage) · Kubernetes · OpenTelemetry into the Grafana LGTM stack.
+storage (Garage) · Dex · Kubernetes · OpenTelemetry into the Grafana LGTM stack.
 
 Python was chosen over .NET — see
 [ADR 260708](docs/adr/260708-python-instead-of-dotnet.md) for the reasoning.
+
+```
+docs/design/      Architecture and per-service design docs
+docs/adr/         Architecture Decision Records
+docs/platform/    versions.md — tracked upstream versions
+src/services/     shared, contracts, and the five backend services (one uv workspace)
+src/frontend/     React + TypeScript SPA (Vite)
+docker/           One folder per component: its Dockerfile and any files it needs
+charts/collabhub/ Helm chart covering every component
+.claude/skills/   Project skills: adr-writer, stack-update-checker
+```
 
 ## Running it locally
 
@@ -85,29 +96,27 @@ uv run pytest          # unit + integration tests (integration needs Docker)
 uv run ruff check . && uv run ruff format --check .
 ```
 
-The integration tests start real Postgres and Redis containers (Conventions §11). To skip
+Integration tests start real Postgres, Redis and Dex containers (Conventions §11). To skip
 them when Docker is not running:
 
 ```bash
 uv run pytest -m "not integration"
 ```
 
-Bring up the full stack — Postgres, the three Redis instances, Garage, Elasticsearch, the
-OTel collector, all five services and the SPA:
+Bring up the full stack — Postgres, the three Redis instances, Dex, Garage, Elasticsearch,
+the OTel collector, all five services and the SPA:
 
 ```bash
 docker compose up --build
 ```
 
-Then `curl localhost:8001/health/ready` (Auth), `:8002` Messaging, `:8003` Canvas,
-`:8004` Asset, `:8005` Worker, and the SPA on <http://localhost:5173>.
+Then open <http://localhost:5173> and **sign in as `ada@collabhub.dev` with the password
+`collabhub`** (or `grace@`, or `alan@`). Health checks are on `:8001` Auth, `:8002`
+Messaging, `:8003` Canvas, `:8004` Asset, `:8005` Worker.
 
-Auth is the only service with an API so far. To exercise it by hand, open
-[`src/services/auth/api.http`](src/services/auth/api.http) in VS Code with the
-[REST Client](https://marketplace.visualstudio.com/items?itemName=humao.rest-client)
-extension and run the requests top to bottom — each one feeds the next, so you get a whole
-session lifecycle without copying tokens around. Its interactive docs are at
-<http://localhost:8001/docs>.
+Auth is the only service with an API so far — see its
+[README](src/services/auth/README.md) for how to drive it by hand, and its interactive docs
+at <http://localhost:8001/docs>.
 
 For frontend work, the Vite dev server is faster than rebuilding the Nginx image:
 
@@ -143,6 +152,14 @@ The chart deploys CollabHub's own workloads only. Postgres, Redis, Elasticsearch
 are expected to exist already — they have their own lifecycle and backups, and bundling them
 would make `helm uninstall` a data-loss command. There is no Ingress either: routing is
 per-environment, and `/api/v1/internal/` must never be reachable from the public one.
+
+Because routing is per-environment, **two constraints land on whoever writes it**:
+
+- `/api/v1/internal/` must not be reachable from the public ingress (Conventions §5.5).
+- The SPA and the API must be **same-site** — one registrable domain, or one origin. The
+  refresh cookie is `SameSite=Strict` (register D22), so splitting them across genuinely
+  different domains silently signs everyone out. See
+  [`auth/cookies.py`](src/services/auth/auth/cookies.py).
 
 ## Working in this repo
 

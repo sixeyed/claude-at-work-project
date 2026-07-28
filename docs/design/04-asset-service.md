@@ -44,7 +44,24 @@ The upload is a three-step handshake so the blob goes client → Garage directly
 | GET | `/assets/{id}` | viewer | Metadata (type, size, status, variants). |
 | GET | `/assets/{id}/download-url` | viewer | Presigned **GET** URL (time-limited). |
 | GET | `/assets/{id}/thumbnail-url?size=` | viewer | Presigned GET for a generated variant. |
-| DELETE | `/assets/{id}` | owner | Soft-delete metadata; schedule blob deletion via retention job. |
+| DELETE | `/assets/{id}` | owner — **fail-closed** | Soft-delete metadata; schedule blob deletion via retention job. |
+
+`DELETE /assets/{id}` is in the **fail-closed** denylist set (Conventions §5.2, register D1):
+it takes `require_user_sensitive` and returns 503 rather than proceed on a token whose
+revocation status cannot be checked. It is the only endpoint in this service that does —
+deletion is destructive and hard to undo, whereas refusing a read whenever R1 blinks would be
+an outage for nothing.
+
+**Internal** (`/api/v1/internal/`, service token only — Conventions §5.5; never reachable
+from the public ingress, and never carrying `require_user`):
+
+| Method | Path | Scope | Purpose |
+|--------|------|-------|---------|
+| POST | `/internal/assets/{id}/variants` | `assets:write-variants` | The Worker reports generated variants. 🟢 Register D14 — see the [ADR](../adr/260727-service-tokens-for-internal-calls.md). |
+| POST | `/internal/assets/sweep` | `assets:retention` | Delete `pending` assets past their TTL and soft-deleted blobs. The Worker calls this; it deletes nothing itself (register D25). |
+
+**Every asset is scoped to the workspace in the token's `wsp` claim.** `assets.workspace_id`
+comes from the claim, never from the request — Conventions §5.4.
 
 `POST /assets/upload-url`
 ```json

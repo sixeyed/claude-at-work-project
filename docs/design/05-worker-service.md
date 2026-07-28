@@ -34,7 +34,9 @@ arrives in the job payload or through the owning service's internal endpoint (§
 - `redis-py` (`redis.asyncio`) for R3 consumer groups (`XREADGROUP` / `XAUTOCLAIM`).
 - `elasticsearch` (the async `elasticsearch-py` client) for ES.
 - `Pillow` for image work.
-- The shared S3-compatible `ObjectStore` (boto3) for Garage, reused from `collabhub-shared`.
+- The shared S3-compatible `ObjectStore` (boto3) for Garage, reused from `collabhub-shared`
+  — not built yet; `shared` currently carries Problem Details, UUID v7, token verification,
+  the denylist, cursor pagination and CORS.
 - `httpx` for internal calls to owning services. **No SQLAlchemy and no database driver** —
   🟢 **Decided 2026-07-27 (register D25):** the Worker connects to no service database. See §5.2.
 - Exposes only `/health/live` and `/health/ready` (Conventions §10) via a minimal
@@ -53,16 +55,16 @@ by `type`.
 | `jobs:index` | `document.index` | `{ documentId, workspaceId, name, textProjection, version }` | Index canvas text projection (if canvas search enabled). |
 | `jobs:index` | `asset.index` | `{ assetId, workspaceId, fileName, contentType, ownerId, createdAt, version }` | Index file metadata for file search. |
 | `jobs:thumbnail` | `thumbnail.generate` | `{ assetId, objectKey, variants[] }` | Fetch from Garage, generate variants (Pillow), store back, report variants to Asset svc. |
-| `jobs:notify` | `notify.dispatch` | `{ userId, kind, data }` | Resolve the recipient via Auth's internal endpoint, then deliver. |
-| `jobs:export` | `canvas.export` | `{ documentId, format, requestedBy }` | Fetch document state from Canvas's internal endpoint, render, store in Garage, notify requester. |
-| `jobs:retention` | `retention.sweep` | `{ scope }` | Call the owning service's internal sweep endpoint. The Worker deletes nothing itself. |
+| `jobs:notify` | `notify.dispatch` | `{ userId, kind, data }` | Resolve the recipient via Auth's internal endpoint, then deliver. (Auth has no such endpoint yet — see §9.) |
+| `jobs:export` | `canvas.export` | `{ documentId, format, requestedBy }` | Fetch state from `GET /internal/documents/{id}/state`, render, store in Garage, notify requester. |
+| `jobs:retention` | `retention.sweep` | `{ scope }` | Call the owning service's internal sweep endpoint — `POST /internal/messages/sweep`, `/internal/documents/sweep`, `/internal/assets/sweep`. The Worker deletes nothing itself. |
 
 🟢 **Decided 2026-07-27 (register D25).** Index payloads carry the whole document rather than
 an identifier, because the producer already holds it and the read-back would land on the
 busiest path in the system. `version` is a monotonic value from the source row, used as the
 Elasticsearch external version so a late-arriving older document is rejected instead of
-applied — without it, two rapid edits can be indexed out of order. Note `messages` has no
-`version` column yet; adding one is part of implementing this. See the
+applied — without it, two rapid edits can be indexed out of order. `messages.version` exists
+for exactly this (Messaging doc §4) and is bumped on every edit and delete. See the
 [ADR](../adr/260727-worker-never-reads-service-databases.md).
 
 The Worker emits no events of its own except results delivered back through owning services
@@ -178,3 +180,7 @@ histograms, ES bulk latency.
   token. See §5.2.
 - Export rendering engine for canvas (headless renderer / server-side Yjs via `pycrdt` + skia) —
   non-trivial; may defer.
+- **The internal endpoints this Worker depends on do not exist yet.** `jobs:notify` needs a way
+  to resolve a recipient's notification address from Auth, and every `retention.sweep` scope
+  needs its owning service's sweep endpoint. They are specified in each service's §3 but
+  unbuilt, so those handlers cannot ship before them.

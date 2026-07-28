@@ -156,3 +156,32 @@ async def revoke_refresh_token(session: AsyncSession, token: str) -> None:
     row = await _find(session, token)
     if row is not None and row.revoked_at is None:
         row.revoked_at = datetime.now(UTC)
+
+
+async def revoke_workspace_sessions(
+    session: AsyncSession, *, user_id: uuid.UUID, workspace_id: uuid.UUID
+) -> int:
+    """Revoke every live refresh token a user holds against one workspace.
+
+    Called when someone is removed from a workspace. Without it, removal only
+    stops them getting a *new* token — the refresh token they already hold would
+    keep minting access tokens for a workspace they are no longer in, for up to
+    thirty days.
+
+    Their current access token stays cryptographically valid for the rest of its
+    fifteen minutes; that is the cost of stateless verification and Conventions
+    §5.2 already accepts it. Only the sessions for this workspace are revoked,
+    because membership of one workspace says nothing about the others.
+    """
+    now = datetime.now(UTC)
+    result = await session.execute(
+        select(RefreshToken).where(
+            RefreshToken.user_id == user_id,
+            RefreshToken.workspace_id == workspace_id,
+            RefreshToken.revoked_at.is_(None),
+        )
+    )
+    rows = list(result.scalars())
+    for row in rows:
+        row.revoked_at = now
+    return len(rows)

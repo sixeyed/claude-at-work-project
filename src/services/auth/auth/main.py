@@ -22,8 +22,10 @@ from fastapi import FastAPI
 from auth.db import build_engine, build_sessions
 from auth.identities import ensure_demo_workspace
 from auth.keys import SigningKeys
+from auth.loginflow import LoginFlowStore
+from auth.oidc import build_clients
 from auth.routers import auth as auth_routes
-from auth.routers import devlogin as devlogin_routes
+from auth.routers import federation as federation_routes
 from auth.routers import users as user_routes
 from auth.routers import wellknown as wellknown_routes
 from auth.routers import workspaces as workspace_routes
@@ -34,6 +36,7 @@ from shared import (
     SecurityConfig,
     StaticKeySource,
     build_health_router,
+    install_cors,
     install_problem_handlers,
     install_security,
     postgres_check,
@@ -53,14 +56,18 @@ def create_app(settings: Settings) -> FastAPI:
     sessions = build_sessions(engine)
     redis_client = aioredis.from_url(settings.redis_cache_url, decode_responses=True)
 
+    oidc_clients = build_clients(settings.oidc_providers)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        if settings.dev_login_enabled:
+        if settings.is_local:
             # Create the shared local workspace up front, so the first sign-in
             # is not racing a second one to create it.
             async with sessions.begin() as session:
                 await ensure_demo_workspace(session, settings.auth_demo_workspace_name)
         yield
+        for client in oidc_clients.values():
+            await client.aclose()
         await engine.dispose()
         await redis_client.aclose()
 
@@ -70,6 +77,12 @@ def create_app(settings: Settings) -> FastAPI:
     app.state.signing_keys = keys
     app.state.sessions = sessions
     app.state.denylist = Denylist(redis_client)
+    app.state.oidc_clients = oidc_clients
+    app.state.login_flow = LoginFlowStore(
+        redis_client,
+        state_ttl_seconds=settings.auth_login_state_ttl_seconds,
+        code_ttl_seconds=settings.auth_code_ttl_seconds,
+    )
     app.state.token_issuer = TokenIssuer(
         keys=keys,
         issuer=settings.auth_issuer,
@@ -79,6 +92,7 @@ def create_app(settings: Settings) -> FastAPI:
         service_token_minutes=settings.auth_service_token_minutes,
     )
 
+    install_cors(app, origins=settings.cors_allowed_origins)
     install_problem_handlers(app)
     install_security(
         app,
@@ -100,18 +114,17 @@ def create_app(settings: Settings) -> FastAPI:
         )
     )
     app.include_router(wellknown_routes.router)
+    app.include_router(federation_routes.router)
     app.include_router(auth_routes.router)
     app.include_router(user_routes.router)
     app.include_router(workspace_routes.router)
 
-    if settings.dev_login_enabled:
-        # Registered only here, so deployed environments 404 it. A route that
-        # exists but refuses is a route somebody can misconfigure back into
-        # service; one that was never registered is not.
-        app.include_router(devlogin_routes.router)
-        _log.warning(
-            "dev-login is enabled: any email address can obtain a session with no credential"
-        )
+    if not oidc_clients:
+        # Not fatal: JWKS, refresh, and service tokens all still work, and a
+        # deployment may be brought up before its IdP is configured. But no one
+        # can sign in, which is worth saying once at startup rather than leaving
+        # to be discovered as a 404 on /auth/login.
+        _log.warning("no OIDC providers are configured — interactive sign-in is unavailable")
 
     return app
 

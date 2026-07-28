@@ -15,7 +15,15 @@ These span service boundaries; deciding them keeps the individual docs consisten
 other. Details in the tables below (IDs in brackets).
 
 **Settled 2026-07-27:** D1, D2, D9, D14 and D25 are now 🟢 and safe to build against.
+**Settled 2026-07-28:** D5 and D22.
 
+- 🟢 **Identity federation** [D5] — Auth is an OIDC *relying party*, never a provider. Dex is
+  the upstream locally; a customer's own IdP elsewhere. `dev-login` is deleted.
+  [ADR](../adr/260728-federate-to-an-upstream-oidc-provider.md)
+- 🟢 **Refresh-token storage** [D22] — `HttpOnly; Secure; SameSite=Strict` cookie scoped to
+  `/api/v1/auth`. Never in a request or response body. **Constrains deployment: the SPA and
+  the API must be same-site.**
+  [ADR](../adr/260728-refresh-token-in-an-httponly-cookie.md)
 - 🟢 **Auth revocation model** [D1] — check-with-fail-open, except a named set of sensitive
   operations that fail closed. Conventions §5.2 updated.
 - 🟢 **Multi-workspace tenancy** [D2] — many-to-many membership, one workspace per access
@@ -40,7 +48,7 @@ other. Details in the tables below (IDs in brackets).
 | D2 | Single active workspace per token, or multiple with a switch flow? | 🟢 **Decided (2026-07-27):** many-to-many membership; each access token scoped to one workspace via `wsp`; switch by exchanging the refresh token | See [ADR 260727](../adr/260727-single-active-workspace-per-token.md) | Cross-cutting (Conv, Auth) |
 | D3 | Primary-key type | 🟡 UUID v7 | Keep unless there's a reason for bigint/ULID | Cross-cutting |
 | D4 | Schema-per-service vs database-per-service in production | 🟡 Logically separate DBs | On-prem may co-locate; doesn't change app code | Cross-cutting |
-| D5 | Auth acts as full OIDC OP for first-party clients, or only federates to an upstream IdP? | 🔴 Open — **deferred, not decided (2026-07-27).** The MVP ships a local-only `POST /auth/dev-login` that mints a real token pair with no credential; it is registered only when `APP_ENV=local`. Everything downstream of identity — JWKS, rotation, `wsp` scoping, service tokens — is built and does not change with the answer | Settle before any deployed environment. Dex or an OAuth proxy locally is the cheap way to try federation | Auth |
+| D5 | Auth acts as full OIDC OP for first-party clients, or only federates to an upstream IdP? | 🟢 **Decided (2026-07-28):** federate only — Auth is an OIDC relying party and never a provider. Dex is the local upstream; a customer's own IdP elsewhere. Two independent PKCE exchanges (Auth↔IdP, SPA↔Auth). `dev-login` deleted, not disabled | See [ADR 260728](../adr/260728-federate-to-an-upstream-oidc-provider.md). Providers carry a public *and* an internal authority — an issuer is an identity, not an address | Auth |
 | D6 | SAML federation in v1 or deferred? | 🔴 Open | Defer unless an enterprise customer needs it day one | Auth |
 | D7 | Refresh tokens stored hashed in Postgres vs. in Redis (R1) | 🟡 Postgres (hashed) | Postgres for durability | Auth |
 
@@ -87,7 +95,7 @@ other. Details in the tables below (IDs in brackets).
 |----|----------|-----------------|----------------|-------|
 | D20 | React Native vs. PWA for mobile | 🔴 Open | Drives how much of `/lib` is platform-agnostic | Frontend |
 | D21 | Canvas renderer: Konva vs. PixiJS/WebGL vs. custom | 🔴 Open | Driven by expected document complexity | Frontend |
-| D22 | Refresh-token storage: HttpOnly cookie vs. in-app secure storage | 🔴 Open | HttpOnly cookie if same-site allows; avoid localStorage | Frontend (+ Auth) |
+| D22 | Refresh-token storage: HttpOnly cookie vs. in-app secure storage | 🟢 **Decided (2026-07-28):** `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth` cookie. The token never appears in a body, so `/auth/refresh` takes no body at all. CORS now allows credentials | See [ADR 260728](../adr/260728-refresh-token-in-an-httponly-cookie.md). `SameSite=Strict` closes CSRF without a second token — at the cost of requiring the SPA and API to be **same-site**. Cross-site would need `SameSite=None` plus double-submit | Frontend (+ Auth) |
 | D23 | Typed REST clients: generated from OpenAPI vs. hand-written | 🟡 Generated suggested | Generate from each service's OpenAPI | Frontend |
 | D24 | Client state manager: Zustand vs. Redux Toolkit | 🔴 Open | — | Frontend |
 

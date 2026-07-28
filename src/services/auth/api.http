@@ -6,16 +6,32 @@
 #
 # Assumes the stack is up:
 #
-#     docker compose up -d postgres redis-cache auth
+#     docker compose up -d postgres redis-cache dex auth
 #
-# Auth is on 8001 (AUTH_PORT in .env). It needs Postgres and Redis Cache (R1) and
-# nothing else — no Messaging, no Garage, no Elasticsearch.
+# Auth is on 8001 (AUTH_PORT in .env). It needs Postgres, Redis Cache (R1) and Dex —
+# no Messaging, no Garage, no Elasticsearch.
+#
+# SIGNING IN IS NOT IN THIS FILE, and cannot be. Since register D5 was settled, the
+# only way in is the OIDC authorization-code flow: three redirects and an HTML login
+# form at Dex, which a .http file cannot drive. Get a session first:
+#
+#     ./scripts/sign-in.py                     # ada@collabhub.dev
+#     ./scripts/sign-in.py grace@collabhub.dev # a second user
+#
+# then paste the values into the variables below. Signing in through the SPA at
+# http://localhost:5173 works just as well.
+#
+# THE REFRESH TOKEN IS A COOKIE, not a body field (register D22). A browser holds
+# it as HttpOnly and never reveals it; `sign-in.py --refresh-cookie` prints the
+# value precisely so this file can send it as a `Cookie` header by hand. That is a
+# development affordance and not something any client should do.
 #
 # Two things worth knowing before you start:
 #
 # * Refresh tokens rotate. Each one works exactly once, so re-running a request out
-#   of order will 401 — that is the design, not a broken file. Sign in again to get
-#   a fresh pair.
+#   of order will 401 — that is the design, not a broken file. Run sign-in.py again
+#   for a fresh session, and note that every renewal below returns a *new* cookie
+#   in its Set-Cookie header that the next request would need.
 # * Access tokens live 15 minutes and are signed with a key generated at startup
 #   unless AUTH_SIGNING_KEY is set. Restart the container and every token before it
 #   becomes invalid.
@@ -44,51 +60,60 @@ GET {{host}}/health/ready
 GET {{host}}/.well-known/jwks.json
 
 # ---------------------------------------------------------------------------
-# Signing in
+# Signing in — paste from ./scripts/sign-in.py (see the notes at the top)
 # ---------------------------------------------------------------------------
 
-### Local-only sign-in: any email, no password, no IdP.
-# First use creates the account, a workspace it owns, and membership of the
-# shared "CollabHub Demo" workspace. This route does not exist unless
-# APP_ENV=local — it is a placeholder while decision D5 is open.
-# @name login
-POST {{host}}/api/v1/auth/dev-login
+@accessToken = PASTE_ACCESS_TOKEN_HERE
+@refreshCookie = PASTE_REFRESH_COOKIE_HERE
+
+# A second user, for the requests that need someone to add or switch alongside.
+# From: ./scripts/sign-in.py grace@collabhub.dev
+@graceAccessToken = PASTE_GRACE_ACCESS_TOKEN_HERE
+@graceRefreshCookie = PASTE_GRACE_REFRESH_COOKIE_HERE
+
+### Where a sign-in begins. Sending this returns a 302 to Dex rather than JSON —
+# useful for seeing the state, nonce and PKCE challenge Auth generates, but the
+# browser has to take it from here.
+GET {{host}}/api/v1/auth/login/dex?codeChallenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&codeChallengeMethod=S256
+
+### PKCE is mandatory — no challenge is a 400.
+GET {{host}}/api/v1/auth/login/dex
+
+### `plain` PKCE is refused: the challenge would be the verifier in clear.
+GET {{host}}/api/v1/auth/login/dex?codeChallenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&codeChallengeMethod=plain
+
+### An unknown provider. Expect 404.
+GET {{host}}/api/v1/auth/login/okta?codeChallenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM
+
+### A callback with a state that was never issued. Expect a 302 back to the SPA
+# carrying `error=invalid_state` — browser endpoints redirect, they do not raise.
+GET {{host}}/api/v1/auth/callback/dex?code=anything&state=never-issued
+
+### An authorization code that was never issued. Expect 401.
+POST {{host}}/api/v1/auth/token
 Content-Type: {{json}}
 
 {
-  "email": "ada@example.com",
-  "displayName": "Ada Lovelace"
+  "grantType": "authorization_code",
+  "code": "never-issued",
+  "codeVerifier": "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
 }
-
-### Sign in as a second user, to have someone to share the demo workspace with.
-# @name loginGrace
-POST {{host}}/api/v1/auth/dev-login
-Content-Type: {{json}}
-
-{
-  "email": "grace@example.com",
-  "displayName": "Grace Hopper"
-}
-
-# ---------------------------------------------------------------------------
-# Using the access token
-# ---------------------------------------------------------------------------
 
 ### The signed-in user's profile.
 GET {{host}}/api/v1/users/me
-Authorization: Bearer {{login.response.body.$.accessToken}}
+Authorization: Bearer {{accessToken}}
 
 ### The claims on the current token — no database read.
 # `wsp` is the one workspace this token is scoped to; `roles` is the role in
 # that workspace only.
 GET {{host}}/api/v1/auth/userinfo
-Authorization: Bearer {{login.response.body.$.accessToken}}
+Authorization: Bearer {{accessToken}}
 
 ### Workspaces Ada belongs to, with her role in each. This is what the workspace
 # switcher reads. Signing in lands her in the one she owns.
 # @name workspaces
 GET {{host}}/api/v1/workspaces
-Authorization: Bearer {{login.response.body.$.accessToken}}
+Authorization: Bearer {{accessToken}}
 
 # ---------------------------------------------------------------------------
 # Refresh and rotation
@@ -98,43 +123,26 @@ Authorization: Bearer {{login.response.body.$.accessToken}}
 # this call; the new access token stays in the same workspace.
 # @name refreshed
 POST {{host}}/api/v1/auth/refresh
-Content-Type: {{json}}
-
-{
-  "refreshToken": "{{login.response.body.$.refreshToken}}"
-}
+Cookie: collabhub_rt={{refreshCookie}}
 
 ### Replay the token that was just spent. Expect 401 — and this does more than
 # refuse: reuse means a copy is in circulation, so the whole rotation family is
 # revoked. Run the request below afterwards to see the *newest* token dead too.
 POST {{host}}/api/v1/auth/refresh
-Content-Type: {{json}}
-
-{
-  "refreshToken": "{{login.response.body.$.refreshToken}}"
-}
+Cookie: collabhub_rt={{refreshCookie}}
 
 ### The token issued by the successful refresh above. On its own this would work;
 # after the replay it is 401, because the family went down with it.
 POST {{host}}/api/v1/auth/refresh
-Content-Type: {{json}}
-
-{
-  "refreshToken": "{{refreshed.response.body.$.refreshToken}}"
-}
+Cookie: collabhub_rt=PASTE_THE_ROTATED_COOKIE_FROM_THE_SET_COOKIE_ABOVE
 
 # ---------------------------------------------------------------------------
 # Switching workspace
 # ---------------------------------------------------------------------------
 
-### Ada's session is burnt after the replay above, so start a fresh one.
-# @name freshLogin
-POST {{host}}/api/v1/auth/dev-login
-Content-Type: {{json}}
-
-{
-  "email": "ada@example.com"
-}
+### Ada's session is burnt after the replay above, so run ./scripts/sign-in.py
+# again and paste the new pair here.
+@freshRefreshCookie = PASTE_A_FRESH_REFRESH_COOKIE_HERE
 
 ### Re-scope the session to another workspace. Same rotation as /refresh — the
 # only difference is the `wsp` and `roles` claims on the new token.
@@ -144,9 +152,9 @@ Content-Type: {{json}}
 # /api/v1/workspaces response above, then decode the token at jwt.io.
 POST {{host}}/api/v1/auth/switch-workspace
 Content-Type: {{json}}
+Cookie: collabhub_rt={{freshRefreshCookie}}
 
 {
-  "refreshToken": "{{freshLogin.response.body.$.refreshToken}}",
   "workspaceId": "{{workspaces.response.body.$.items[0].id}}"
 }
 
@@ -156,54 +164,137 @@ Content-Type: {{json}}
 # else's workspace id gets you nothing.
 POST {{host}}/api/v1/auth/switch-workspace
 Content-Type: {{json}}
+Cookie: collabhub_rt={{graceRefreshCookie}}
 
 {
-  "refreshToken": "{{loginGrace.response.body.$.refreshToken}}",
   "workspaceId": "00000000-0000-0000-0000-000000000000"
 }
+
+# ---------------------------------------------------------------------------
+# Profiles
+# ---------------------------------------------------------------------------
+
+### Update your own profile. There is no PATCH /users/{id} — the row edited comes
+# from the token's `sub`, so there is no id in the request to substitute.
+PATCH {{host}}/api/v1/users/me
+Authorization: Bearer {{accessToken}}
+Content-Type: {{json}}
+
+{
+  "displayName": "Ada Lovelace"
+}
+
+### Clear the avatar. An omitted field means "leave alone"; an explicit null means
+# "clear" — without the distinction an avatar could be set but never removed.
+PATCH {{host}}/api/v1/users/me
+Authorization: Bearer {{accessToken}}
+Content-Type: {{json}}
+
+{
+  "avatarAsset": null
+}
+
+### Someone else's public profile — name and avatar, never their email. Only
+# visible if you share a workspace with them, or a workspace-scoped token would
+# be a directory of every tenant. Paste a user id from the members list below.
+GET {{host}}/api/v1/users/00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{accessToken}}
+
+# ---------------------------------------------------------------------------
+# Workspace membership
+# ---------------------------------------------------------------------------
+
+### The members of the workspace this token is scoped to. Cursor-paginated
+# (Conventions §4.1) — `?limit=` defaults to 50, maximum 200.
+# @name members
+GET {{host}}/api/v1/workspaces/{{workspaces.response.body.$.items[0].id}}/members?limit=2
+Authorization: Bearer {{accessToken}}
+
+### The next page. Paste `nextCursor` from the response above; a null one means
+# there is nothing more.
+GET {{host}}/api/v1/workspaces/{{workspaces.response.body.$.items[0].id}}/members?limit=2&cursor=PASTE_NEXT_CURSOR
+Authorization: Bearer {{accessToken}}
+
+### A workspace the token does not name. Expect 403 — the path workspace must
+# equal the `wsp` claim (Conventions §5.4), not merely be one you belong to.
+GET {{host}}/api/v1/workspaces/00000000-0000-0000-0000-000000000000/members
+Authorization: Bearer {{accessToken}}
+
+### Add an existing user. This is not an invitation: there is no invitations
+# table, so an address nobody has signed in with is a 404, not a pending invite.
+POST {{host}}/api/v1/workspaces/{{workspaces.response.body.$.items[0].id}}/members
+Authorization: Bearer {{accessToken}}
+Content-Type: {{json}}
+
+{
+  "email": "grace@collabhub.dev",
+  "role": "member"
+}
+
+### Adding them twice. Expect 409.
+POST {{host}}/api/v1/workspaces/{{workspaces.response.body.$.items[0].id}}/members
+Authorization: Bearer {{accessToken}}
+Content-Type: {{json}}
+
+{
+  "email": "grace@collabhub.dev",
+  "role": "member"
+}
+
+### Promote them. Paste their user id from the members list above.
+PATCH {{host}}/api/v1/workspaces/{{workspaces.response.body.$.items[0].id}}/members/PASTE_USER_ID
+Authorization: Bearer {{accessToken}}
+Content-Type: {{json}}
+
+{
+  "role": "admin"
+}
+
+### Demote the workspace's only owner. Expect 409 — a workspace with no owner has
+# nobody left who can grant the role back.
+PATCH {{host}}/api/v1/workspaces/{{workspaces.response.body.$.items[0].id}}/members/PASTE_YOUR_OWN_USER_ID
+Authorization: Bearer {{accessToken}}
+Content-Type: {{json}}
+
+{
+  "role": "member"
+}
+
+### Remove them. Expect 204 — and their refresh tokens for *this* workspace are
+# revoked, so the session it granted them cannot be renewed. Their access token
+# stays valid for the rest of its 15 minutes (Conventions §5.2).
+DELETE {{host}}/api/v1/workspaces/{{workspaces.response.body.$.items[0].id}}/members/PASTE_USER_ID
+Authorization: Bearer {{accessToken}}
 
 # ---------------------------------------------------------------------------
 # Signing out
 # ---------------------------------------------------------------------------
 
-### A session to sign out of.
-# @name sessionToEnd
-POST {{host}}/api/v1/auth/dev-login
-Content-Type: {{json}}
-
-{
-  "email": "ada@example.com"
-}
+### A session to sign out of — another ./scripts/sign-in.py pair.
+@endingAccessToken = PASTE_ANOTHER_ACCESS_TOKEN_HERE
+@endingRefreshCookie = PASTE_ANOTHER_REFRESH_COOKIE_HERE
 
 ### Still valid — expect 200.
 GET {{host}}/api/v1/users/me
-Authorization: Bearer {{sessionToEnd.response.body.$.accessToken}}
+Authorization: Bearer {{endingAccessToken}}
 
 ### Sign out. Expect 204. The access token stays cryptographically valid until it
 # expires — that is what stateless verification means — so this writes its `jti`
-# to the denylist in R1 with a TTL of whatever life it had left. Passing the
-# refresh token revokes that too.
+# to the denylist in R1 with a TTL of whatever life it had left. The refresh
+# token the cookie carries is revoked too, and the response clears the cookie.
 POST {{host}}/api/v1/auth/logout
-Content-Type: {{json}}
-Authorization: Bearer {{sessionToEnd.response.body.$.accessToken}}
-
-{
-  "refreshToken": "{{sessionToEnd.response.body.$.refreshToken}}"
-}
+Authorization: Bearer {{endingAccessToken}}
+Cookie: collabhub_rt={{endingRefreshCookie}}
 
 ### The same token, now on the denylist. Expect 401.
 # `docker compose exec redis-cache redis-cli --scan --pattern 'auth:revoked:*'`
 # shows the entry.
 GET {{host}}/api/v1/users/me
-Authorization: Bearer {{sessionToEnd.response.body.$.accessToken}}
+Authorization: Bearer {{endingAccessToken}}
 
 ### The refresh token that was handed to logout. Expect 401.
 POST {{host}}/api/v1/auth/refresh
-Content-Type: {{json}}
-
-{
-  "refreshToken": "{{sessionToEnd.response.body.$.refreshToken}}"
-}
+Cookie: collabhub_rt={{endingRefreshCookie}}
 
 # ---------------------------------------------------------------------------
 # Service tokens — how background work calls other services
@@ -259,22 +350,25 @@ Content-Type: {{json}}
 # that ties the response to the log line and the trace.
 GET {{host}}/api/v1/users/me
 
-### A field that fails validation. Expect 400 with an `errors` map.
-POST {{host}}/api/v1/auth/dev-login
+### A field that fails validation. Expect 400 with an `errors` map keyed by field.
+POST {{host}}/api/v1/workspaces/{{workspaces.response.body.$.items[0].id}}/members
+Authorization: Bearer {{accessToken}}
 Content-Type: {{json}}
 
 {
-  "email": "not-an-email-address"
+  "email": "not-an-email-address",
+  "role": "member"
 }
 
 ### snake_case where camelCase is expected. Expect 400: JSON on this platform is
 # camelCase everywhere, and accepting both spellings would leave two wire
 # formats in circulation that no document describes.
-POST {{host}}/api/v1/auth/refresh
+POST {{host}}/api/v1/auth/switch-workspace
 Content-Type: {{json}}
+Cookie: collabhub_rt={{refreshCookie}}
 
 {
-  "refresh_token": "def456"
+  "workspace_id": "00000000-0000-0000-0000-000000000000"
 }
 
 ### An unsupported grant type. Expect 400.

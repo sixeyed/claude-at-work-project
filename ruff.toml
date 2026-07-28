@@ -27,6 +27,10 @@ ignore = [
 [lint.per-file-ignores]
 "**/migrations/**" = ["I", "N", "UP"]  # Alembic-generated revisions
 "**/tests/**" = ["T20"]
+# Developer CLI tools, not services: stdout *is* their interface, so the
+# no-print rule — which exists to keep structlog the only logging path in a
+# running service — does not apply.
+"**/scripts/**" = ["T20"]
 
 [lint.isort]
 known-first-party = ["shared", "contracts", "auth", "messaging", "canvas", "asset", "worker"]

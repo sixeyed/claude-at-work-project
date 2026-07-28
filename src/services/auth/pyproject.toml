@@ -14,6 +14,10 @@ dependencies = [
     "redis>=5.2",
     "pyjwt[crypto]>=2.10",
     "alembic>=1.14",
+    # The OIDC relying-party leg: discovery, the token exchange, and fetching
+    # the provider's JWKS (register D5). Auth is the only service that calls
+    # outward to an IdP — everything else verifies tokens locally.
+    "httpx>=0.28",
     # Auth is the one service that validates email addresses: it is where an
     # account is created from one.
     "pydantic[email]>=2.10",

@@ -54,6 +54,21 @@ doc, opaque to the backend), thumbnails/exports (Asset + Worker), font/image blo
 | DELETE | `/documents/{id}/members/{userId}` | doc owner | Unshare. |
 | POST | `/documents/{id}/export` | doc viewer | Enqueue export job (PNG/SVG/PDF) → returns job id. |
 
+**Internal** (`/api/v1/internal/`, service token only — Conventions §5.5; never reachable
+from the public ingress, and never carrying `require_user`):
+
+| Method | Path | Scope | Purpose |
+|--------|------|-------|---------|
+| GET | `/internal/documents/{id}/state` | `canvas:read-state` | The compacted Yjs state, for the Worker's export handler. Too large for a job payload, which is why it is fetched rather than pushed (register D25). |
+| POST | `/internal/documents/sweep` | `canvas:retention` | Delete soft-deleted documents past the retention window. The Worker deletes nothing itself. |
+
+**Every document is scoped to the workspace in the token's `wsp` claim.**
+`documents.workspace_id` comes from the claim, never from the request — Conventions §5.4.
+Document roles (`owner`/`editor`/`viewer`) are this service's own per-resource permissions
+(Conventions §5.3) and are separate from workspace roles.
+
+List endpoints use the cursor pagination in `collabhub-shared` (Conventions §4.1).
+
 ### 3.2 Socket.IO namespace — `/canvas`
 
 The sync protocol mirrors the Yjs sync protocol carried over Socket.IO. All update payloads

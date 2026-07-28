@@ -19,29 +19,40 @@ unless the service doc explicitly overrides a section and says so.
 
 ## 2. Repository & Project Layout
 
-Mono-repo, one workspace (uv or Poetry), one installable package per service plus shared
-libraries.
+Mono-repo, one **uv** workspace, one installable package per service plus shared libraries.
 
 ```
-/services
-  /collabhub-shared            # Cross-cutting: Problem Details, auth dependency, telemetry, job envelope
-  /collabhub-contracts         # Pydantic DTOs + job payload models shared across service boundaries
-  /collabhub-auth
-  /collabhub-messaging
-  /collabhub-canvas
-  /collabhub-asset
-  /collabhub-worker
-/deploy
-  /helm                        # One chart per service + umbrella chart
-  /k8s                         # Raw manifests / kustomize overlays (on-prem, azure)
-/docs                          # These design docs
+src/services/
+  shared/       # Cross-cutting: Problem Details, UUID v7, auth dependencies,
+                # token denylist, cursor pagination, CORS, health router
+  contracts/    # Pydantic DTOs + job payload models crossing service boundaries
+  auth/  messaging/  canvas/  asset/  worker/
+src/frontend/   # React + TypeScript SPA (Vite)
+docker/         # One folder per component: its Dockerfile and any files it needs
+charts/collabhub/   # A single chart for the whole app
+docs/
 ```
 
-Each service is a separate container image, separately deployable, with its own
-Helm chart and its own database migration history. Services MUST NOT share a database
-schema; cross-service reads go through the owning service's API or through events. Each
-service package has its own `pyproject.toml` and pinned dependency lock; the two shared
-packages (`collabhub-shared`, `collabhub-contracts`) are workspace dependencies.
+Service directories drop the `collabhub-` prefix used elsewhere in these docs
+(`src/services/auth`, not `collabhub-auth`); the *packages* keep it
+(`collabhub-auth` in `pyproject.toml`).
+
+**One chart, with dedicated templates per component** under `templates/<component>/` —
+not one set of templates ranging over a values map. They start near-identical and are
+expected to diverge: the Worker needs a KEDA `ScaledObject`, the real-time services need
+session affinity, the frontend has no ConfigMap. The chart deploys CollabHub's own workloads
+only; Postgres, Redis, Elasticsearch and Garage are expected to exist already, because
+bundling them would make `helm uninstall` a data-loss command.
+
+Each service is a separate container image, separately deployable, with its own database
+migration history. Services MUST NOT share a database schema; cross-service reads go through
+the owning service's API or through events. Each service has its own `pyproject.toml`;
+`shared` and `contracts` are workspace dependencies, and the whole workspace shares one
+lockfile (`uv.lock`).
+
+**Tooling:** **uv** for packaging, **ruff** for lint and format, **pytest** with
+**testcontainers-python** for integration tests (real Postgres/Redis/Dex/Garage/Elasticsearch,
+not mocks).
 
 ---
 
@@ -124,6 +135,13 @@ other service. There is no per-request call to the Auth Service to validate a to
   `PyJWKClient`) or Authlib's JWT support.
 - **Lifetime:** access token 15 minutes; refresh token 30 days, **rotating** (each refresh
   invalidates the previous refresh token).
+- **Delivery:** the access token is a `Bearer` header. The refresh token is **never in a
+  request or response body** — it is an `HttpOnly; Secure; SameSite=Strict` cookie scoped to
+  `/api/v1/auth`, so browser code cannot read it and no service outside Auth ever receives
+  it (register D22,
+  [ADR](../adr/260728-refresh-token-in-an-httponly-cookie.md)). Two consequences bind the
+  whole platform: CORS allows credentials and therefore can never use a wildcard origin, and
+  **the SPA and the API must be deployed same-site**.
 - **Claims:**
 
   | Claim    | Meaning |
@@ -215,6 +233,19 @@ that already runs on every request.
 - Revocation is secret rotation, not the denylist — service token lifetimes are minutes.
 - Log the originating user ID from the job envelope alongside `sub` so a background write
   traces back to the user action that caused it.
+
+### 5.6 Cross-origin access (CORS)
+
+Implemented once in `collabhub-shared` as `install_cors`, configured per service with
+`CORS_ALLOWED_ORIGINS`.
+
+- **Empty is the default and installs nothing.** A service whose SPA shares its origin
+  behind one ingress needs no CORS at all, and should not advertise that it allows it.
+- **Origins are listed, never `*`.** With credentials enabled a browser refuses a wildcard
+  outright — the right instinct made mandatory.
+- **Credentials are allowed**, because the refresh cookie (§5.1) would otherwise be dropped
+  on a cross-origin call. That is what makes CSRF a question, and it is answered by the
+  cookie's `SameSite=Strict` rather than by CORS.
 
 ---
 
@@ -349,6 +380,15 @@ storage backend directly. See `docs/platform/versions.md` for pinned versions.
 
 ~~2. **Workspace/tenancy**~~ — 🟢 **Decided 2026-07-27.** Many-to-many membership, one
    workspace per access token, switch via refresh exchange. See §5.4.
+
+~~2a. **Identity federation**~~ — 🟢 **Decided 2026-07-28 (register D5).** The Auth Service
+   federates to an upstream OIDC provider and is never a provider itself. Dex locally; a
+   customer's own IdP elsewhere. See
+   [ADR](../adr/260728-federate-to-an-upstream-oidc-provider.md).
+
+~~2b. **Refresh-token delivery**~~ — 🟢 **Decided 2026-07-28 (register D22).** An
+   `HttpOnly; Secure; SameSite=Strict` cookie, never a body field. See §5.1 and §5.6, and the
+   [ADR](../adr/260728-refresh-token-in-an-httponly-cookie.md).
 
 3. **ID generation** — UUID v7 assumed over bigint/ULID. Confirm.
 4. **Schema-per-service vs database-per-service** in production. Doc assumes logically

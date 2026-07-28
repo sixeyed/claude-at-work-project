@@ -26,7 +26,7 @@ login flow (PKCE), and direct-to-Garage uploads.
 
 | Concern | Choice | Notes |
 |---------|--------|-------|
-| Framework | React 18+ + TypeScript | |
+| Framework | React 19 + TypeScript | |
 | Build | Vite | Fast dev, PWA plugin for the mobile path. |
 | Routing | React Router | |
 | Server state / data fetching | TanStack Query | Caching, mutations, optimistic updates over REST. |
@@ -34,9 +34,21 @@ login flow (PKCE), and direct-to-Garage uploads.
 | Real-time | `socket.io-client` | Two connections: messaging (`/messaging`) + canvas (`/canvas`). |
 | CRDT | `yjs` + a Socket.IO provider (custom, see §5.3) | Canvas document state. |
 | Canvas rendering | `react-konva` / `pixi.js` / custom WebGL | Pick per perf needs (Open Decision). |
-| Auth | `oidc-client-ts` | Authorization Code + PKCE against Auth service. |
+| Auth | *(no library — hand-written)* | See below. |
 | Forms / validation | React Hook Form + Zod | Zod schemas mirror `collabhub-contracts` (Pydantic models). |
 | Styling | (team choice) Tailwind / CSS Modules | |
+
+**No OIDC library.** Earlier drafts named `oidc-client-ts`; it was not used, and the reason is
+structural rather than a preference. That library assumes the *browser* is the OIDC client
+talking directly to a provider — it manages tokens in web storage, performs silent renewal
+through hidden iframes, and expects to own the whole authorization-code flow.
+
+None of that is our shape. The SPA's counterparty is CollabHub's own Auth service, which is
+itself the relying party (register D5); the code the SPA exchanges is a CollabHub code, not the
+provider's. And since D22 the refresh token is an `HttpOnly` cookie the SPA cannot read, so a
+library whose core job is storing and renewing tokens has nothing left to store. What remains
+is a PKCE verifier, one redirect and one `fetch` — about sixty lines in `/lib/auth`, and
+fewer moving parts than configuring a library out of doing the things it exists to do.
 
 ---
 
@@ -48,7 +60,7 @@ login flow (PKCE), and direct-to-Garage uploads.
   /lib
     /api          # typed REST clients per service (generated from OpenAPI ideally)
     /realtime     # Socket.IO connection managers (messaging, canvas)
-    /auth         # OIDC client, token storage, refresh, auth guard
+    /auth         # PKCE, the code exchange, the session store, refresh-ahead, auth guard
     /yjs          # Yjs doc factory + Socket.IO sync provider
   /features
     /channels     # channel list, channel view, composer
@@ -66,12 +78,32 @@ login flow (PKCE), and direct-to-Garage uploads.
 
 1. Unauthenticated → redirect to Auth service `/auth/login/{provider}`.
 2. After provider callback, the SPA receives an auth code at its redirect URI.
-3. SPA exchanges code + PKCE verifier at `POST /auth/token` → access + refresh tokens.
-4. **Token storage:** access token in memory; refresh token in an HttpOnly cookie if the
-   deployment supports same-site cookies, else secure storage (Open Decision — avoid
-   localStorage for refresh tokens).
-5. An Axios/fetch interceptor attaches `Authorization: Bearer`; on 401 it calls `/auth/refresh`
-   once (rotation) and retries, else routes to login.
+3. SPA exchanges code + PKCE verifier at `POST /auth/token` → an access token in the body,
+   plus a refresh cookie the response sets.
+4. **Token storage — decided 2026-07-28 (register D22),
+   [ADR](../adr/260728-refresh-token-in-an-httponly-cookie.md).** The access token lives in
+   memory and dies with the tab. The refresh token is an `HttpOnly; Secure; SameSite=Strict`
+   cookie scoped to `/api/v1/auth`: the SPA cannot read it, does not store it, and never
+   sends it explicitly — the browser does that.
+
+   Three consequences for this application:
+
+   - Every `fetch` to the Auth service must set `credentials: 'include'`, or the browser
+     drops the cookie on a cross-origin call and every renewal fails as though the session
+     had expired.
+   - Nothing in the SPA may keep a refresh token anywhere. There is no "token store" to
+     write; a signed-in page holds nothing in `localStorage` or `sessionStorage` at all.
+   - **The SPA and the API must be deployed same-site** — one registrable domain, or one
+     origin behind a single ingress. Under `SameSite=Strict` a genuinely cross-site split
+     stops the cookie being sent, and the symptom is a silent sign-out rather than an error.
+
+   The only thing the SPA persists is the PKCE verifier, in `sessionStorage`, for the seconds
+   between redirecting to the provider and returning. It is single-use, useless without the
+   matching authorization code, and cleared before that code is spent.
+5. An Axios/fetch interceptor attaches `Authorization: Bearer`. Renewal is **ahead of expiry
+   on a timer**, not reactive on a 401: waiting for a failure means every call site needs
+   retry logic, whereas renewing early means they only ever see a valid token. Rotation makes
+   a failed renewal non-retryable, so it signs the user out rather than looping.
 6. Socket.IO connections pass the access token in the handshake `auth` payload (per Conventions
    §6) and re-acquire it on reconnect.
 
@@ -81,7 +113,8 @@ Access tokens are scoped to one workspace (Conventions §5.4,
 [ADR](../adr/260727-single-active-workspace-per-token.md)), so switching is a real state
 transition, not a UI filter. The SPA must:
 
-1. `POST /auth/switch-workspace` with the refresh token and target workspace ID.
+1. `POST /auth/switch-workspace` with the target workspace ID — the session comes from the
+   refresh cookie, which the browser attaches and the SPA never handles.
 2. Cancel in-flight requests and **clear the TanStack Query cache** — cached data belongs to
    the old workspace.
 3. **Tear down and re-establish both Socket.IO connections.** A connection authenticated for
@@ -157,7 +190,10 @@ offline/reconnecting UI.
   both). Affects how much of `/lib` is platform-agnostic.
 - **Canvas renderer:** Konva (DOM/2D, simpler) vs. PixiJS/WebGL (perf) vs. custom. Driven by
   expected document complexity.
-- **Refresh-token storage:** HttpOnly cookie vs. in-app secure storage.
+- ~~**Refresh-token storage:** HttpOnly cookie vs. in-app secure storage.~~ — 🟢 **Decided
+  2026-07-28 (register D22).** `HttpOnly; Secure; SameSite=Strict` cookie; the SPA stores no
+  token at all. See §4 and the
+  [ADR](../adr/260728-refresh-token-in-an-httponly-cookie.md).
 - **Typed clients:** generate REST clients + types from each service's OpenAPI doc vs.
   hand-write against `collabhub-contracts`. Recommend generated.
 - State manager choice (Zustand vs. Redux Toolkit).

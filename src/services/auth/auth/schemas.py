@@ -20,8 +20,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Self
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 from pydantic.alias_generators import to_camel
 
 
@@ -52,8 +53,15 @@ class CamelRequest(BaseModel):
 
 
 class TokenResponse(CamelModel):
+    """What a sign-in returns to the browser.
+
+    There is no `refreshToken` field, and its absence is the security control:
+    the refresh token is delivered as an `HttpOnly` cookie the SPA cannot read
+    (register D22). A token in this body would be in the JS heap, which is
+    precisely where injected script could reach it.
+    """
+
     access_token: str
-    refresh_token: str
     token_type: str = "Bearer"
     expires_in: int
 
@@ -64,12 +72,9 @@ class ServiceTokenResponse(CamelModel):
     expires_in: int
 
 
-class RefreshRequest(CamelRequest):
-    refresh_token: str
-
-
 class SwitchWorkspaceRequest(CamelRequest):
-    refresh_token: str
+    """Only the target. The session comes from the cookie, never the body."""
+
     workspace_id: uuid.UUID
 
 
@@ -79,27 +84,87 @@ class ServiceTokenRequest(CamelRequest):
     client_secret: str
 
 
-class DevLoginRequest(CamelRequest):
-    """Local-only sign-in. No credential, because there is nothing to check."""
+class TokenExchangeRequest(CamelRequest):
+    """Spend the authorization code the callback handed to the SPA (spec §3.1).
 
-    email: EmailStr
-    display_name: str | None = None
+    `codeVerifier` is the PKCE secret the SPA generated before the login began
+    and has never transmitted. It is what proves this is the same client that
+    started the flow, rather than whoever read the code out of a browser history
+    or a referrer header.
+    """
 
-
-class LogoutRequest(CamelRequest):
-    refresh_token: str | None = None
+    grant_type: str
+    code: str
+    code_verifier: str
 
 
 # --- resource endpoints (camelCase) ---------------------------------------
 
 
 class UserResponse(CamelModel):
+    """The caller's own profile. Carries the email; only `/users/me` returns it."""
+
     id: uuid.UUID
     email: str
     display_name: str
     avatar_asset: uuid.UUID | None
     status: str
     created_at: datetime
+
+
+class PublicUserResponse(CamelModel):
+    """Someone else's profile, for rendering an avatar or a mention.
+
+    Deliberately not `UserResponse` minus a field. Email, status and timestamps
+    are absent from the type, so no future edit to the shared model can leak
+    them here by accident.
+    """
+
+    id: uuid.UUID
+    display_name: str
+    avatar_asset: uuid.UUID | None
+
+
+class UpdateUserRequest(CamelRequest):
+    """A profile edit. Absent fields are left alone; `null` clears the avatar."""
+
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
+    avatar_asset: uuid.UUID | None = None
+
+
+class AddMemberRequest(CamelRequest):
+    """Add an *existing* user to a workspace, by id or by email.
+
+    Not an invitation: there is no invitations table, so an email that belongs to
+    nobody is a 404 rather than a pending invite. Inviting someone who has never
+    signed in needs a table, a delivery channel and an expiry policy — its own
+    decision, not something to imply here.
+    """
+
+    user_id: uuid.UUID | None = None
+    email: EmailStr | None = None
+    role: str = "member"
+
+    @model_validator(mode="after")
+    def _exactly_one_subject(self) -> Self:
+        if (self.user_id is None) == (self.email is None):
+            raise ValueError("provide exactly one of userId or email")
+        return self
+
+
+class UpdateMemberRequest(CamelRequest):
+    role: str
+
+
+class MemberResponse(CamelModel):
+    user: PublicUserResponse
+    role: str
+    joined_at: datetime
+
+
+class MemberListResponse(CamelModel):
+    items: list[MemberResponse]
+    next_cursor: str | None = None
 
 
 class WorkspaceResponse(CamelModel):

@@ -56,6 +56,26 @@ search endpoint — see §3), file attachments (Asset Service owns blobs; messag
 | POST | `/channels/{id}/read` | channel member | Mark read up to `{ "messageId": "..." }`. |
 | GET | `/search/messages?q=` | member | Thin proxy to Elasticsearch (optional). |
 
+**Internal** (`/api/v1/internal/`, service token only — Conventions §5.5; never reachable
+from the public ingress, and never carrying `require_user`):
+
+| Method | Path | Scope | Purpose |
+|--------|------|-------|---------|
+| POST | `/internal/messages/sweep` | `messages:retention` | Delete messages past the retention window. The Worker calls this; it deletes nothing itself (register D25). |
+
+**Every channel is scoped to the workspace in the token's `wsp` claim.** `channels.workspace_id`
+comes from the claim and never from the request body or a query parameter — Conventions §5.4
+is explicit that authorization must not accept a workspace identifier in place of the claim,
+and substituting one here is a tenancy leak. A caller who wants another workspace switches
+token first (`POST /auth/switch-workspace`).
+
+Channel membership is *not* workspace membership, so these writes are **not** in the
+fail-closed denylist set (Conventions §5.2) — that set names workspace membership changes,
+role grants and asset deletion.
+
+List endpoints use the cursor pagination in `collabhub-shared` (`?limit=`/`?cursor=`,
+`{items, nextCursor}` — Conventions §4.1). Never `OFFSET`.
+
 `Message` DTO:
 ```json
 {
@@ -115,9 +135,14 @@ CREATE TABLE channels (
     created_at   timestamptz NOT NULL DEFAULT now(),
     updated_at   timestamptz NOT NULL DEFAULT now(),
     archived_at  timestamptz NULL,
-    version      integer NOT NULL DEFAULT 0,
-    UNIQUE (workspace_id, name) WHERE kind = 'public'
+    version      integer NOT NULL DEFAULT 0
 );
+
+-- A partial index, not a table constraint: PostgreSQL has no
+-- `UNIQUE (...) WHERE ...` on a constraint, only on an index. Names are unique
+-- among public channels; private channels and DMs may repeat one.
+CREATE UNIQUE INDEX ux_channels_public_name
+    ON channels (workspace_id, name) WHERE kind = 'public';
 
 CREATE TABLE channel_members (
     channel_id   uuid NOT NULL REFERENCES channels(id),
@@ -154,7 +179,8 @@ CREATE TABLE reactions (
 
 `version` serves double duty. It is the optimistic-concurrency column Conventions §3 requires
 of any updatable row, and it is what `jobs:index` carries as the Elasticsearch external
-version (register D25). Bump it on every edit and on delete.
+version (register D25) — so a late-arriving older document is rejected rather than applied.
+Bump it on every edit and on delete.
 
 Threading is single-level: a reply sets `thread_root_id` to the top-level message; replies to
 replies still point at the root. Read state is a per-member pointer (`last_read_id`); unread
