@@ -1,18 +1,96 @@
 """Auth service entry point.
 
-Scaffold scope: the process starts, reads its config and answers health probes.
-The endpoints in docs/design/01-auth-service.md §3 — JWKS, the token and refresh
-endpoints, workspace membership — are not implemented yet.
+`create_app` builds everything the service needs from a `Settings` object and
+holds it on `app.state`, so a test can point an app at a throwaway database
+without patching module globals.
+
+Auth verifies its own tokens through the same `require_user` every other service
+uses, but with a `StaticKeySource` rather than a `JwksClient` — it holds the
+signing key, and fetching its own JWKS over HTTP would be a round trip through
+its own ingress to learn something it already knows.
 """
 
+from __future__ import annotations
+
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+import redis.asyncio as aioredis
 from fastapi import FastAPI
 
+from auth.db import build_engine, build_sessions
+from auth.identities import ensure_demo_workspace
+from auth.keys import SigningKeys
+from auth.routers import auth as auth_routes
+from auth.routers import devlogin as devlogin_routes
+from auth.routers import users as user_routes
+from auth.routers import wellknown as wellknown_routes
+from auth.routers import workspaces as workspace_routes
 from auth.settings import Settings
-from shared import build_health_router, postgres_check, redis_check
+from auth.tokens import TokenIssuer
+from shared import (
+    Denylist,
+    SecurityConfig,
+    StaticKeySource,
+    build_health_router,
+    install_problem_handlers,
+    install_security,
+    postgres_check,
+    redis_check,
+)
+
+_log = logging.getLogger("collabhub.auth")
 
 
 def create_app(settings: Settings) -> FastAPI:
-    app = FastAPI(title="CollabHub Auth", version="0.1.0")
+    keys = SigningKeys.load(
+        signing_key_pem=settings.auth_signing_key,
+        previous_keys_pem=settings.auth_previous_keys,
+        app_env=settings.app_env,
+    )
+    engine = build_engine(settings.postgres_dsn)
+    sessions = build_sessions(engine)
+    redis_client = aioredis.from_url(settings.redis_cache_url, decode_responses=True)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if settings.dev_login_enabled:
+            # Create the shared local workspace up front, so the first sign-in
+            # is not racing a second one to create it.
+            async with sessions.begin() as session:
+                await ensure_demo_workspace(session, settings.auth_demo_workspace_name)
+        yield
+        await engine.dispose()
+        await redis_client.aclose()
+
+    app = FastAPI(title="CollabHub Auth", version="0.1.0", lifespan=lifespan)
+
+    app.state.settings = settings
+    app.state.signing_keys = keys
+    app.state.sessions = sessions
+    app.state.denylist = Denylist(redis_client)
+    app.state.token_issuer = TokenIssuer(
+        keys=keys,
+        issuer=settings.auth_issuer,
+        audience=settings.auth_audience,
+        internal_audience=settings.auth_internal_audience,
+        access_token_minutes=settings.auth_access_token_minutes,
+        service_token_minutes=settings.auth_service_token_minutes,
+    )
+
+    install_problem_handlers(app)
+    install_security(
+        app,
+        key_source=StaticKeySource(keys.public_keys()),
+        config=SecurityConfig(
+            issuer=settings.auth_issuer,
+            audience=settings.auth_audience,
+            internal_audience=settings.auth_internal_audience,
+        ),
+        denylist=app.state.denylist,
+    )
+
     app.include_router(
         build_health_router(
             {
@@ -21,6 +99,20 @@ def create_app(settings: Settings) -> FastAPI:
             }
         )
     )
+    app.include_router(wellknown_routes.router)
+    app.include_router(auth_routes.router)
+    app.include_router(user_routes.router)
+    app.include_router(workspace_routes.router)
+
+    if settings.dev_login_enabled:
+        # Registered only here, so deployed environments 404 it. A route that
+        # exists but refuses is a route somebody can misconfigure back into
+        # service; one that was never registered is not.
+        app.include_router(devlogin_routes.router)
+        _log.warning(
+            "dev-login is enabled: any email address can obtain a session with no credential"
+        )
+
     return app
 
 

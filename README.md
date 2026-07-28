@@ -13,18 +13,28 @@ Slack-like chat experience with a Figma-like collaborative canvas in a single ap
 
 ## Current state
 
-Scaffold-stage. Every component exists, builds and starts; none of them do anything yet.
-Chapters of the book add code, configuration and automation to this repo as they go.
+Early-stage. **Auth is built and working**; the other four services are still scaffold —
+a process that reads its configuration and answers `/health/live` and `/health/ready`, with
+no models, migrations, routes, Socket.IO namespaces or job handlers. Chapters of the book
+add code, configuration and automation to this repo as they go.
 
-What a service currently is: a process that reads its configuration and answers
-`/health/live` and `/health/ready`. There are no database models, no migrations, no API
-routes, no Socket.IO namespaces, and no job handlers. `collabhub-shared` holds only the
-health router — the Problem Details handlers, `require_user` / `require_service`, JWKS
-caching, cursor pagination, the job envelope and the `ObjectStore` protocol are all still
-to come. `collabhub-contracts` is empty.
+The Auth service issues and verifies real tokens: sign-in, JWKS, refresh with rotation and
+replay detection, workspace switching, logout through the Redis denylist, and the
+client-credentials grant for internal service tokens. See
+[`src/services/auth/api.http`](src/services/auth/api.http) to drive the whole flow by hand.
+Its own database is migrated with Alembic.
 
-Nothing in the scaffold resolves an open decision that was still 🔴 in the
-[register](docs/design/07-open-decisions-register.md).
+That work pulled the cross-cutting layer into `collabhub-shared`, so the next service
+inherits it: RFC 7807 Problem Details, UUID v7, JWKS-backed verification with
+`require_user` / `require_user_sensitive` / `require_service`, and the token denylist.
+Cursor pagination, the job envelope and the `ObjectStore` protocol are still to come, and
+`collabhub-contracts` is still empty.
+
+No 🔴 decision in the [register](docs/design/07-open-decisions-register.md) has been
+resolved. Auth deliberately **defers** D5 — whether it federates to an upstream IdP or acts
+as one — behind a local-only `POST /auth/dev-login` that mints a real token pair with no
+credential. It is registered only when `APP_ENV=local`, so it does not exist in a deployed
+environment. Everything downstream of identity is built and does not change with the answer.
 
 ## What's here
 
@@ -69,10 +79,17 @@ Python was chosen over .NET — see
 Prerequisites: [uv](https://docs.astral.sh/uv/), Node 24, Docker.
 
 ```bash
-cp .env.example .env      # nothing in it is a real secret
-uv sync --all-packages    # one workspace, one lockfile
-uv run pytest             # unit tests
+cp .env.example .env   # nothing in it is a real secret
+uv sync                # one workspace, one lockfile
+uv run pytest          # unit + integration tests (integration needs Docker)
 uv run ruff check . && uv run ruff format --check .
+```
+
+The integration tests start real Postgres and Redis containers (Conventions §11). To skip
+them when Docker is not running:
+
+```bash
+uv run pytest -m "not integration"
 ```
 
 Bring up the full stack — Postgres, the three Redis instances, Garage, Elasticsearch, the
@@ -84,6 +101,13 @@ docker compose up --build
 
 Then `curl localhost:8001/health/ready` (Auth), `:8002` Messaging, `:8003` Canvas,
 `:8004` Asset, `:8005` Worker, and the SPA on <http://localhost:5173>.
+
+Auth is the only service with an API so far. To exercise it by hand, open
+[`src/services/auth/api.http`](src/services/auth/api.http) in VS Code with the
+[REST Client](https://marketplace.visualstudio.com/items?itemName=humao.rest-client)
+extension and run the requests top to bottom — each one feeds the next, so you get a whole
+session lifecycle without copying tokens around. Its interactive docs are at
+<http://localhost:8001/docs>.
 
 For frontend work, the Vite dev server is faster than rebuilding the Nginx image:
 

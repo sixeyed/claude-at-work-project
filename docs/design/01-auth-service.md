@@ -46,6 +46,7 @@ Base path `/api/v1`. Token endpoints and JWKS are unauthenticated; all others re
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
+| POST | `/auth/dev-login` | none | **Local only.** Sign in as any email with no credential; stands in for the OIDC flow while D5 is open. Registered only when `APP_ENV=local`. |
 | GET | `/.well-known/jwks.json` | none | Public verification keys (JWKS). |
 | GET | `/.well-known/openid-configuration` | none | OIDC discovery (if acting as OP). |
 | GET | `/auth/login/{provider}` | none | Begin external OIDC/SAML login (redirect). |
@@ -71,19 +72,34 @@ unreachable.
 
 ### 3.1 Token endpoint payloads
 
+**Casing:** camelCase throughout, like every other endpoint on the platform
+(Conventions §4). Earlier drafts of this section used OAuth 2.0's snake_case field names
+for these endpoints only; that carve-out is gone. These endpoints are called by our own
+SPA, not by a stock OAuth library, so one casing rule everywhere is worth more than
+fidelity to RFC 6749's field spelling.
+
 `POST /auth/token`
 ```json
 // request
-{ "grant_type": "authorization_code", "code": "...", "code_verifier": "..." }
+{ "grantType": "authorization_code", "code": "...", "codeVerifier": "..." }
 // response
-{ "access_token": "ey...", "refresh_token": "def...", "token_type": "Bearer", "expires_in": 900 }
+{ "accessToken": "ey...", "refreshToken": "def...", "tokenType": "Bearer", "expiresIn": 900 }
+```
+
+`POST /auth/dev-login` — **local only**, and the MVP's stand-in for the flow above while
+register D5 is open. No credential: any email address gets a session, creating the account,
+a workspace it owns, and membership of the shared demo workspace on first use.
+```json
+// request
+{ "email": "ada@example.com", "displayName": "Ada Lovelace" }
+// response — same shape as /auth/token
 ```
 
 `POST /auth/refresh`
 ```json
 // request
-{ "refresh_token": "def..." }
-// response — same shape as /auth/token; old refresh_token is now invalid (rotation)
+{ "refreshToken": "def..." }
+// response — same shape as /auth/token; the old refreshToken is now invalid (rotation)
 ```
 
 `POST /auth/switch-workspace` — the workspace-switch flow (Conventions §5.4). Rotates the
@@ -91,7 +107,7 @@ refresh token exactly as `/auth/refresh` does; the only difference is the `wsp` 
 claims on the new access token. Rejects with 403 if the user is not a member of the target.
 ```json
 // request
-{ "refresh_token": "def...", "workspaceId": "uuid" }
+{ "refreshToken": "def...", "workspaceId": "uuid" }
 // response — same shape as /auth/token
 ```
 
@@ -100,10 +116,13 @@ Issues a short-lived token with `aud: collabhub-internal` and the scopes granted
 client (Conventions §5.5).
 ```json
 // request
-{ "grant_type": "client_credentials", "client_id": "worker", "client_secret": "..." }
+{ "grantType": "client_credentials", "clientId": "worker", "clientSecret": "..." }
 // response
-{ "access_token": "ey...", "token_type": "Bearer", "expires_in": 600 }
+{ "accessToken": "ey...", "tokenType": "Bearer", "expiresIn": 600 }
 ```
+
+The client registry itself is configuration, not API, so it stays snake_case inside
+`AUTH_SERVICE_CLIENTS` along with the rest of the environment (Conventions §8).
 
 Access-token claims follow Conventions §5.1. The Auth Service is the only issuer.
 
@@ -152,6 +171,7 @@ CREATE TABLE workspace_members (
 CREATE TABLE refresh_tokens (
     id            uuid PRIMARY KEY,          -- the token's jti family root
     user_id       uuid NOT NULL REFERENCES users(id),
+    workspace_id  uuid NOT NULL REFERENCES workspaces(id),  -- workspace this session is currently in
     token_hash    bytea NOT NULL,            -- SHA-256 of the opaque refresh token
     issued_at     timestamptz NOT NULL DEFAULT now(),
     expires_at    timestamptz NOT NULL,
@@ -162,6 +182,13 @@ CREATE INDEX ix_refresh_user ON refresh_tokens (user_id) WHERE revoked_at IS NUL
 ```
 
 SQLAlchemy models map one-to-one to these tables; Alembic owns the migration history.
+
+`refresh_tokens.workspace_id` was added during implementation and is not in the original
+table above. Refresh tokens are not workspace-*scoped* — the holder may switch at any time
+(Conventions §5.4) — but the row has to remember which workspace the session was last using.
+Without it, `POST /auth/refresh` has nothing to go on and every renewal would silently drop
+the user back into their default workspace, so a workspace switch would survive only as long
+as one access token.
 
 ### 4.1 Redis (R1) usage
 - `auth:revoked:{jti}` → `"1"`, TTL = remaining access-token lifetime. Written on logout.
@@ -219,7 +246,10 @@ Emit metric `auth_tokens_issued_total`, `auth_logins_total{provider}`, `auth_ref
 ---
 
 ## 9. Open Decisions
-- Acting as a full OIDC OP for first-party clients vs. only federating to an upstream IdP.
+- Acting as a full OIDC OP for first-party clients vs. only federating to an upstream IdP
+  (register D5). **Deferred, not decided:** the MVP stands in a local-only `dev-login`
+  endpoint so the rest of the platform has real tokens to verify. `external_identities` is
+  created and empty, waiting for whichever answer wins.
 - ~~Multi-workspace membership and the workspace-switch flow~~ — 🟢 **Decided 2026-07-27
   (register D2).** Many-to-many membership; one workspace per access token; switch via
   `POST /auth/switch-workspace`. See Conventions §5.4 and the

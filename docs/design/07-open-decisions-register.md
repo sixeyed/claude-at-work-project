@@ -40,7 +40,7 @@ other. Details in the tables below (IDs in brackets).
 | D2 | Single active workspace per token, or multiple with a switch flow? | 🟢 **Decided (2026-07-27):** many-to-many membership; each access token scoped to one workspace via `wsp`; switch by exchanging the refresh token | See [ADR 260727](../adr/260727-single-active-workspace-per-token.md) | Cross-cutting (Conv, Auth) |
 | D3 | Primary-key type | 🟡 UUID v7 | Keep unless there's a reason for bigint/ULID | Cross-cutting |
 | D4 | Schema-per-service vs database-per-service in production | 🟡 Logically separate DBs | On-prem may co-locate; doesn't change app code | Cross-cutting |
-| D5 | Auth acts as full OIDC OP for first-party clients, or only federates to an upstream IdP? | 🔴 Open | — | Auth |
+| D5 | Auth acts as full OIDC OP for first-party clients, or only federates to an upstream IdP? | 🔴 Open — **deferred, not decided (2026-07-27).** The MVP ships a local-only `POST /auth/dev-login` that mints a real token pair with no credential; it is registered only when `APP_ENV=local`. Everything downstream of identity — JWKS, rotation, `wsp` scoping, service tokens — is built and does not change with the answer | Settle before any deployed environment. Dex or an OAuth proxy locally is the cheap way to try federation | Auth |
 | D6 | SAML federation in v1 or deferred? | 🔴 Open | Defer unless an enterprise customer needs it day one | Auth |
 | D7 | Refresh tokens stored hashed in Postgres vs. in Redis (R1) | 🟡 Postgres (hashed) | Postgres for durability | Auth |
 

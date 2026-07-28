@@ -9,6 +9,7 @@ dependencies = [
     "asyncpg>=0.30",
     "redis>=5.2",
     "httpx>=0.28",
+    "pyjwt[crypto]>=2.10",
 ]
 
 [build-system]

@@ -7,7 +7,20 @@ name = "collabhub"
 version = "0.1.0"
 description = "CollabHub — team chat + collaborative canvas"
 requires-python = ">=3.12,<3.13"
-dependencies = []
+# The root depends on every workspace member so that a plain `uv sync` produces a
+# venv the whole test suite can run in. Without this, `uv sync` installs only the
+# dev group and prunes the services — `uv sync --all-packages` becomes a step
+# everyone has to remember, and forgetting it looks like a broken checkout
+# (`ModuleNotFoundError: No module named 'sqlalchemy'`).
+dependencies = [
+    "collabhub-shared",
+    "collabhub-contracts",
+    "collabhub-auth",
+    "collabhub-messaging",
+    "collabhub-canvas",
+    "collabhub-asset",
+    "collabhub-worker",
+]
 
 [tool.uv]
 package = false
@@ -18,6 +31,11 @@ members = ["src/services/*"]
 [tool.uv.sources]
 collabhub-shared = { workspace = true }
 collabhub-contracts = { workspace = true }
+collabhub-auth = { workspace = true }
+collabhub-messaging = { workspace = true }
+collabhub-canvas = { workspace = true }
+collabhub-asset = { workspace = true }
+collabhub-worker = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -25,11 +43,16 @@ dev = [
     "pytest-asyncio>=0.24",
     "httpx>=0.28",
     "ruff>=0.8",
+    "testcontainers[postgres,redis]>=4.9",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["src/services"]
+# Integration tests start real Postgres/Redis containers (Conventions §11), so
+# they need Docker and take seconds rather than milliseconds. Run the fast ones
+# alone with `uv run pytest -m "not integration"`.
+markers = ["integration: needs Docker; starts real backing services"]
 # Every service has a tests/test_health.py. The default "prepend" import mode
 # derives module names from the file path relative to the rootdir and they
 # collide; importlib mode keeps them distinct without needing __init__.py files.
