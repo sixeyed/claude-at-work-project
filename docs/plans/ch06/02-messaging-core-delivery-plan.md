@@ -44,19 +44,32 @@ there is no churn within a table. `reactions` is not created at all.
 
 Identical protocol, so it isn't restated per slice:
 
-1. **Gherkin first.** Write the `.feature` scenarios. Run them. Watch them fail for the right
+1. **Gherkin first.** Write the `.feature` scenarios for the slice — the scenario titles listed
+   below, fleshed out into Given/When/Then. Write nothing else: no step definitions, no page
+   objects, no service code.
+2. 🛑 **Stop and wait for approval.** Present the finished `.feature` files and **do not start
+   building.** The scenarios are the contract for the slice, and they are the cheapest thing in
+   it to change — so expect several rounds of "that's not the behaviour I want", "add the case
+   where…", "drop that one". Rewrite and present again. Only an explicit go-ahead moves the
+   slice to step 3; silence, a question, or a comment on one scenario is not a go-ahead for
+   the rest.
+3. **Build outside-in** until they pass — step definitions and page objects, then service and
+   UI code. Backend integration tests (`pytestmark = pytest.mark.integration`, testcontainers)
+   land with the code they cover. Run the scenarios first and watch them fail for the right
    reason (missing step, missing endpoint — not a broken harness).
-2. **Build outside-in** until they pass. Backend integration tests
-   (`pytestmark = pytest.mark.integration`, testcontainers) land with the code they cover.
-3. **Never edit a scenario to fit the implementation.** Fix the implementation.
-4. **Selectors are `data-testid` only**, owned by page objects. No raw locator in a step
+4. **Never edit a scenario to fit the implementation.** Fix the implementation. If a scenario
+   turns out to be genuinely wrong, that is a step-2 conversation to reopen, not a silent edit.
+5. **Selectors are `data-testid` only**, owned by page objects. No raw locator in a step
    definition — this is the rule that keeps browser BDD from rotting.
-5. **Exit criteria** for every slice: its scenarios green headed against
+6. **Exit criteria** for every slice: its scenarios green headed against
    `docker compose up --build`, `uv run ruff check . && uv run ruff format --check .` clean,
    `uv run pytest src/services/messaging src/services/shared` green,
    `cd src/frontend && npm run typecheck && npm run build` clean.
-6. **Branch per slice** (`feature/messaging-s1-channels`, …). Per CLAUDE.md: create the branch,
+7. **Branch per slice** (`feature/messaging-s1-channels`, …). Per CLAUDE.md: create the branch,
    leave the tree dirty, **never commit** — that's the user's.
+
+So each slice has **two review points, not one**: the scenarios before any code exists, and the
+working slice at the end. The first is the one that saves the most time.
 
 Rules enforced in every slice that touches the API, tested each time:
 `workspace_id` comes from `principal.workspace_id` (the `wsp` claim), never from path, query or
