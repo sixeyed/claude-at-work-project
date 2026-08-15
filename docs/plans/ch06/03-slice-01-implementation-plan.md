@@ -53,16 +53,35 @@ Message DTO's style, and written back into doc 02 §3.1:
 `myRole` ship now, unused, so Slice 2's optimistic concurrency and admin-only controls do not churn
 the contract. Create request is `{ name, topic?, kind? }`.
 
-### 3. Name validation — only one number exists in the whole spec
+### 3. Name validation — the design gives one number and no format
 
 Conventions §4.2's worked example says *"Channel name must be between 1 and 80 characters."* That is
-the only rule anywhere. Adopted: **trim, then require 1–80 characters**; whitespace-only is blank. No
-charset/slug rule — the design gives none, so do not invent one.
+the only rule anywhere in the design docs. The format was supplied while writing the scenarios and
+is now the rule:
+
+- **3 to 80 characters** after trimming (the 3 is new; the 80 comes from Conventions §4.2)
+- **letters, numbers and hyphens only** — ASCII `[A-Za-z0-9-]`
+- **must start with a letter**
+- whitespace-only is blank, and reported as "a channel name is required" rather than "too short"
+
+Each rule gets its own message so the `errors` map is useful on the form. This is a real narrowing
+of the design — it makes non-ASCII channel names impossible — so it goes into doc 02 §3.1 alongside
+the DTO, not just into code.
 
 `kind` accepts `public` and `private` in this slice; **`dm` is rejected** (400) — D8b is 🟡 and DM
-creation has different semantics (no name). Uniqueness is `(workspace_id, name)` among
-`kind='public'` only, enforced by the partial unique index and caught as **409 `conflict`** from the
-`IntegrityError` — not a pre-check `SELECT`, which races.
+creation has different semantics (no name).
+
+Uniqueness is among `kind='public'` only and is **case-insensitive**, so `#General` collides with
+`#general`. The name is stored and displayed exactly as typed; only the index is folded. That means
+the spec's `ux_channels_public_name` changes shape, and doc 02 §4 changes with it:
+
+```sql
+CREATE UNIQUE INDEX ux_channels_public_name
+    ON channels (workspace_id, lower(name)) WHERE kind = 'public';
+```
+
+The collision is caught as **409 `conflict`** from the `IntegrityError` — not a pre-check `SELECT`,
+which races.
 
 ### 4. Creator becomes a channel admin — implied by three facts, stated by none
 
