@@ -15,11 +15,19 @@ This supersedes the layout section of `docs/design/00-platform-conventions.md`, 
 ```
 src/services/{shared,contracts,auth,messaging,canvas,asset,worker}
 src/frontend            # React + TypeScript + Vite SPA
+tests/bdd/              # Gherkin acceptance suite — features, steps, page objects
 docker/                 # one folder per component, holding its Dockerfile and any files it needs
 docker-compose.yml      # repo root — Postgres, 3x Redis, Garage, Elasticsearch, OTel collector
+docker-compose.test.yml # override: a second, throwaway stack for tests/bdd
 charts/collabhub/       # a single Helm chart for the whole app
 docs/
 ```
+
+Per-service tests live beside their service (`src/services/*/tests/`). Only the
+Gherkin suite is at the root, because it spans every service at once. Note that
+each service's test directory is called `tests`, so `from tests.conftest import …`
+binds to whichever one is found first — pass helpers as fixtures instead. The
+root suite avoids the clash by being importable as `bdd.*` (`pythonpath = ["tests"]`).
 
 `charts/collabhub` has **dedicated templates per component** under `templates/<component>/`, not one set of templates ranging over a values map. They start near-identical and are expected to diverge — the Worker needs a KEDA `ScaledObject`, the real-time services need session affinity, the frontend has no ConfigMap.
 
@@ -34,6 +42,8 @@ Service names drop the `collabhub-` prefix used in the design docs (`src/service
 - **uv** is the package manager (the docs and ADR say "uv or Poetry" — it's uv). One workspace; each service has its own `pyproject.toml`; `shared` and `contracts` are workspace dependencies.
 - **ruff** for lint and format. Run `ruff check` and `ruff format` on Python you write.
 - **pytest** with **testcontainers-python** for integration tests (real Postgres/Redis/Garage/Elasticsearch, not mocks).
+- **pytest-bdd + Playwright** (sync API) for the acceptance suite in `tests/bdd`. It runs against a stack you bring up yourself, not one it starts — see Testing below. Registered as D27.
+- **Frontend:** **TanStack Query** owns *all* server state, **Zustand** owns client state only (D24) — never keep a copy of a channel or message list in the store. **Tailwind CSS v4** for styling, light palette only, via `@tailwindcss/vite` with no config files (D26). Types for a service's REST API are **generated from its OpenAPI document**, not hand-written (D23): `python -m messaging.openapi > src/frontend/openapi/messaging.json`, then `npm run generate:api`.
 
 ## Working in this repo
 
@@ -61,18 +71,50 @@ Library versions (FastAPI, SQLAlchemy, React) are out of that file's scope — p
 - **Socket.IO event naming:** client→server are verbs (`send_message`); server→client are past-tense facts (`message_received`). Canvas is the documented exception — it follows the Yjs sync protocol names.
 - **Jobs are fire-and-forget onto Redis Streams and handlers must be idempotent** (`jobId` is the idempotency key). Producers never block on the Worker; the Worker never writes to another service's tables.
 - **All config comes from environment variables**, loaded with pydantic-settings. Nothing baked into images. `SCREAMING_SNAKE_CASE`.
-- **Timestamps are always UTC `timestamptz`.** Soft delete via `deleted_at`; queries filter `deleted_at IS NULL`.
+- **Timestamps are always UTC `timestamptz`.** Soft delete via `deleted_at`; queries filter `deleted_at IS NULL`. **Check the table first** — `channels` has no `deleted_at`, it archives through `archived_at`, and its reads filter that instead (doc 02 §4). The rule is "filter the soft-delete column", not "filter a column called `deleted_at`".
+- **A resource the caller may not see is a 404, not a 403.** 403 confirms the thing exists and leaks its name to someone with no access. Applies to another workspace's rows and to private resources you are not a member of.
 - **No cloud-specific SDKs where an agnostic alternative exists.** Object storage sits behind an `ObjectStore` protocol so Garage ↔ Azure Blob is a config swap.
 - Structured JSON logs via structlog, always carrying `traceId`, `userId`, `service`, `env`. No PII beyond user IDs.
 
 ## Open decisions
 
-`docs/design/07-open-decisions-register.md` is the live register. 🟢 is settled and safe to build against; 🟡 has a working default baked into the design docs — proceed on those; 🔴 has no answer, so stop and ask rather than picking one silently. Most of the register is still 🟡 or 🔴.
+`docs/design/07-open-decisions-register.md` is the live register. 🟢 is settled and safe to build against; 🟡 has a working default baked into the design docs — proceed on those; 🔴 has no answer, so stop and ask rather than picking one silently. Much of the register is still 🟡 or 🔴.
 
-Settled so far: D1 denylist fail-open with a fail-closed set, D2 one workspace per token, D9 canvas state as `bytea`, D14 Worker write-back via internal endpoint plus service token.
+Settled so far: D1 denylist fail-open with a fail-closed set · D2 one workspace per token · D5 Auth federates to an upstream IdP and is never a provider · D9 canvas state as `bytea` · D14 Worker write-back via internal endpoint plus service token · D22 refresh token in an `HttpOnly` cookie (which requires the SPA and API to be same-site) · D24 TanStack Query + Zustand · D25 job payloads carry what the producer holds · D26 Tailwind v4 · D27 pytest-bdd + Playwright.
 
-When a decision gets made: update the register's status, reflect it back into the source design doc, and write an ADR in `docs/adr/` with the `adr-writer` skill if it's significant.
+**There is no user-preferences feature anywhere** (D28, 🔴). `users` carries a display name, an avatar reference and a status, and nothing stores a per-user choice — so a theme, a locale or notification settings all need that decided first. It is why the SPA is light-only rather than following the OS.
+
+When a decision gets made: update the register's status, reflect it back into the source design doc, and write an ADR in `docs/adr/` with the `adr-writer` skill if it's significant. Record it **in the slice that makes it**, not in a docs sweep at the end — a register that says 🔴 for something already built on is worse than no register.
 
 ## Migrations
 
 Alembic per service, against that service's own database only (`alembic upgrade head`).
+
+## Testing
+
+```bash
+uv run pytest -m "not integration and not bdd"   # fast, no Docker
+uv run pytest src/services/messaging             # integration; starts its own containers
+```
+
+The `tests/bdd` suite is different from both: it drives a real browser and needs
+a stack already running, which it will not start for you.
+
+**It truncates the messaging tables before every scenario**, so it runs against a
+throwaway stack, never the one you develop on. Both run at once — the test stack
+is `docker-compose.test.yml`, a project-name override that republishes only the
+five ports reached from the host (SPA 5183, Auth 8011, Messaging 8012, Dex 5566,
+Postgres 5442):
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
+uv run pytest tests/bdd -m bdd
+```
+
+The harness addresses only those ports, so it cannot reach the development
+stack; it fails with an instruction instead. Run it against the built frontend
+container, never `npm run dev` — StrictMode fires the session restore twice,
+spending the rotating refresh token twice and signing the user out.
+
+Selectors in that suite are `data-testid` only and live in page objects; a step
+definition never contains one.

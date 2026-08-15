@@ -369,7 +369,14 @@ storage backend directly. See `docs/platform/versions.md` for pinned versions.
   its own database (or schema-per-service on one local Postgres for convenience).
 - Test layers (pytest): unit (domain logic), integration (testcontainers-python for
   Postgres/Redis/Garage/ES), contract (verify the Pydantic models in `collabhub-contracts`
-  against each side).
+  against each side), and **acceptance** — Gherkin scenarios in `tests/bdd` driving a real
+  browser through the whole stack with pytest-bdd and Playwright (register D27). The first
+  three each stop at a service boundary; the last is what proves CORS, the SPA's baked-in
+  environment variables, a migration running on container start, and the OIDC redirect
+  chain actually work together.
+- The acceptance suite runs against a **separate, throwaway Compose stack**
+  (`docker-compose.test.yml`), because it truncates tables between scenarios. It runs
+  alongside the development stack rather than replacing it.
 
 ---
 
