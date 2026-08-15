@@ -1,0 +1,58 @@
+# Dex for the acceptance-test stack (docker-compose.test.yml).
+#
+# **Keep in step with config.yaml.** This is a near-copy, and the duplication is
+# not laziness — it is forced. Only three lines differ, all of them URLs, and
+# none of them can come from an environment variable: Dex expands env vars only
+# in its storage, signer and connector blocks, and only behind a feature flag.
+# The issuer and the client's redirect URIs are outside that.
+#
+# The reason they have to differ at all is the one already noted in the compose
+# file: an OIDC issuer is an identity, not an address. It is what lands in `iss`
+# and what Auth checks the id_token against, and it is what Dex advertises as
+# its authorization endpoint in discovery. Point this at :5556 while serving on
+# :5566 and the browser is sent to the *other* stack's Dex to log in.
+
+issuer: http://localhost:5566/dex # differs: test stack's published port
+
+storage:
+  # Local users are configuration, not data: everything here is recreated from
+  # this file on every start, so there is nothing worth a volume.
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+telemetry:
+  # /healthz lives here, not on the main listener, which is what the compose
+  # healthcheck probes.
+  http: 0.0.0.0:5558
+
+oauth2:
+  responseTypes: ["code"]
+  skipApprovalScreen: true
+
+staticClients:
+  - id: collabhub-auth
+    name: CollabHub
+    # Keep in step with DEX_CLIENT_SECRET in .env — Auth is the side that sends it.
+    secret: collabhub-local-secret
+    redirectURIs:
+      - http://localhost:8011/api/v1/auth/callback/dex # differs: test Auth port
+
+enablePasswordDB: true
+
+# The same three accounts as the demo stack, on the same password, so the
+# scenarios and a hand-driven demo use identical credentials.
+staticPasswords:
+  - email: ada@collabhub.dev
+    username: ada
+    userID: 6f9619ff-8b86-d011-b42d-00c04fc964ff
+    hashFromEnv: DEX_PASSWORD_HASH
+  - email: grace@collabhub.dev
+    username: grace
+    userID: 7a9619ff-8b86-d011-b42d-00c04fc964ff
+    hashFromEnv: DEX_PASSWORD_HASH
+  - email: alan@collabhub.dev
+    username: alan
+    userID: 8b9619ff-8b86-d011-b42d-00c04fc964ff
+    hashFromEnv: DEX_PASSWORD_HASH

@@ -267,7 +267,7 @@ Tenancy isolation and the 409 race stay at integration level, not in Gherkin.
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
-uv run pytest -m "not integration"                      # fast path, no Docker
+uv run pytest -m "not integration and not bdd"          # fast path, no Docker
 uv run pytest src/services/messaging src/services/shared
 cd src/frontend && npm run typecheck && npm run build
 

@@ -187,6 +187,9 @@ services:
       REDIS_CACHE_URL: ${REDIS_CACHE_URL}
       REDIS_REALTIME_URL: ${REDIS_REALTIME_URL}
       REDIS_STREAMS_URL: ${REDIS_STREAMS_URL}
+      # The SPA is a separate origin locally, so the browser will not call this
+      # service at all without it (Conventions §5.6).
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS}
     ports:
       - "${MESSAGING_PORT}:8000"
     depends_on:

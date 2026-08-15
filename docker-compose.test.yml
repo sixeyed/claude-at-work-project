@@ -1,0 +1,100 @@
+# A second, throwaway stack for the acceptance suite (`tests/bdd`), which runs
+# **alongside** the development stack rather than replacing it. Layered on
+# docker-compose.yml, never used alone:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
+#   uv run pytest tests/bdd -m bdd
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml down
+#
+# **Why it exists.** The suite truncates the messaging tables before every
+# scenario — "Ada's channel list is empty" cannot be asserted with someone's
+# real channels in the workspace. Run against the development stack that
+# silently deletes hand-made data, which is exactly what happened once.
+#
+# Isolation is the project name: Compose prefixes volumes, containers and
+# networks with it, so this stack owns `collabhub-test_postgres-data` and never
+# opens the development stack's `collabhub_postgres-data`.
+name: collabhub-test
+
+services:
+  # --- ports that actually get used ---------------------------------------
+  #
+  # Only five things are reached from the host: Postgres (the suite truncates
+  # over it), Dex and Auth (the browser is redirected through both to sign in),
+  # Messaging (the readiness probe) and the frontend. Everything else is spoken
+  # to over the Compose network by service name, which project isolation already
+  # keeps separate — so republishing it would collide with the development stack
+  # for nothing.
+  #
+  # `!override` throughout because Compose *concatenates* `ports` when merging
+  # files. Without it these would be published on both the old and new ports.
+
+  postgres:
+    ports: !override
+      - "${BDD_POSTGRES_PORT:-5442}:5432"
+
+  dex:
+    ports: !override
+      - "${BDD_DEX_PORT:-5566}:5556"
+    volumes: !override
+      # A near-copy of the development config. Only the issuer and the redirect
+      # URI differ, and neither can be an environment variable — see the header
+      # of that file.
+      - ./docker/dex/config.test.yaml:/etc/dex/config.yaml:ro
+
+  auth:
+    environment:
+      # `AUTH_ISSUER` is what Auth stamps into `iss` and what every other
+      # service validates against, so it has to name the port the browser
+      # actually reaches Auth on.
+      AUTH_ISSUER: http://localhost:${BDD_AUTH_PORT:-8011}
+      SPA_REDIRECT_URI: http://localhost:${BDD_FRONTEND_PORT:-5183}/auth/callback
+      CORS_ALLOWED_ORIGINS: '["http://localhost:${BDD_FRONTEND_PORT:-5183}"]'
+      OIDC_PROVIDERS: >-
+        [{"name":"dex",
+          "authority":"http://localhost:${BDD_DEX_PORT:-5566}/dex",
+          "internalAuthority":"http://dex:5556/dex",
+          "clientId":"collabhub-auth",
+          "clientSecret":"${DEX_CLIENT_SECRET}"}]
+    ports: !override
+      - "${BDD_AUTH_PORT:-8011}:8000"
+
+  messaging:
+    environment:
+      AUTH_ISSUER: http://localhost:${BDD_AUTH_PORT:-8011}
+      CORS_ALLOWED_ORIGINS: '["http://localhost:${BDD_FRONTEND_PORT:-5183}"]'
+    ports: !override
+      - "${BDD_MESSAGING_PORT:-8012}:8000"
+
+  frontend:
+    build:
+      # `VITE_` values are inlined at build time, so this stack builds its own
+      # image pointing at its own Auth and Messaging.
+      args:
+        VITE_AUTH_URL: http://localhost:${BDD_AUTH_PORT:-8011}
+        VITE_MESSAGING_URL: http://localhost:${BDD_MESSAGING_PORT:-8012}
+    ports: !override
+      - "${BDD_FRONTEND_PORT:-5183}:8080"
+
+  # --- ports nothing reaches from the host --------------------------------
+  #
+  # These services still run; they are simply not published. The suite touches
+  # none of them, and the development stack already holds their usual ports.
+
+  canvas:
+    ports: !override []
+
+  asset:
+    ports: !override []
+
+  worker:
+    ports: !override []
+
+  elasticsearch:
+    ports: !override []
+
+  garage:
+    ports: !override []
+
+  otel-collector:
+    ports: !override []

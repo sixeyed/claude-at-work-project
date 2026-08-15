@@ -2,9 +2,14 @@
  * The Auth service's HTTP surface, as the SPA uses it (design doc 01 §3).
  *
  * Every response on the platform that is not a 2xx is an RFC 7807 Problem
- * Details document (Conventions §4.2), so failures are unwrapped once here
- * rather than at each call site.
+ * Details document (Conventions §4.2). The unwrapping now lives in
+ * `lib/api/client.ts` so the Messaging client shares it — and so that the
+ * `errors` map survives, which a form needs and this module used to discard.
  */
+
+import { problemFrom } from '../api/client'
+
+export { ProblemError } from '../api/client'
 
 const AUTH_URL: string = import.meta.env.VITE_AUTH_URL ?? 'http://localhost:8001'
 
@@ -32,17 +37,6 @@ export interface Workspace {
   role: string
 }
 
-/** A failure the Auth service described in a Problem Details body. */
-export class ProblemError extends Error {
-  readonly status: number
-
-  constructor(status: number, detail: string) {
-    super(detail)
-    this.name = 'ProblemError'
-    this.status = status
-  }
-}
-
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${AUTH_URL}${path}`, {
     ...init,
@@ -53,8 +47,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   })
 
   if (!response.ok) {
-    const problem = await response.json().catch(() => null)
-    throw new ProblemError(response.status, problem?.detail ?? problem?.title ?? response.statusText)
+    throw await problemFrom(response)
   }
 
   return response.status === 204 ? (undefined as T) : ((await response.json()) as T)

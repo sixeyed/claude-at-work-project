@@ -20,7 +20,12 @@ class Settings(BaseSettings):
 
     auth_issuer: str
     auth_audience: str = "collabhub"
+    auth_internal_audience: str = "collabhub-internal"
     auth_jwks_url: str
+
+    # Empty installs no CORS middleware at all (Conventions §5.6). Locally the
+    # SPA is a separate origin, so this is set; behind one ingress it is not.
+    cors_allowed_origins: list[str] = []
 
     messaging_max_body_chars: int = 8000
     messaging_max_attachments: int = 10

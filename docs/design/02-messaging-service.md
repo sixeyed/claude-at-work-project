@@ -37,9 +37,9 @@ search endpoint — see §3), file attachments (Asset Service owns blobs; messag
 
 | Method | Path | Auth | Purpose |
 |--------|------|------|---------|
-| GET | `/channels` | member | List channels visible to the user (cursor paginated). |
-| POST | `/channels` | member | Create channel. |
-| GET | `/channels/{id}` | channel member | Channel detail. |
+| GET | `/channels` | member | List channels visible to the user (cursor paginated, alphabetical). |
+| POST | `/channels` | member | Create channel. Creator becomes its admin. |
+| GET | `/channels/{id}` | see §3.1.1 | Channel detail. |
 | PATCH | `/channels/{id}` | channel admin | Rename / change topic / archive. |
 | DELETE | `/channels/{id}` | channel admin | Soft-delete (archive). |
 | GET | `/channels/{id}/members` | channel member | List members. |
@@ -75,6 +75,74 @@ role grants and asset deletion.
 
 List endpoints use the cursor pagination in `collabhub-shared` (`?limit=`/`?cursor=`,
 `{items, nextCursor}` — Conventions §4.1). Never `OFFSET`.
+
+#### 3.1.1 Channel visibility
+
+**Corrected 2026-08-15, while building the channels slice.** This table
+originally marked channel detail "channel member", and never defined the list
+rule at all. Together those made a public channel unopenable by anyone but its
+creator — you could see `#general` in the sidebar and get a 403 clicking it,
+until an admin added you. That is not what a public channel means.
+
+| Request | Result |
+|---|---|
+| `GET /channels` | non-archived `public` channels in the token's `wsp`, **plus** any kind the caller is a member of |
+| `GET /channels/{id}`, public, same workspace | 200 — membership is **not** required |
+| `GET /channels/{id}`, private, member | 200 |
+| `GET /channels/{id}`, private, non-member | **404** |
+| `GET /channels/{id}`, any other workspace | **404** |
+
+Membership gates the *messages* in a channel, not the knowledge that it exists.
+
+A caller who may not see a channel gets **404, never 403**. A 403 confirms the
+channel exists and discloses its name to someone with no access to it; from that
+token's point of view it does not exist, and the response says so.
+
+Channels sort by `(name, id)`. The pair is the cursor: `name` alone is not
+unique, because private channels and DMs may repeat one.
+
+#### 3.1.2 Channel names
+
+**Added 2026-08-15.** The docs previously gave no format at all, and one length
+in a Conventions §4.2 *example* ("between 1 and 80 characters"). The rule:
+
+- 3 to 80 characters, after trimming
+- letters, numbers and hyphens only — ASCII `[A-Za-z0-9-]`
+- must start with a letter
+- unique among the **public** channels in a workspace, compared **without case**:
+  `#General` collides with `#general`. The name is stored and displayed exactly
+  as typed; only the index folds case
+- a duplicate is `409 conflict`; a broken format rule is `400 validation-error`
+  with the reason under `errors.name`, one message per rule so a form can show
+  which part was wrong
+
+This is a real narrowing: `#café` is not a valid channel name, and neither is
+any name in a non-Latin script. Worth revisiting before a customer outside
+English-speaking markets.
+
+`kind` accepts `public` and `private` through the API. `dm` exists in the schema
+(register D8b) but is not creatable this way — a DM has no name and no
+creator-as-admin.
+
+#### 3.1.3 DTOs
+
+`Channel` DTO — **added 2026-08-15**; the doc previously specified only
+`Message`:
+
+```json
+{
+  "id": "uuid", "name": "general", "topic": "string|null",
+  "kind": "public|private|dm", "createdBy": "uuid",
+  "createdAt": "...", "updatedAt": "...", "archivedAt": "...|null",
+  "version": 0,
+  "myRole": "admin|member|null"
+}
+```
+
+There is deliberately no `workspaceId`: a channel is always in the workspace
+named by the caller's `wsp` claim, and echoing it invites a client to start
+sending it. `myRole` is the caller's role in that channel, `null` if they are
+not a member — it is what decides whether the UI offers the admin controls.
 
 `Message` DTO:
 ```json
@@ -141,8 +209,17 @@ CREATE TABLE channels (
 -- A partial index, not a table constraint: PostgreSQL has no
 -- `UNIQUE (...) WHERE ...` on a constraint, only on an index. Names are unique
 -- among public channels; private channels and DMs may repeat one.
+--
+-- Indexes `lower(name)`, not `name` (corrected 2026-08-15): #General and
+-- #general are the same channel. The stored name keeps the case it was typed
+-- with — only the comparison folds.
 CREATE UNIQUE INDEX ux_channels_public_name
-    ON channels (workspace_id, name) WHERE kind = 'public';
+    ON channels (workspace_id, lower(name)) WHERE kind = 'public';
+
+-- Added 2026-08-15. The sidebar reads one workspace's unarchived channels in
+-- name order on every page load, and nothing above covers that.
+CREATE INDEX ix_channels_workspace_name
+    ON channels (workspace_id, name, id) WHERE archived_at IS NULL;
 
 CREATE TABLE channel_members (
     channel_id   uuid NOT NULL REFERENCES channels(id),
@@ -152,6 +229,11 @@ CREATE TABLE channel_members (
     joined_at    timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (channel_id, user_id)
 );
+
+-- Added 2026-08-15. The primary key leads with channel_id, so it answers "who
+-- is in this channel?" but not "which channels is this user in?" — which is the
+-- query the sidebar runs for every signed-in user.
+CREATE INDEX ix_channel_members_user ON channel_members (user_id, channel_id);
 
 CREATE TABLE messages (
     id             uuid PRIMARY KEY,                -- UUID v7 → time-ordered
@@ -181,6 +263,12 @@ CREATE TABLE reactions (
 of any updatable row, and it is what `jobs:index` carries as the Elasticsearch external
 version (register D25) — so a late-arriving older document is rejected rather than applied.
 Bump it on every edit and on delete.
+
+**`channels` soft-deletes through `archived_at`, not `deleted_at`.** Conventions
+§3 says mutable resources carry `deleted_at` and every query filters it; for
+this table the equivalent column is `archived_at`, and `DELETE /channels/{id}`
+sets it. Reads filter `archived_at IS NULL`. Called out because the blanket rule
+sends people looking for a column that is not there.
 
 Threading is single-level: a reply sets `thread_root_id` to the top-level message; replies to
 replies still point at the root. Read state is a per-member pointer (`last_read_id`); unread

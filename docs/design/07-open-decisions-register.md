@@ -16,6 +16,9 @@ other. Details in the tables below (IDs in brackets).
 
 **Settled 2026-07-27:** D1, D2, D9, D14 and D25 are now 🟢 and safe to build against.
 **Settled 2026-07-28:** D5 and D22.
+**Settled 2026-08-15:** D24, plus D26 and D27 — two choices the docs left open
+without ever giving them an ID (SPA styling, and how acceptance criteria are
+expressed). Both were forced by building the first messaging slice.
 
 - 🟢 **Identity federation** [D5] — Auth is an OIDC *relying party*, never a provider. Dex is
   the upstream locally; a customer's own IdP elsewhere. `dev-login` is deleted.
@@ -96,8 +99,11 @@ other. Details in the tables below (IDs in brackets).
 | D20 | React Native vs. PWA for mobile | 🔴 Open | Drives how much of `/lib` is platform-agnostic | Frontend |
 | D21 | Canvas renderer: Konva vs. PixiJS/WebGL vs. custom | 🔴 Open | Driven by expected document complexity | Frontend |
 | D22 | Refresh-token storage: HttpOnly cookie vs. in-app secure storage | 🟢 **Decided (2026-07-28):** `HttpOnly; Secure; SameSite=Strict; Path=/api/v1/auth` cookie. The token never appears in a body, so `/auth/refresh` takes no body at all. CORS now allows credentials | See [ADR 260728](../adr/260728-refresh-token-in-an-httponly-cookie.md). `SameSite=Strict` closes CSRF without a second token — at the cost of requiring the SPA and API to be **same-site**. Cross-site would need `SameSite=None` plus double-submit | Frontend (+ Auth) |
-| D23 | Typed REST clients: generated from OpenAPI vs. hand-written | 🟡 Generated suggested | Generate from each service's OpenAPI | Frontend |
-| D24 | Client state manager: Zustand vs. Redux Toolkit | 🔴 Open | — | Frontend |
+| D23 | Typed REST clients: generated from OpenAPI vs. hand-written | 🟡 Generated | Implemented for Messaging (2026-08-15): `python -m messaging.openapi` writes `src/frontend/openapi/messaging.json`, `npm run generate:api` turns it into types, `openapi-fetch` provides the client. Generating from a committed file rather than a live service keeps `npm run build` free of a running stack | Frontend |
+| D24 | Client state manager: Zustand vs. Redux Toolkit | 🟢 **Decided (2026-08-15):** TanStack Query owns server state, Zustand owns client state. The register framed this as one question; it is two, and the split is the decision | Server state never goes in the Zustand store — query keys carry the workspace id so a switch cannot serve another workspace's cache. See [ADR 260815](../adr/260815-tanstack-query-and-zustand-for-spa-state.md) | Frontend |
+| D26 | SPA styling: Tailwind vs. CSS Modules (doc 06 §2 left it as "team choice"; never had an ID) | 🟢 **Decided (2026-08-15):** Tailwind CSS v4 via `@tailwindcss/vite` | No config files — the theme is `@theme` tokens in `index.css`. See [ADR 260815](../adr/260815-tailwind-v4-for-spa-styling.md) | Frontend |
+| D27 | How acceptance criteria are expressed and run (not previously registered) | 🟢 **Decided (2026-08-15):** Gherkin + pytest-bdd + Playwright (sync API), against `docker compose up` | Selectors are `data-testid` only and live in page objects. See [ADR 260815](../adr/260815-pytest-bdd-and-playwright-for-acceptance-tests.md) | Cross-cutting (Frontend, testing) |
+| D28 | Where per-user preferences live — **no feature for them exists at all** (raised 2026-08-15) | 🔴 Open. `users` has display name, avatar and status and nothing else; `PATCH /users/me` updates two of those | Decide whether preferences are Auth's (a `preferences jsonb` column, exposed on `/users/me`, possibly cached in R1) or a separate service, before the first thing that needs one ships. Blocking a theme toggle now; i18n and notification channels (D18) need the same thing | Cross-cutting (Auth, Frontend, Worker) |
 
 ---
 

@@ -15,6 +15,35 @@ references.
 
 ---
 
+> **Amended 2026-08-15, after Slice 1 shipped.** Validating this plan against the design docs
+> turned up gaps it did not carry, and building it corrected some of its own assumptions. The
+> details are in [`03-slice-01-implementation-plan.md`](./03-slice-01-implementation-plan.md);
+> what changes for the *remaining* slices is:
+>
+> - **The BDD harness does not cache `storage_state`.** Refresh tokens rotate and Auth
+>   reuse-detects, so a saved cookie is single-use and replaying it revokes the whole chain.
+>   Sign in once per user into a browser context that stays alive for the session; isolate
+>   scenarios by truncating messaging tables only. Run against the Compose frontend, never
+>   `npm run dev` — StrictMode fires the session restore twice.
+> - **Both users must switch to the shared `CollabHub Demo` workspace.** Every account lands in
+>   its own workspace on sign-in, and two people in two personal workspaces cannot see each
+>   other's channels.
+> - **The frontend feature folder is `features/channels/`**, per doc 06 §3 — not `features/chat/`.
+> - **Typed clients are generated** from `src/frontend/openapi/messaging.json` (register D23),
+>   not hand-written. Regenerate the JSON whenever a route or schema changes.
+> - **ADRs land in the slice that makes the decision**, not in Slice 7. D24, Tailwind (D26) and
+>   the BDD harness (D27) were recorded with Slice 1; Slice 7 keeps D8d and the docs sweep.
+> - **`.env.example` needed no new variable** — `CORS_ALLOWED_ORIGINS` was already there and
+>   simply not passed to the `messaging` container.
+> - **Step modules must be named `test_*.py`**, or pytest does not collect them and the feature
+>   file silently never runs.
+> - **The suite runs against a throwaway stack**, brought up with
+>   `-f docker-compose.yml -f docker-compose.test.yml` and running *alongside* the
+>   development one. It truncates the messaging tables between scenarios, so pointed at the
+>   development stack it would delete hand-made channels. The override moves the five ports
+>   reached from the host (SPA 5183, Auth 8011, Messaging 8012, Dex 5566, Postgres 5442);
+>   the harness addresses only those, so it cannot reach the wrong stack.
+
 ## Two decisions to settle before writing code
 
 Both were surfaced while slicing and neither is answered by the strategy plan.
@@ -272,11 +301,15 @@ debounced.
 
 Docs only — a fast review, but it is the slice that stops the register drifting.
 
-- ADRs via the `adr-writer` skill in `docs/adr/`: **D24** TanStack Query + Zustand · **D8d**
-  edit/delete semantics, no time window, tombstones retained in history (incl. the
-  `deleted_at IS NULL` exception from decision 1) · **Tailwind v4** · **pytest-bdd + Playwright**
-  as the BDD harness.
-- `docs/design/07-open-decisions-register.md`: D24 → 🟢, D8d → 🟢. D16 stays 🔴.
+**Reduced 2026-08-15.** D24, Tailwind (D26) and the BDD harness (D27) were decided *and
+recorded* in Slice 1, because CLAUDE.md says a decision gets written down when it is made
+and leaving the register 🔴 for six slices while building on the answer is the drift this
+slice exists to prevent. What is left here:
+
+- ADR via the `adr-writer` skill in `docs/adr/`: **D8d** edit/delete semantics, no time
+  window, tombstones retained in history (incl. the `deleted_at IS NULL` exception from
+  decision 1) — decided in Slice 4, so recorded there if that slice gets there first.
+- `docs/design/07-open-decisions-register.md`: D8d → 🟢. D16 stays 🔴.
   D8a/D8b/D8c untouched at 🟡.
 - Reflect D8d into `docs/design/02-messaging-service.md` §9 and D24 + styling into
   `docs/design/06-frontend-spa.md` §2.
@@ -302,7 +335,7 @@ Per slice, the exit criteria above. End to end, after Slice 7:
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
-uv run pytest -m "not integration"                    # fast path, no Docker
+uv run pytest -m "not integration and not bdd"        # fast path, no Docker
 uv run pytest src/services/messaging src/services/shared
 cd src/frontend && npm run typecheck && npm run build
 

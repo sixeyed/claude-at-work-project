@@ -13,11 +13,15 @@ Slack-like chat experience with a Figma-like collaborative canvas in a single ap
 
 ## Current state
 
-Early-stage. **Auth is complete**, including federated sign-in through Dex; the other four
-services are still scaffold — a process that reads its configuration and answers
-`/health/live` and `/health/ready`, with no models, migrations, routes, Socket.IO namespaces
-or job handlers. The SPA has sign-in and a workspace switcher and nothing else. Chapters of
-the book add code, configuration and automation to this repo as they go.
+Early-stage. **Auth is complete**, including federated sign-in through Dex.
+**Messaging has channels** — create and list, with membership, workspace scoping
+and cursor pagination; messages, threads and the Socket.IO `/messaging`
+namespace are still to come. Canvas, Asset and Worker are still scaffold — a
+process that reads its configuration and answers `/health/live` and
+`/health/ready`, with no models, migrations, routes or job handlers. The SPA has
+sign-in, a workspace switcher, and the chat shell with a channel sidebar.
+Chapters of the book add code, configuration and automation to this repo as they
+go.
 
 Two register decisions were settled on 2026-07-28. **D5** — whether Auth federates to an
 upstream IdP or acts as one: it federates, and is never an OpenID Provider
@@ -96,11 +100,12 @@ uv run pytest          # unit + integration tests (integration needs Docker)
 uv run ruff check . && uv run ruff format --check .
 ```
 
-Integration tests start real Postgres, Redis and Dex containers (Conventions §11). To skip
-them when Docker is not running:
+Integration tests start real Postgres, Redis and Dex containers (Conventions §11). The `bdd`
+suite is different again — it needs the whole Compose stack already running (see below). To
+run only what needs no Docker at all:
 
 ```bash
-uv run pytest -m "not integration"
+uv run pytest -m "not integration and not bdd"
 ```
 
 Bring up the full stack — Postgres, the three Redis instances, Dex, Garage, Elasticsearch,
@@ -114,14 +119,75 @@ Then open <http://localhost:5173> and **sign in as `ada@collabhub.dev` with the 
 `collabhub`** (or `grace@`, or `alan@`). Health checks are on `:8001` Auth, `:8002`
 Messaging, `:8003` Canvas, `:8004` Asset, `:8005` Worker.
 
-Auth is the only service with an API so far — see its
-[README](src/services/auth/README.md) for how to drive it by hand, and its interactive docs
-at <http://localhost:8001/docs>.
+Every account owns a personal workspace *and* belongs to the shared **CollabHub
+Demo** workspace. Two people only see each other's channels in the shared one, so
+switch to it in the sidebar before trying anything with a second user.
 
-For frontend work, the Vite dev server is faster than rebuilding the Nginx image:
+Auth and Messaging have APIs — see their READMEs
+([auth](src/services/auth/README.md), [messaging](src/services/messaging/README.md))
+and their interactive docs at <http://localhost:8001/docs> and
+<http://localhost:8002/docs>.
+
+### Acceptance tests
+
+The Gherkin suite in `tests/bdd/` drives a real browser through the whole stack.
+**It truncates the messaging tables before every scenario** — scenarios like
+"Ada's channel list is empty" cannot pass with real channels in the workspace —
+so it runs against a throwaway stack, never the one you demo on.
+
+`docker-compose.test.yml` is an override that gives that stack its own Compose
+project name — and with it its own volumes — and moves the five ports anyone
+reaches from the host. **It runs alongside your development stack**, so you can
+leave that up and keep working:
+
+```bash
+uv run playwright install chromium        # once
+
+docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
+uv run pytest tests/bdd -m bdd
+uv run pytest tests/bdd -m bdd --headed   # watch it drive the browser
+docker compose -f docker-compose.yml -f docker-compose.test.yml down
+```
+
+| | development | test |
+|---|---|---|
+| SPA | 5173 | **5183** |
+| Auth | 8001 | **8011** |
+| Messaging | 8002 | **8012** |
+| Dex | 5556 | **5566** |
+| Postgres | 5432 | **5442** |
+
+Nothing else is published on the test stack — Canvas, Asset, Worker,
+Elasticsearch, Garage and the OTel collector still run, they are just reached
+over the Compose network by name. Both stacks running does mean two of
+everything, Elasticsearch included; `--scale elasticsearch=0 --scale worker=0`
+on the test stack trims it, since no scenario touches either yet.
+
+Addressing only test-stack ports is also the safety interlock. The suite
+truncates over 5442, so run against a machine with just the development stack up
+it fails to connect rather than deleting your channels — it cannot tell the two
+apart by looking, because they are the same images.
+
+`down` without `-v` keeps both projects' volumes, so the test database is reused
+between runs. To start it genuinely empty, add `-v`.
+
+The suite runs against the test stack's frontend container, **not** `npm run
+dev` — in dev, React's StrictMode fires the session restore twice, which spends
+the rotating refresh token twice and signs the user out.
+
+For frontend work where you are not running the acceptance tests, the Vite dev
+server is faster than rebuilding the Nginx image:
 
 ```bash
 cd src/frontend && npm install && npm run dev
+```
+
+The SPA's Messaging types are generated from that service's OpenAPI document
+(register D23). After changing a Messaging route or schema:
+
+```bash
+uv run python -m messaging.openapi > src/frontend/openapi/messaging.json
+cd src/frontend && npm run generate:api
 ```
 
 ### Object storage needs one manual step

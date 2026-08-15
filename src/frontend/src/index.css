@@ -1,27 +1,43 @@
-/* Scaffold styling only. The styling approach is a team choice that design doc
-   06 §2 leaves open (Tailwind vs CSS Modules), so this commits to neither. */
+@import 'tailwindcss';
 
-:root {
-  color-scheme: light dark;
-  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
-  line-height: 1.5;
+/* Tailwind v4 takes its theme from CSS custom properties rather than a JS
+   config file. Only the tokens this app actually uses are defined — a palette
+   nobody references is a palette nobody maintains.
+
+   **Light only.** There is no dark palette here and no `prefers-color-scheme`
+   block, because honouring the OS setting is the half of a theme feature that
+   is easy: the moment anyone wants to *override* it, they need somewhere to
+   store the choice, and there is no user-preferences feature in the design at
+   all — `users` carries a display name, an avatar and a status (doc 01 §4), and
+   `PATCH /users/me` updates the first two. Shipping a palette that follows the
+   OS would mean two colour schemes to keep correct in every new component, for
+   a setting nobody can actually change. Revisit when preferences exist. */
+@theme {
+  --color-surface: #ffffff;
+  --color-surface-sunken: #f6f7f9;
+  --color-surface-raised: #ffffff;
+  --color-border: #e3e6ea;
+  --color-ink: #16191d;
+  --color-ink-muted: #626a75;
+  --color-accent: #2f5bd7;
+  --color-accent-ink: #ffffff;
+  --color-danger: #b3261e;
+  --color-danger-surface: #fdeceb;
+}
+
+html,
+body,
+#root {
+  height: 100%;
 }
 
 body {
   margin: 0;
-}
-
-main {
-  margin: 0 auto;
-  max-width: 42rem;
-  padding: 2rem 1.5rem;
-}
-
-nav {
-  margin-bottom: 1.5rem;
-}
-
-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.9em;
+  /* Tells the browser to render its own widgets — inputs, scrollbars, focus
+     rings — for a light page. Without it, a user whose OS is set to dark gets
+     dark form controls on this light palette. */
+  color-scheme: light;
+  background: var(--color-surface);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
 }

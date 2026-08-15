@@ -44,15 +44,35 @@ dev = [
     "httpx>=0.28",
     "ruff>=0.8",
     "testcontainers[postgres,redis]>=4.9",
+    "pytest-bdd>=8.1",
+    "pytest-playwright>=0.7",
+    "asyncpg>=0.30",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-testpaths = ["src/services"]
+# Makes the Gherkin suite importable as `bdd.*`. Every service also has a
+# `tests` directory, so a root-level `tests` package would make `import tests`
+# ambiguous and break Auth's `from tests import dexflow`; rooting at `tests/`
+# and naming the package `bdd` collides with nothing.
+pythonpath = ["tests"]
+# `tests` is the Gherkin suite at the repo root; without it here the .feature
+# files are simply not collected.
+testpaths = ["src/services", "tests"]
 # Integration tests start real Postgres/Redis containers (Conventions §11), so
 # they need Docker and take seconds rather than milliseconds. Run the fast ones
 # alone with `uv run pytest -m "not integration"`.
-markers = ["integration: needs Docker; starts real backing services"]
+#
+# `bdd` is the full-stack Gherkin suite: it drives a real browser against a
+# `docker compose up` stack, so unlike `integration` it cannot start what it
+# needs and will tell you to bring the stack up instead.
+markers = [
+    "integration: needs Docker; starts real backing services",
+    "bdd: needs the Compose stack already running; drives a real browser",
+    # pytest-bdd turns every Gherkin tag into a marker of the same name, so a
+    # tag used in a .feature file has to be declared here too.
+    "smoke: proves the harness reaches the running stack end to end",
+]
 # Every service has a tests/test_health.py. The default "prepend" import mode
 # derives module names from the file path relative to the rootdir and they
 # collide; importlib mode keeps them distinct without needing __init__.py files.

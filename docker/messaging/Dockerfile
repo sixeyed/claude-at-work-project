@@ -29,7 +29,13 @@ ENV PATH="/app/.venv/bin:$PATH" \
 RUN useradd --create-home --uid 10001 app
 WORKDIR /app
 COPY --from=builder --chown=app:app /app/.venv /app/.venv
+# The Alembic scripts live inside the `messaging` package, so they are already
+# in the venv — nothing to copy, and nothing for the entrypoint to find at a
+# path.
+COPY --chown=app:app docker/messaging/entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
 USER app
 
 EXPOSE 8000
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["uvicorn", "messaging.main:app_factory", "--factory", "--host", "0.0.0.0", "--port", "8000"]

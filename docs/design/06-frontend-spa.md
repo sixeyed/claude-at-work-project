@@ -29,14 +29,15 @@ login flow (PKCE), and direct-to-Garage uploads.
 | Framework | React 19 + TypeScript | |
 | Build | Vite | Fast dev, PWA plugin for the mobile path. |
 | Routing | React Router | |
-| Server state / data fetching | TanStack Query | Caching, mutations, optimistic updates over REST. |
-| Client/UI state | Zustand (or Redux Toolkit) | Lightweight global state (current user, presence). |
+| Server state / data fetching | **TanStack Query** | 🟢 Decided 2026-08-15 (D24). Owns *all* server state — no channel or message list is copied into the client store. Query keys carry the workspace id, so a workspace switch cannot serve the previous workspace's cache. [ADR](../adr/260815-tanstack-query-and-zustand-for-spa-state.md) |
+| Client/UI state | **Zustand** | 🟢 Decided 2026-08-15 (D24). Client state only: active channel, connection status, per-channel drafts. |
 | Real-time | `socket.io-client` | Two connections: messaging (`/messaging`) + canvas (`/canvas`). |
 | CRDT | `yjs` + a Socket.IO provider (custom, see §5.3) | Canvas document state. |
 | Canvas rendering | `react-konva` / `pixi.js` / custom WebGL | Pick per perf needs (Open Decision). |
 | Auth | *(no library — hand-written)* | See below. |
 | Forms / validation | React Hook Form + Zod | Zod schemas mirror `collabhub-contracts` (Pydantic models). |
-| Styling | (team choice) Tailwind / CSS Modules | |
+| Styling | **Tailwind CSS v4** | 🟢 Decided 2026-08-15 (D26), via `@tailwindcss/vite`. No `tailwind.config.js` or PostCSS config — the theme is `@theme` tokens in `src/index.css`. **Light palette only** — there is no user-preferences feature to store a theme choice in (§9), so following the OS setting would mean maintaining two schemes for a setting nobody can override. Components use tokens (`text-ink-muted`), never literal colours; that is what keeps adding a dark palette cheap later. [ADR](../adr/260815-tailwind-v4-for-spa-styling.md) |
+| Acceptance tests | **Gherkin + pytest-bdd + Playwright** | 🟢 Decided 2026-08-15 (D27). Run against `docker compose up`. Selectors are `data-testid` only and live in page objects — a step definition never holds one. [ADR](../adr/260815-pytest-bdd-and-playwright-for-acceptance-tests.md) |
 
 **No OIDC library.** Earlier drafts named `oidc-client-ts`; it was not used, and the reason is
 structural rather than a preference. That library assumes the *browser* is the OIDC client
@@ -186,14 +187,32 @@ offline/reconnecting UI.
 - PWA/offline shell for the mobile path; service worker caches the app shell, not data.
 
 ## 9. Open Decisions
+- **User preferences — there is no feature for them anywhere** (register D28). `users`
+  carries a display name, an avatar reference and a status (doc 01 §4), and
+  `PATCH /users/me` updates the first two. Nothing stores a per-user choice, so
+  a theme toggle, a locale, a timezone or notification settings all need the
+  same missing thing first: a place to put them, and a decision about whether
+  they are Auth's (a column, in the token, cached in R1) or a separate concern.
+  Currently blocking a dark mode; i18n and notification channels (Worker D18)
+  will want it too.
 - **React Native vs. PWA** for mobile — separate codebase vs. shared (the architecture lists
   both). Affects how much of `/lib` is platform-agnostic.
 - **Canvas renderer:** Konva (DOM/2D, simpler) vs. PixiJS/WebGL (perf) vs. custom. Driven by
   expected document complexity.
+- ~~**Styling:** Tailwind vs. CSS Modules.~~ — 🟢 **Decided 2026-08-15 (register D26).**
+  Tailwind CSS v4. See §2 and the
+  [ADR](../adr/260815-tailwind-v4-for-spa-styling.md).
 - ~~**Refresh-token storage:** HttpOnly cookie vs. in-app secure storage.~~ — 🟢 **Decided
   2026-07-28 (register D22).** `HttpOnly; Secure; SameSite=Strict` cookie; the SPA stores no
   token at all. See §4 and the
   [ADR](../adr/260728-refresh-token-in-an-httponly-cookie.md).
-- **Typed clients:** generate REST clients + types from each service's OpenAPI doc vs.
-  hand-write against `collabhub-contracts`. Recommend generated.
-- State manager choice (Zustand vs. Redux Toolkit).
+- **Typed clients:** 🟡 generated, and now implemented for Messaging (2026-08-15).
+  `python -m messaging.openapi` writes `src/frontend/openapi/messaging.json`,
+  `npm run generate:api` turns it into `src/types/messaging.ts`, and
+  `openapi-fetch` provides the client. Generating from a committed file rather
+  than a live service keeps `npm run build` free of a running stack. The other
+  services follow the same shape when they gain an API.
+- ~~State manager choice (Zustand vs. Redux Toolkit).~~ — 🟢 **Decided 2026-08-15
+  (register D24).** TanStack Query for server state, Zustand for client state.
+  See §2 and the
+  [ADR](../adr/260815-tanstack-query-and-zustand-for-spa-state.md).
