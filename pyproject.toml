@@ -78,16 +78,9 @@ markers = [
     # rather than a marker of the same name — it is declared here so the tag
     # still resolves if that hook is ever removed.
     "pending: the slice that owns this scenario has not been built yet",
-    # Which slice delivers the scenario, so one slice's contract can be read on
-    # its own. `-m s2` selects them once that slice's feature file is wired to a
-    # step module calling `scenarios()`; until then the tag is a label you read
-    # in the .feature file, and `-m` deselects everything. Each slice drops its
-    # own marker once it has delivered; nothing should carry one for long.
-    "s2: delivered by Slice 2 - channel administration and membership",
-    "s3: delivered by Slice 3 - messages, send and read history",
-    "s4: delivered by Slice 4 - messages, edit and delete",
-    "s5: delivered by Slice 5 - real-time delivery",
-    "s6: delivered by Slice 6 - socket write path, optimistic send, typing",
+    # The per-slice `s2`-`s6` markers are gone: every one of those slices has
+    # delivered and dropped its own tag, and a marker no scenario carries is a
+    # `-m` selector that silently matches nothing.
 ]
 # Every service has a tests/test_health.py. The default "prepend" import mode
 # derives module names from the file path relative to the rootdir and they

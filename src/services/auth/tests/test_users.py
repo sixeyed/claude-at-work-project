@@ -15,10 +15,10 @@ from typing import Any
 
 import httpx
 import pytest
-from tests import dexflow
 from tests.conftest import A_SIGNING_KEY, ADA, ALAN, DEX_PASSWORD, GRACE, build_settings
 
 from auth.main import create_app
+from tests import dexflow
 
 pytestmark = pytest.mark.integration
 

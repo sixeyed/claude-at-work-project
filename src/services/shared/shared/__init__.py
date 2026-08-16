@@ -30,17 +30,20 @@ from shared.problems import (
     PROBLEM_MEDIA_TYPE,
     ProblemException,
     install_problem_handlers,
+    problem_body,
     problem_response,
     trace_id,
 )
 from shared.security import (
     SecurityConfig,
+    SecurityContext,
     ServicePrincipal,
     UserPrincipal,
     install_security,
     require_service,
     require_user,
     require_user_sensitive,
+    verify_user_token,
 )
 
 __all__ = [
@@ -56,6 +59,7 @@ __all__ = [
     "PageRequest",
     "ProblemException",
     "SecurityConfig",
+    "SecurityContext",
     "ServicePrincipal",
     "StaticKeySource",
     "TokenState",
@@ -72,6 +76,7 @@ __all__ = [
     "jwks_document",
     "page_request",
     "postgres_check",
+    "problem_body",
     "problem_response",
     "redis_check",
     "require_service",
@@ -79,4 +84,5 @@ __all__ = [
     "require_user_sensitive",
     "trace_id",
     "uuid7",
+    "verify_user_token",
 ]

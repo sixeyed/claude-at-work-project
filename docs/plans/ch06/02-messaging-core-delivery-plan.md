@@ -44,6 +44,63 @@ references.
 >   reached from the host (SPA 5183, Auth 8011, Messaging 8012, Dex 5566, Postgres 5442);
 >   the harness addresses only those, so it cannot reach the wrong stack.
 
+> **Amended 2026-08-16, after Slices 2 to 6 shipped.** One block for all six, assembled from
+> each slice plan's "Gaps closed". The slice paragraphs below are **not** rewritten — they are
+> the record of what this plan said when it was written, and that is what makes an amendment
+> worth reading. Only the corrections a future reader of *this* document would otherwise be
+> misled by are here; the full findings stay in the per-slice plans.
+>
+> **Ownership moved.**
+> - **The D8d ADR and register flip are Slice 4's, not Slice 7's.** Decision 1 below still says
+>   "recorded in the D8d ADR in Slice 7". CLAUDE.md records a decision in the slice that makes
+>   it, and a register reading 🔴 for three slices' worth of code built on the answer is the
+>   drift Slice 7 exists to prevent. Slice 7 keeps the confirmation pass and the sweep.
+> - **Conventions §6 and doc 02 §4.1 are Slice 5's**, for the same reason: Messaging and Canvas
+>   would otherwise share `AsyncRedisManager`'s default pub/sub channel on one Redis, and that
+>   is a decision Slice 5's code forces rather than something to defer to a sweep.
+>
+> **Facts that were already stale.**
+> - **`last_read_id` shipped in `0001_channels`.** Decision 2 lists it among the columns whose
+>   features arrive later, as though it were still to come.
+> - **The frontend folder is `features/channels/`**, not `features/chat` — the Slice 5 and 6
+>   paragraphs still imply the old path. Slice 1 moved it.
+> - **Doc 06 §2 and the root README's BDD instructions shipped in Slice 1**, so the Slice 7
+>   paragraph claims work that is already done.
+> - **`.env.example` needed nothing across all six slices.** `x-service-common` sets
+>   `env_file: .env`, so every variable reaches every service whether or not the explicit
+>   `environment:` block names it — the explicit list is only for names that are renamed or
+>   interpolated.
+>
+> **Rules the paragraphs get wrong, and which a builder following them would get wrong too.**
+> - **Visibility gates reading *and* writing; membership gates administration.** Doc 02 §3.1
+>   marked the message routes "channel member", and nothing in this scope lets anyone join a
+>   channel themselves — so a membership guard would have made a public channel readable by
+>   nobody but its creator. `messages.py` guards on `channels.get_visible`, never
+>   `channels.is_member`, and **posting creates no membership row**.
+> - **Slice 6's "a client may only act on a channel it has joined" is wrong twice.** It is the
+>   wrong test, for the reason above; and a Socket.IO room is per-`sid` state that a reconnect
+>   destroys, so a send across a reconnect would race its own `join_channel`. Every inbound
+>   write authorizes on `get_visible`, in the same transaction as the write.
+> - **`edit_message` carries `version`.** Doc 02 §3.2 omits it; without it the socket would be
+>   the way around the optimistic-concurrency rule the REST route enforces.
+> - **`message_deleted` carries the full redacted `Message`**, not `{messageId, channelId}` —
+>   a client holding an id cannot render a tombstone.
+> - **`DELETE /messages/{id}` returns 200 with the tombstone, not 204**, for the same reason.
+> - **Slice 3's read path ships the tombstone redaction complete**, before anything can set
+>   `deleted_at`; Slice 4 adds only the writes. The Slice 4 paragraph reads as though the
+>   redaction were its work.
+> - **`ix_messages_channel_time` is created without its `WHERE deleted_at IS NULL` predicate**
+>   — decision 1 anticipated this — **and `ix_messages_thread` is not created at all**, which
+>   decision 2 does not mention.
+>
+> **Two harness rules the plan does not carry.**
+> - **`steps/conftest.py` holds every step more than one feature file uses.** pytest-bdd
+>   resolves a step from the calling module and from `conftest.py` and **never** from a sibling
+>   `test_*.py`, so the alternative is four copies of `Given Ada is signed in`.
+> - **`go_offline()` is context-wide and the contexts are session-scoped**, so the `ada` and
+>   `grace` fixtures restore the network on teardown. A scenario that failed while offline
+>   would otherwise take every later scenario with it.
+
 ## Two decisions to settle before writing code
 
 Both were surfaced while slicing and neither is answered by the strategy plan.

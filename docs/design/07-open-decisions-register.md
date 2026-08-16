@@ -19,6 +19,9 @@ other. Details in the tables below (IDs in brackets).
 **Settled 2026-08-15:** D24, plus D26 and D27 — two choices the docs left open
 without ever giving them an ID (SPA styling, and how acceptance criteria are
 expressed). Both were forced by building the first messaging slice.
+**Settled 2026-08-16:** D8d — message edit and delete semantics. See its row
+under *Messaging* for the scope, which is narrower than the row's old title:
+**retention values are still D16, and still 🔴.**
 
 - 🟢 **Identity federation** [D5] — Auth is an OIDC *relying party*, never a provider. Dex is
   the upstream locally; a customer's own IdP elsewhere. `dev-login` is deleted.
@@ -59,10 +62,24 @@ expressed). Both were forced by building the first messaging slice.
 
 | ID | Decision | Default in docs | Recommendation | Scope |
 |----|----------|-----------------|----------------|-------|
-| D8a | Threading depth | 🟡 Single-level | Confirm against UX needs | Messaging |
-| D8b | DM modelling | 🟡 `kind='dm'` channels | — | Messaging |
-| D8c | `/search/messages` lives in Messaging vs. a dedicated search gateway | 🟡 Thin proxy in Messaging | Revisit if search grows | Messaging |
-| D8d | Edit/delete windows and tombstone retention | 🔴 Open | Align with Worker retention (D16) | Messaging + Worker |
+| D8a | Threading depth | 🟡 Single-level | Confirm against UX needs. **Built against it 2026-08-16:** `thread_root_id` ships as a column and serializes as `null`; there is no thread API and `ix_messages_thread` is not created | Messaging |
+| D8b | DM modelling | 🟡 `kind='dm'` channels | **Built against it 2026-08-16:** `kind='dm'` is rejected by `CREATABLE_KINDS` in `messaging/models.py`, and nothing creates or lists a DM. The column accepts it; the API does not | Messaging |
+| D8c | `/search/messages` lives in Messaging vs. a dedicated search gateway | 🟡 Thin proxy in Messaging | Revisit if search grows. **Built against it 2026-08-16:** neither exists — no `/search/messages`, and no `jobs:index` producer to feed one (doc 02 §5) | Messaging |
+| D8d | Edit/delete semantics and tombstone retention | 🟢 **Decided 2026-08-16** — see below | [ADR](../adr/260816-message-edit-and-delete-semantics.md) | Messaging + Worker |
+
+**D8d, in full.** No time window on either action. The author edits their own
+message; the author or an admin of the channel deletes it — admins moderate by
+deleting and no role may rewrite someone else's words. Deleted messages are
+retained in history as tombstones (`body: ""`, `deletedAt` set), redacted
+server-side, which is a documented exception to Conventions §3's "queries filter
+`deleted_at IS NULL`".
+
+**How long a tombstone is kept before hard deletion is D16, still 🔴.** Nothing
+in this scope deletes one: the stored `body` is left intact on delete, no
+retention job exists, and `POST /api/v1/internal/messages/sweep` is not built.
+D8d settles the semantics of edit and delete and not the retention half of its
+original title — a distinction worth keeping, because it means message text
+outlives a user pressing "delete" until D16 says otherwise.
 
 ## Canvas
 
@@ -86,7 +103,7 @@ expressed). Both were forced by building the first messaging slice.
 
 | ID | Decision | Default in docs | Recommendation | Scope |
 |----|----------|-----------------|----------------|-------|
-| D16 | Retention policy values (message days, pending-asset hours, etc.) | 🔴 Open | Set concrete numbers; coordinate with D8d | Worker (+ Messaging) |
+| D16 | Retention policy values (message days, pending-asset hours, etc.) | 🔴 Open | Set concrete numbers. **No longer blocked on D8d** — that settled 2026-08-16 with no edit or delete window and tombstones retained in history, so retention and edit semantics are independent of each other. Nothing in the messaging core depends on a value: `POST /internal/messages/sweep` is not built and no retention job exists. **But a delete currently keeps the message text in the row**, redacting only on the way out — so this is the decision that governs when text is actually destroyed | Worker (+ Messaging) |
 | D17 | Specialised worker pools vs. one deployment for all streams | 🟡 Single, split suggested | Split CPU-heavy (thumbnail/export) from IO-heavy (index/notify) | Worker |
 | D18 | Notification channels in v1 | 🔴 Open | In-app first; push/email later | Worker |
 | D19 | Canvas export rendering engine (headless renderer / server-side Yjs via `pycrdt` + skia) | 🔴 Open | Non-trivial; consider deferring | Worker |
@@ -103,7 +120,7 @@ expressed). Both were forced by building the first messaging slice.
 | D24 | Client state manager: Zustand vs. Redux Toolkit | 🟢 **Decided (2026-08-15):** TanStack Query owns server state, Zustand owns client state. The register framed this as one question; it is two, and the split is the decision | Server state never goes in the Zustand store — query keys carry the workspace id so a switch cannot serve another workspace's cache. See [ADR 260815](../adr/260815-tanstack-query-and-zustand-for-spa-state.md) | Frontend |
 | D26 | SPA styling: Tailwind vs. CSS Modules (doc 06 §2 left it as "team choice"; never had an ID) | 🟢 **Decided (2026-08-15):** Tailwind CSS v4 via `@tailwindcss/vite` | No config files — the theme is `@theme` tokens in `index.css`. See [ADR 260815](../adr/260815-tailwind-v4-for-spa-styling.md) | Frontend |
 | D27 | How acceptance criteria are expressed and run (not previously registered) | 🟢 **Decided (2026-08-15):** Gherkin + pytest-bdd + Playwright (sync API), against `docker compose up` | Selectors are `data-testid` only and live in page objects. See [ADR 260815](../adr/260815-pytest-bdd-and-playwright-for-acceptance-tests.md) | Cross-cutting (Frontend, testing) |
-| D28 | Where per-user preferences live — **no feature for them exists at all** (raised 2026-08-15) | 🔴 Open. `users` has display name, avatar and status and nothing else; `PATCH /users/me` updates two of those | Decide whether preferences are Auth's (a `preferences jsonb` column, exposed on `/users/me`, possibly cached in R1) or a separate service, before the first thing that needs one ships. Blocking a theme toggle now; i18n and notification channels (D18) need the same thing | Cross-cutting (Auth, Frontend, Worker) |
+| D28 | Where per-user preferences live — **no feature for them exists at all** (raised 2026-08-15) | 🔴 Open. `users` has display name, avatar and status and nothing else; `PATCH /users/me` updates two of those | Decide whether preferences are Auth's (a `preferences jsonb` column, exposed on `/users/me`, possibly cached in R1) or a separate service, before the first thing that needs one ships. Blocking a theme toggle now; i18n and notification channels (D18) need the same thing. **Built against it 2026-08-16:** six messaging slices shipped a light-only palette and stored no per-user choice anywhere — no theme, no locale, no notification setting — so the decision is still unforced | Cross-cutting (Auth, Frontend, Worker) |
 
 ---
 

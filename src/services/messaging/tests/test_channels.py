@@ -237,3 +237,156 @@ async def test_a_service_token_cannot_use_a_user_endpoint(client, tokens):
     headers = tokens.header(aud="collabhub-internal", sub="service:worker")
 
     assert (await client.get("/api/v1/channels", headers=headers)).status_code == 401
+
+
+# --- rename and archive (slice 2) -----------------------------------------
+
+
+async def patch(client, headers, channel, **body):
+    return await client.patch(
+        f"/api/v1/channels/{channel['id']}",
+        json={"version": channel["version"], **body},
+        headers=headers,
+    )
+
+
+async def test_an_admin_renames_a_channel(client, ada):
+    created = (await create(client, ada, "general")).json()
+
+    response = await patch(client, ada, created, name="general-chat")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "general-chat"
+    # The version the next edit has to send back.
+    assert body["version"] == created["version"] + 1
+    # `updated_at` has a server default and no `onupdate`, so a rename that did
+    # not set it explicitly would leave the column reading as the creation time.
+    assert body["updatedAt"] > body["createdAt"]
+
+
+async def test_a_rename_is_what_the_next_read_returns(client, ada, grace):
+    created = (await create(client, ada, "general")).json()
+
+    await patch(client, ada, created, name="general-chat")
+
+    listed = (await client.get("/api/v1/channels", headers=grace)).json()
+    assert [c["name"] for c in listed["items"]] == ["general-chat"]
+
+
+async def test_a_stale_version_is_a_conflict(client, ada):
+    created = (await create(client, ada, "general")).json()
+    assert (await patch(client, ada, created, name="general-chat")).status_code == 200
+
+    # `created` still carries version 0, which is now the version nobody holds.
+    response = await patch(client, ada, created, name="something-else")
+
+    assert response.status_code == 409
+    assert response.json()["type"] == "https://collabhub.dev/problems/conflict"
+
+
+async def test_renaming_onto_a_taken_name_is_a_conflict_whatever_its_case(client, ada):
+    await create(client, ada, "general")
+    other = (await create(client, ada, "random")).json()
+
+    response = await patch(client, ada, other, name="GENERAL")
+
+    assert response.status_code == 409
+    listed = (await client.get("/api/v1/channels", headers=ada)).json()
+    assert sorted(c["name"] for c in listed["items"]) == ["general", "random"]
+
+
+async def test_a_rename_is_held_to_the_same_naming_rules_as_a_create(client, ada):
+    created = (await create(client, ada, "general")).json()
+
+    response = await patch(client, ada, created, name="dev team")
+
+    assert response.status_code == 400
+    assert response.json()["errors"]["name"] == [
+        "A channel name can only use letters, numbers and hyphens."
+    ]
+
+
+async def test_a_topic_can_be_set_and_cleared(client, ada):
+    created = (await create(client, ada, "general")).json()
+
+    with_topic = (await patch(client, ada, created, topic="Ship it")).json()
+    assert with_topic["topic"] == "Ship it"
+
+    # An explicit null clears; an absent `topic` leaves it alone.
+    unchanged = (await patch(client, ada, with_topic, name="general-chat")).json()
+    assert unchanged["topic"] == "Ship it"
+
+    cleared = (await patch(client, ada, unchanged, topic=None)).json()
+    assert cleared["topic"] is None
+
+
+async def test_a_non_admin_cannot_rename_a_channel_they_can_see(client, ada, grace):
+    """403 and not 404: `#general` is public, so Grace can already read it.
+
+    The SPA never makes this request — it hides the control from anyone whose
+    `myRole` is not `admin` — which is exactly why the rule is held here.
+    """
+    created = (await create(client, ada, "general")).json()
+
+    response = await patch(client, grace, created, name="hijacked")
+
+    assert response.status_code == 403
+    assert response.json()["type"] == "https://collabhub.dev/problems/forbidden"
+
+
+async def test_a_non_member_renaming_a_private_channel_gets_a_404(client, ada, grace):
+    created = (await create(client, ada, "secrets", kind="private")).json()
+
+    response = await patch(client, grace, created, name="hijacked")
+
+    # Never 403 here: that would confirm the channel exists.
+    assert response.status_code == 404
+
+
+async def test_an_admin_archives_a_channel_and_it_leaves_the_list(client, ada):
+    created = (await create(client, ada, "general")).json()
+
+    response = await client.delete(f"/api/v1/channels/{created['id']}", headers=ada)
+
+    assert response.status_code == 200
+    assert response.json()["archivedAt"] is not None
+    assert (await client.get("/api/v1/channels", headers=ada)).json()["items"] == []
+    assert (await client.get(f"/api/v1/channels/{created['id']}", headers=ada)).status_code == 404
+
+
+async def test_archiving_twice_is_a_404(client, ada):
+    """Archiving is one-way and every read filters it out, including this one."""
+    created = (await create(client, ada, "general")).json()
+    assert (
+        await client.delete(f"/api/v1/channels/{created['id']}", headers=ada)
+    ).status_code == 200
+
+    response = await client.delete(f"/api/v1/channels/{created['id']}", headers=ada)
+
+    assert response.status_code == 404
+
+
+async def test_archiving_does_not_free_the_name(client, ada):
+    """`ux_channels_public_name` covers every public row, archived or not.
+
+    So a name is spent once and for all: archiving `#general` does not let
+    anyone create a second one. Asserted rather than assumed, because it is the
+    surprising half of "archiving is one-way" and the thing a later slice would
+    otherwise change by accident.
+    """
+    created = (await create(client, ada, "general")).json()
+    await client.delete(f"/api/v1/channels/{created['id']}", headers=ada)
+
+    response = await create(client, ada, "general")
+
+    assert response.status_code == 409
+
+
+async def test_a_non_admin_cannot_archive_a_channel(client, ada, grace):
+    created = (await create(client, ada, "general")).json()
+
+    response = await client.delete(f"/api/v1/channels/{created['id']}", headers=grace)
+
+    assert response.status_code == 403
+    assert (await client.get("/api/v1/channels", headers=ada)).json()["items"] != []

@@ -64,6 +64,24 @@ not mocks).
   Column names `created_at`, `updated_at`. Never store local time.
 - **Soft delete:** Mutable user-facing resources use `deleted_at timestamptz NULL`.
   Queries filter `deleted_at IS NULL` by default. Hard delete only via retention jobs.
+  **Two documented exceptions, both in Messaging — recorded here 2026-08-16.**
+  They live here rather than only in the service doc because this document wins
+  the tie-break, so an exception granted only by doc 02 is an exception the
+  contract does not actually grant:
+  - **`channels` has no `deleted_at` at all.** Its soft-delete column is
+    `archived_at`, and `DELETE /channels/{id}` sets it; reads filter
+    `archived_at IS NULL` (doc 02 §4). So the rule generalises to "filter the
+    soft-delete column", and the column is not always called `deleted_at`.
+  - **`messages` has `deleted_at` and the read path deliberately does not filter
+    it.** History returns deleted rows as tombstones with `body` redacted to
+    `""` server-side, because a tombstone a reload erases is not a tombstone and
+    the conversation around a deleted message stops making sense without one
+    (doc 02 §3.1.4, and the
+    [ADR](../adr/260816-message-edit-and-delete-semantics.md)). The consequence
+    to know about: a "deleted" message's text is still in the row until a
+    retention job removes it, and the retention values are still open (D16 🔴).
+
+  A third exception should be a decision with a record, not a local call.
 - **Optimistic concurrency:** Updatable rows carry a `version integer NOT NULL DEFAULT 0`,
   incremented on every update. Updates use `WHERE id = :id AND version = :expected_version`;
   zero rows affected → `409 Conflict`.
@@ -267,8 +285,20 @@ Real-time backplane (R2)** so that any pod can serve any client.
 - **Event naming:** client→server events are verbs (`send_message`); server→client
   events are past-tense facts (`message_received`). Both documented per service.
 - **Backplane:** construct the server with a Redis client manager —
-  `socketio.AsyncServer(client_manager=socketio.AsyncRedisManager(<R2 URL>))`.
+  `socketio.AsyncServer(client_manager=socketio.AsyncRedisManager(<R2 URL>, channel="<service>"))`.
   Do not put backplane traffic on R1 or R3.
+  **The explicit `channel=` is required, not optional — corrected 2026-08-16.**
+  `AsyncRedisManager` defaults to `channel="socketio"`, which is the same string
+  in every service, and every real-time service shares one R2. Two servers on the
+  default deliver each other's emits into their own processes to be re-dispatched
+  against their own rooms. Nothing visibly breaks while the room names happen not
+  to collide — `channel:{id}` against `doc:{id}` — which is what makes it worth
+  fixing before it becomes a cross-service leak. Messaging uses
+  `channel="messaging"`; Canvas needs the equivalent.
+- **CORS:** pass `cors_allowed_origins=<origins> or None`. §5.6 makes an empty
+  list mean "install no CORS at all"; engine.io reads an empty list as an
+  allow-list containing nothing and refuses every browser handshake with a 400.
+  `None` is its spelling of "same origin only".
 
 ---
 

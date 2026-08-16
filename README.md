@@ -14,22 +14,37 @@ Slack-like chat experience with a Figma-like collaborative canvas in a single ap
 ## Current state
 
 Early-stage. **Auth is complete**, including federated sign-in through Dex.
-**Messaging has channels** — create and list, with membership, workspace scoping
-and cursor pagination; messages, threads and the Socket.IO `/messaging`
-namespace are still to come. Canvas, Asset and Worker are still scaffold — a
-process that reads its configuration and answers `/health/live` and
-`/health/ready`, with no models, migrations, routes or job handlers. The SPA has
-sign-in, a workspace switcher, and the chat shell with a channel sidebar.
-Chapters of the book add code, configuration and automation to this repo as they
-go.
+**Messaging has its core**: channels with administration and membership,
+messages with history, editing and deleting, and the Socket.IO `/messaging`
+namespace carrying live delivery, the write path and typing indicators. Threads,
+reactions, read receipts and search are not built — [doc 02
+§3.1.5](docs/design/02-messaging-service.md) lists every endpoint the design
+names and the service does not implement, with the reason for each. Canvas,
+Asset and Worker are still scaffold — a process that reads its configuration and
+answers `/health/live` and `/health/ready`, with no models, migrations, routes
+or job handlers. **The SPA** has sign-in, a workspace switcher and the whole chat
+shell. Chapters of the book add code, configuration and automation to this repo
+as they go.
 
-Two register decisions were settled on 2026-07-28. **D5** — whether Auth federates to an
-upstream IdP or acts as one: it federates, and is never an OpenID Provider
-([ADR](docs/adr/260728-federate-to-an-upstream-oidc-provider.md)). **D22** — where the
-browser keeps the refresh token: an `HttpOnly; Secure; SameSite=Strict` cookie, which means
-the SPA stores nothing at all and **the SPA and API must be deployed same-site**
-([ADR](docs/adr/260728-refresh-token-in-an-httponly-cookie.md)). Both are explained in the
-[Auth service README](src/services/auth/README.md).
+**[The open-decisions register](docs/design/07-open-decisions-register.md) is the
+list of what is settled and what is not.** It is maintained as decisions are
+made, and this README points at it rather than keeping a second copy that can
+disagree with it — which is exactly what happened before. Every significant one
+also has an ADR in [`docs/adr/`](docs/adr/).
+
+Three are worth knowing before reading any code, because they constrain
+deployment or the shape of everything above them. **D22** — the browser keeps its
+refresh token in an `HttpOnly; Secure; SameSite=Strict` cookie, so the SPA stores
+nothing at all and **the SPA and API must be deployed same-site**
+([ADR](docs/adr/260728-refresh-token-in-an-httponly-cookie.md)). **D5** — Auth
+federates to an upstream IdP and is never an OpenID Provider itself
+([ADR](docs/adr/260728-federate-to-an-upstream-oidc-provider.md)). **D2** — an
+access token is scoped to exactly one workspace, so switching is a token
+exchange ([ADR](docs/adr/260727-single-active-workspace-per-token.md)).
+
+Still open and worth knowing about: **D28** — there is no user-preferences
+feature anywhere, which is why the SPA is light-only rather than following the
+OS; and **D16** — retention values are unset, so nothing hard-deletes anything.
 
 `collabhub-shared` carries the cross-cutting layer so the next service inherits it: RFC 7807
 Problem Details, UUID v7, JWKS-backed verification, the token denylist, cursor pagination and
@@ -51,11 +66,11 @@ to get wrong:
 | Component | Design doc | Service README |
 |-----------|-----------|----------------|
 | Auth | [01](docs/design/01-auth-service.md) | [src/services/auth](src/services/auth/README.md) |
-| Messaging | [02](docs/design/02-messaging-service.md) | *scaffold* |
+| Messaging | [02](docs/design/02-messaging-service.md) | [src/services/messaging](src/services/messaging/README.md) |
 | Canvas | [03](docs/design/03-canvas-service.md) | *scaffold* |
 | Asset | [04](docs/design/04-asset-service.md) | *scaffold* |
 | Worker | [05](docs/design/05-worker-service.md) | *scaffold* |
-| Frontend SPA | [06](docs/design/06-frontend-spa.md) | *scaffold* |
+| Frontend SPA | [06](docs/design/06-frontend-spa.md) | [src/frontend](src/frontend/README.md) |
 
 ## Architecture
 
@@ -82,8 +97,10 @@ Python was chosen over .NET — see
 docs/design/      Architecture and per-service design docs
 docs/adr/         Architecture Decision Records
 docs/platform/    versions.md — tracked upstream versions
+docs/plans/       Strategy, delivery and per-slice implementation plans
 src/services/     shared, contracts, and the five backend services (one uv workspace)
 src/frontend/     React + TypeScript SPA (Vite)
+tests/bdd/        The Gherkin acceptance suite — it spans every service, so it lives here
 docker/           One folder per component: its Dockerfile and any files it needs
 charts/collabhub/ Helm chart covering every component
 .claude/skills/   Project skills: adr-writer, stack-update-checker

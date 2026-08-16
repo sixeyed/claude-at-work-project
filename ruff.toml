@@ -37,3 +37,10 @@ known-first-party = ["shared", "contracts", "auth", "messaging", "canvas", "asse
 
 [format]
 quote-style = "double"
+# ruff 0.16 reformats Python inside Markdown code blocks, which puts every
+# design doc and plan in scope of `ruff format --check .`. Those blocks are
+# illustrations — a five-line excerpt of a function, a `WHERE` clause with its
+# statement elided — and reflowing one to match a file it is quoting from is not
+# an improvement. Scoped to the formatter: `.md` was never linted, and a
+# top-level `exclude` here changes how isort classifies first-party imports.
+exclude = ["*.md"]

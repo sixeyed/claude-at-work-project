@@ -20,11 +20,11 @@ import jwt
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from tests import dexflow
 from tests.conftest import ADA, DEMO_WORKSPACE, DEX_PASSWORD, GRACE, WORKER_SECRET, build_settings
 from tests.dexflow import renewed, session_cookie
 
 from auth.main import create_app
+from tests import dexflow
 
 pytestmark = pytest.mark.integration
 

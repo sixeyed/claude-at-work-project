@@ -17,7 +17,6 @@ Feature: Permissions
   Background:
     Given Ada is signed in
 
-  @pending @s2
   Scenario: A member without admin rights is not offered the channel controls
     Given Ada has created a public channel named "general"
     When Grace opens CollabHub
@@ -25,7 +24,6 @@ Feature: Permissions
     Then Grace is not offered the channel controls
     But Ada is offered the channel controls
 
-  @pending @s2
   Scenario: An admin adds a member to a private channel and they can see it
     Given Ada has created a private channel named "launch-plans"
     And Ada has added Grace to the channel
@@ -34,7 +32,6 @@ Feature: Permissions
     When Grace opens the "launch-plans" channel
     Then Grace is looking at the "launch-plans" channel
 
-  @pending @s2
   Scenario: Removing a member revokes their view of the private channel
     Given Ada has created a private channel named "launch-plans"
     And Ada has added Grace to the channel
@@ -42,7 +39,6 @@ Feature: Permissions
     When Grace opens CollabHub
     Then "launch-plans" is not in Grace's channel list
 
-  @pending @s2
   Scenario: A non-member cannot open a private channel by its URL
     Given Ada has created a private channel named "launch-plans"
     When Grace opens the link to that channel

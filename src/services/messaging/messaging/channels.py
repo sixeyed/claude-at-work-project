@@ -21,11 +21,11 @@ import re
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import Select, func, or_, select, tuple_
+from sqlalchemy import Select, delete, func, or_, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from messaging.models import ADMIN, CREATABLE_KINDS, PUBLIC, Channel, ChannelMember
+from messaging.models import ADMIN, CREATABLE_KINDS, MEMBER, PUBLIC, Channel, ChannelMember
 from shared import Page, PageRequest, build_page, uuid7
 
 MIN_NAME_LENGTH = 3
@@ -64,6 +64,28 @@ class UnknownKindError(Exception):
 
 class DuplicateNameError(Exception):
     """A public channel in this workspace already owns the name."""
+
+
+class VersionConflictError(Exception):
+    """The row moved on since the caller read it.
+
+    The one optimistic-concurrency exception in this service: `messages.py`
+    imports this rather than defining a second one with the same name, so the
+    router has one thing to translate into a 409.
+    """
+
+
+class AlreadyMemberError(Exception):
+    """That user is already in the channel."""
+
+
+class LastAdminError(Exception):
+    """Removing them would leave the channel with no admin.
+
+    A channel with no admin can never be renamed, archived, or have anyone
+    added to it — and nothing in this API can grant the role back. Auth refuses
+    the same move for the last owner of a workspace, for the same reason.
+    """
 
 
 @dataclass(frozen=True)
@@ -149,6 +171,150 @@ async def create(
     return VisibleChannel(channel=channel, my_role=ADMIN)
 
 
+async def rename(
+    session: AsyncSession,
+    *,
+    channel_id: uuid.UUID,
+    expected_version: int,
+    name: str | None = None,
+    topic: str | None = None,
+    set_topic: bool = False,
+) -> None:
+    """Edit a channel's name and/or topic, guarded by the version the caller read.
+
+    **The version check is not the existence check.** Callers do
+    `get_visible` (404) then the admin test (403) and only then come here, so a
+    zero-row `UPDATE` can only mean a stale version. Answering 409 for a channel
+    in another workspace would confirm it exists.
+
+    `updated_at` is written explicitly. The column has a `server_default` and no
+    `onupdate` — deliberately, since an `onupdate` fires on any flush — so every
+    guarded update in this service sets it, or the column becomes a lie on the
+    first write.
+
+    `set_topic` distinguishes "clear the topic" from "leave it alone": the
+    router passes the `model_fields_set` signal, so `{"topic": null}` clears and
+    an absent `topic` does not.
+    """
+    values: dict[str, object] = {"version": Channel.version + 1, "updated_at": func.now()}
+    if name is not None:
+        values["name"] = validate_name(name)
+    if set_topic:
+        values["topic"] = topic
+
+    try:
+        result = await session.execute(
+            update(Channel)
+            .where(Channel.id == channel_id, Channel.version == expected_version)
+            .values(**values)
+        )
+    except IntegrityError as exc:
+        # The same partial unique index `create` relies on, hit from the other
+        # direction: renaming a public channel onto a name already in use.
+        await session.rollback()
+        raise DuplicateNameError(name) from exc
+
+    if result.rowcount == 0:
+        raise VersionConflictError(channel_id)
+
+
+async def archive(session: AsyncSession, *, channel_id: uuid.UUID) -> None:
+    """Put a channel away, for good.
+
+    Unconditional: no expected version, because archiving a channel someone else
+    just renamed is not a conflict worth surfacing. `version` still bumps, since
+    doc 02 §4 says it bumps on every write.
+
+    One-way, and that is the point rather than an omission. `_visible_query`
+    filters `archived_at IS NULL`, so an archived channel is invisible to
+    everyone including its own admin, and nothing in this scope can bring it
+    back. Archiving twice is a 404, not a second archive.
+    """
+    await session.execute(
+        update(Channel)
+        .where(Channel.id == channel_id)
+        .values(archived_at=func.now(), updated_at=func.now(), version=Channel.version + 1)
+    )
+
+
+async def members_page(
+    session: AsyncSession, *, channel_id: uuid.UUID, page: PageRequest
+) -> Page[ChannelMember]:
+    """One page of a channel's members, keyset-paginated on `user_id`.
+
+    Ordered by `user_id` rather than `joined_at`, which is what Auth's
+    equivalent uses. Two reasons: `(channel_id, user_id)` is the primary key, so
+    this walks it in order with no sort node and no new index — and Messaging
+    holds no display names (Conventions §2), so no ordering it *can* express
+    means anything to a person anyway. The panel sorts the page it has by name.
+    """
+    query = (
+        select(ChannelMember)
+        .where(ChannelMember.channel_id == channel_id)
+        .order_by(ChannelMember.user_id)
+    )
+    if page.cursor:
+        (last_user_id,) = page.cursor
+        query = query.where(ChannelMember.user_id > uuid.UUID(last_user_id))
+
+    rows = (await session.execute(query.limit(page.fetch_limit))).scalars().all()
+    return build_page(rows, page, key=lambda m: (str(m.user_id),))
+
+
+async def add_member(
+    session: AsyncSession,
+    *,
+    channel_id: uuid.UUID,
+    user_id: uuid.UUID,
+    role: str = MEMBER,
+) -> ChannelMember:
+    """Put someone in a channel.
+
+    **`user_id` is not checked against anything.** Messaging owns no user
+    records and must not read Auth's tables, so it cannot verify the id names a
+    real person in this workspace — and it does not need to. A membership row
+    for an id that is not a user grants nothing: every read still filters on the
+    caller's own `wsp` claim, so a token from another workspace cannot see the
+    channel, membership row or not. The row is inert.
+
+    Duplicates are left to the primary key rather than checked first, as
+    `create` leaves names to the unique index.
+    """
+    member = ChannelMember(channel_id=channel_id, user_id=user_id, role=role)
+    session.add(member)
+    try:
+        await session.flush()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise AlreadyMemberError(user_id) from exc
+
+    return member
+
+
+async def remove_member(
+    session: AsyncSession, *, channel_id: uuid.UUID, user_id: uuid.UUID
+) -> bool:
+    """Take someone out of a channel. `False` if they were never in it.
+
+    Nothing is revoked beyond the row. Channel membership is in no token — which
+    is the same fact that keeps these routes on plain `require_user` — so unlike
+    Auth's workspace removal there are no sessions to end here.
+    """
+    role = await _role(session, channel_id=channel_id, user_id=user_id)
+    if role is None:
+        return False
+
+    if role == ADMIN and await count_admins(session, channel_id=channel_id) == 1:
+        raise LastAdminError(user_id)
+
+    await session.execute(
+        delete(ChannelMember).where(
+            ChannelMember.channel_id == channel_id, ChannelMember.user_id == user_id
+        )
+    )
+    return True
+
+
 def _visible_query(workspace_id: uuid.UUID, user_id: uuid.UUID) -> Select:
     """Channels in this workspace the caller is allowed to know about.
 
@@ -229,6 +395,15 @@ async def _role(session: AsyncSession, *, channel_id: uuid.UUID, user_id: uuid.U
         )
     )
     return result.scalar_one_or_none()
+
+
+async def count_admins(session: AsyncSession, *, channel_id: uuid.UUID) -> int:
+    result = await session.execute(
+        select(func.count())
+        .select_from(ChannelMember)
+        .where(ChannelMember.channel_id == channel_id, ChannelMember.role == ADMIN)
+    )
+    return result.scalar_one()
 
 
 async def count_in_workspace(session: AsyncSession, workspace_id: uuid.UUID) -> int:

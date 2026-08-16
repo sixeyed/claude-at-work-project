@@ -106,10 +106,17 @@ def _bearer_token(request: Request) -> str:
     return token.strip()
 
 
-async def _verified_claims(request: Request, *, audience: str) -> dict[str, Any]:
-    context = _context(request)
-    token = _bearer_token(request)
+async def decode_claims(context: SecurityContext, token: str, *, audience: str) -> dict[str, Any]:
+    """Verify a token string and return its claims.
 
+    Request-free, and that is the whole reason it exists: a Socket.IO handshake
+    arrives with a token and no `Request`, so the verification core cannot be
+    reachable only through a FastAPI dependency. `_verified_claims` below is now
+    a two-line adapter over this.
+
+    Nothing about the checks changed when this moved — the existing tests
+    covering `require_user` over HTTP are the evidence.
+    """
     try:
         kid = jwt.get_unverified_header(token).get("kid")
     except jwt.PyJWTError:
@@ -136,8 +143,53 @@ async def _verified_claims(request: Request, *, audience: str) -> dict[str, Any]
         raise _unauthorized("The access token is not valid.") from None
 
 
-async def _check_denylist(request: Request, token_id: str, *, sensitive: bool) -> None:
-    state = await _context(request).denylist.state(token_id)
+async def _verified_claims(request: Request, *, audience: str) -> dict[str, Any]:
+    return await decode_claims(_context(request), _bearer_token(request), audience=audience)
+
+
+async def verify_user_token(
+    context: SecurityContext, token: str, *, sensitive: bool = False
+) -> UserPrincipal:
+    """Turn a token string into a `UserPrincipal`, or raise a `ProblemException`.
+
+    The request-free half of `require_user`. It raises rather than returning a
+    response, so the caller decides how to render the refusal — an HTTP handler
+    turns it into a problem document, and the Socket.IO handshake turns it into
+    a `ConnectionRefusedError`. That separation is the point of the extraction.
+
+    `sensitive` marks the fail-closed set from Conventions §5.2. A socket
+    handshake passes `False`: channel membership is not workspace membership, so
+    none of that surface is in the fail-closed set, and an unreachable denylist
+    accepts the token exactly as it does for an ordinary read.
+    """
+    claims = await decode_claims(context, token, audience=context.config.audience)
+
+    subject = str(claims["sub"])
+    if subject.startswith(SERVICE_SUBJECT_PREFIX):
+        raise _unauthorized("A user access token is required.")
+
+    try:
+        user_id = uuid.UUID(subject)
+        workspace_id = uuid.UUID(str(claims["wsp"]))
+    except (KeyError, ValueError, TypeError):
+        raise _unauthorized("The access token is not scoped to a workspace.") from None
+
+    await _check_denylist(context, claims["jti"], sensitive=sensitive)
+
+    return UserPrincipal(
+        user_id=user_id,
+        workspace_id=workspace_id,
+        roles=tuple(claims.get("roles") or ()),
+        token_id=claims["jti"],
+        display_name=claims.get("name", ""),
+        email=claims.get("email", ""),
+        expires_at=_expires_at(claims),
+        claims=claims,
+    )
+
+
+async def _check_denylist(context: SecurityContext, token_id: str, *, sensitive: bool) -> None:
+    state = await context.denylist.state(token_id)
 
     if state is TokenState.REVOKED:
         raise _unauthorized("The access token has been revoked.")
@@ -164,30 +216,8 @@ class RequireUser:
         self._sensitive = sensitive
 
     async def __call__(self, request: Request) -> UserPrincipal:
-        context = _context(request)
-        claims = await _verified_claims(request, audience=context.config.audience)
-
-        subject = str(claims["sub"])
-        if subject.startswith(SERVICE_SUBJECT_PREFIX):
-            raise _unauthorized("A user access token is required.")
-
-        try:
-            user_id = uuid.UUID(subject)
-            workspace_id = uuid.UUID(str(claims["wsp"]))
-        except (KeyError, ValueError, TypeError):
-            raise _unauthorized("The access token is not scoped to a workspace.") from None
-
-        await _check_denylist(request, claims["jti"], sensitive=self._sensitive)
-
-        return UserPrincipal(
-            user_id=user_id,
-            workspace_id=workspace_id,
-            roles=tuple(claims.get("roles") or ()),
-            token_id=claims["jti"],
-            display_name=claims.get("name", ""),
-            email=claims.get("email", ""),
-            expires_at=_expires_at(claims),
-            claims=claims,
+        return await verify_user_token(
+            _context(request), _bearer_token(request), sensitive=self._sensitive
         )
 
 

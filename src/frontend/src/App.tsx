@@ -107,6 +107,9 @@ function ChannelRoute() {
     <ChannelView
       accessToken={state.session.accessToken}
       workspaceId={state.session.activeWorkspaceId}
+      // Who is signed in, so a message row can tell its own words from
+      // someone else's. Nothing below this point had any way to know.
+      userId={state.session.profile.id}
     />
   )
 }

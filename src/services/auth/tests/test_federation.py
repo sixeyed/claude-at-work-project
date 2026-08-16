@@ -20,7 +20,6 @@ import httpx
 import jwt
 import pytest
 from sqlalchemy import select
-from tests import dexflow
 from tests.conftest import (
     ADA,
     AUTH_ISSUER,
@@ -33,6 +32,7 @@ from tests.conftest import (
 
 from auth import pkce
 from auth.models import ExternalIdentity
+from tests import dexflow
 
 pytestmark = pytest.mark.integration
 

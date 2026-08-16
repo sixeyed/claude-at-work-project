@@ -121,7 +121,24 @@ def trace_id(request: Request) -> str:
     return request.headers.get("X-Correlation-Id") or uuid.uuid4().hex
 
 
-def problem_response(request: Request, problem: ProblemException) -> JSONResponse:
+def problem_body(
+    problem: ProblemException,
+    *,
+    instance: str | None = None,
+    trace: str | None = None,
+) -> dict[str, Any]:
+    """The Problem Details document itself, with no `Request` in sight.
+
+    Extracted so a Socket.IO ack and a REST 404 cannot describe the same refusal
+    differently. A socket handler has no request to take a path or a trace id
+    from, and it still has to tell the client what went wrong in the vocabulary
+    the client already parses.
+
+    **`instance` and `traceId` are omitted rather than invented** when the caller
+    has none. Conventions §4.2 describes `traceId` as the W3C trace id, and a
+    generated one that correlates with nothing in Tempo is worse than its
+    absence: it looks like a lead and is not.
+    """
     body: dict[str, Any] = {
         "type": f"{PROBLEM_BASE_URI}/{problem.code}",
         "title": problem.title,
@@ -129,13 +146,19 @@ def problem_response(request: Request, problem: ProblemException) -> JSONRespons
     }
     if problem.detail is not None:
         body["detail"] = problem.detail
-    body["instance"] = request.url.path
-    body["traceId"] = trace_id(request)
+    if instance is not None:
+        body["instance"] = instance
+    if trace is not None:
+        body["traceId"] = trace
     if problem.errors is not None:
         body["errors"] = problem.errors
 
+    return body
+
+
+def problem_response(request: Request, problem: ProblemException) -> JSONResponse:
     return JSONResponse(
-        body,
+        problem_body(problem, instance=request.url.path, trace=trace_id(request)),
         status_code=problem.status,
         media_type=PROBLEM_MEDIA_TYPE,
         headers=problem.headers,

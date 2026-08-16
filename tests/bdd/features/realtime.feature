@@ -25,7 +25,6 @@ Feature: Real-time delivery
   Background:
     Given Ada is signed in
 
-  @pending @s5
   Scenario: Grace sees Ada's message without reloading
     Given Ada has created a public channel named "general"
     And Grace is looking at the "general" channel
@@ -35,7 +34,6 @@ Feature: Real-time delivery
 
   # Ada's message is in the history Grace loads, not something Grace received
   # live — so the scenario turns on the edit arriving, and nothing else.
-  @pending @s5
   Scenario: Ada's edit propagates to Grace live
     Given Ada has created a public channel named "general"
     And Ada has sent "standup at four" in "general"
@@ -45,7 +43,6 @@ Feature: Real-time delivery
     And Grace sees "standup at five" marked as edited
     But Grace does not see "standup at four" in the channel
 
-  @pending @s5
   Scenario: Ada's delete propagates to Grace live
     Given Ada has created a public channel named "general"
     And Ada has sent "wrong channel, sorry" in "general"
@@ -54,7 +51,6 @@ Feature: Real-time delivery
     Then Grace sees a deleted message in the channel without reloading
     But Grace does not see "wrong channel, sorry" in the channel
 
-  @pending @s5
   Scenario: Grace does not receive messages for a channel she is not looking at
     Given Ada has created a public channel named "random"
     And Ada has created a public channel named "general"
@@ -65,7 +61,6 @@ Feature: Real-time delivery
     When Grace opens the "general" channel
     Then Grace sees "only for general" in the channel
 
-  @pending @s5
   Scenario: The stream recovers after the connection drops
     Given Ada has created a public channel named "general"
     And Grace is looking at the "general" channel
@@ -75,7 +70,6 @@ Feature: Real-time delivery
     Then Grace's connection is restored
     And Grace sees "sent while Grace was away" in the channel without reloading
 
-  @pending @s6
   Scenario: A typing indicator appears for Grace and clears when Ada stops
     Given Ada has created a public channel named "general"
     And Grace is looking at the "general" channel
@@ -84,7 +78,6 @@ Feature: Real-time delivery
     When Ada stops typing
     Then Grace no longer sees that Ada is typing
 
-  @pending @s6
   Scenario: A sent message appears immediately and is confirmed
     Given Ada has created a public channel named "general"
     When Ada sends "lunch is at one"
@@ -93,7 +86,6 @@ Feature: Real-time delivery
     And Ada sees "lunch is at one" confirmed
     And "lunch is at one" appears in Ada's channel exactly once
 
-  @pending @s6
   Scenario: A rejected send is rolled back and the error is shown
     Given Ada has created a public channel named "general"
     When Ada tries to send a message of 8001 characters

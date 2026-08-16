@@ -15,11 +15,11 @@ from typing import Any
 
 import httpx
 import pytest
-from tests import dexflow
 from tests.conftest import ADA, DEMO_WORKSPACE, DEX_PASSWORD
 from tests.dexflow import session_cookie
 
 from auth.cookies import COOKIE_NAME, COOKIE_PATH
+from tests import dexflow
 
 pytestmark = pytest.mark.integration
 

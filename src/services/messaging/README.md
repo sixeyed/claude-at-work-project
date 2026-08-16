@@ -7,14 +7,24 @@ on top of
 
 ## What is built
 
-**Channels: create and list.** `GET|POST /api/v1/channels` and
-`GET /api/v1/channels/{id}`, with membership, workspace scoping and cursor
-pagination.
+**Channels.** `GET|POST /api/v1/channels`, `GET|PATCH|DELETE
+/api/v1/channels/{id}` — create, list, read, rename and archive — plus
+`GET|POST /api/v1/channels/{id}/members` and
+`DELETE /api/v1/channels/{id}/members/{userId}`. Workspace-scoped, cursor
+paginated, with optimistic concurrency on `version`.
 
-Not yet: messages, threads, reactions, read receipts, search, and the Socket.IO
-`/messaging` namespace. Channel administration — rename, archive, add and remove
-members — is the next slice, which is why `PATCH`/`DELETE /channels/{id}` and
-the `/members` routes are absent.
+**Messages.** `GET|POST /api/v1/channels/{id}/messages` and
+`GET|PATCH|DELETE /api/v1/messages/{id}` — send, read history newest-first,
+edit and delete.
+
+**Real-time.** The Socket.IO `/messaging` namespace: an authenticated handshake,
+`join_channel` / `leave_channel`, inbound `send_message` / `edit_message` /
+`delete_message` / `typing`, and outbound `message_received` / `message_edited` /
+`message_deleted` / `user_typing`.
+
+Not built: threads, reactions, read receipts and search — see spec §3.1.5, which
+lists every endpoint the design doc names and this service does not implement,
+with the reason for each.
 
 ## Rules worth knowing before you change anything here
 
@@ -31,14 +41,41 @@ set (Conventions §5.2, spec §3.1). An unreachable R1 fails open here.
 **A channel you may not see is a 404, never a 403.** 403 confirms that a private
 channel exists and discloses its name. See spec §3.1.1.
 
-**Public channels are readable by the whole workspace**, joined or not. Joining
-gates the messages, from the next slice. This corrected the spec, which had
-marked channel detail "channel member" and made a public channel unopenable by
-anyone but its creator.
+**Visibility gates reading and writing; membership gates administration.** If
+`channels.get_visible` returns a channel, the caller may read its history, post
+in it, and join its Socket.IO room — no membership row needed. Membership is
+what gates renaming, archiving and the member list writes. This corrected the
+spec twice: it had marked channel detail *and* the message routes "channel
+member", which — since nothing in this scope lets anyone join a channel
+themselves — would have made a public channel unreadable by everyone but its
+creator. So a guard here is `get_visible`, never `is_member`.
+
+**Posting does not create a membership row.** `myRole` stays `null` for someone
+who has spoken in a public channel they never joined.
 
 **Channels archive, they do not soft-delete.** The column is `archived_at`, not
 `deleted_at`, so Conventions §3's "filter `deleted_at IS NULL`" reads as
-`archived_at IS NULL` for these tables.
+`archived_at IS NULL` for these tables. Archiving is **one-way**: every read
+filters it out, so an archived channel is invisible to everyone including its
+own admin, its messages are frozen, and its name is not released.
+
+**Messages history returns tombstones, and filters no soft-delete column at
+all.** The other exception to Conventions §3, and the opposite one: a deleted
+message stays in history with `body` redacted to `""` server-side and
+`deletedAt` set, because a tombstone a reload erases is not a tombstone.
+`history_page` and `get` have no `deleted_at` clause, which is also why
+`ix_messages_channel_time` is **not** the partial index the spec originally gave
+(spec §3.1.4, register D8d).
+
+**Admins delete, they do not edit.** Only an author may rewrite their own
+message; an author or a channel admin may delete one. Deleting someone's words
+is moderation; rewriting them under their name is forgery.
+
+**The socket is not a second copy of the rules.** The inbound handlers call the
+same `messages.create` / `edit` / `delete` the REST routes call, authorize on
+the same `get_visible`, and commit before they publish. Room membership decides
+who *receives* a broadcast and authorizes nothing — a room is per-`sid` state
+that a reconnect destroys.
 
 **Names are compared without case.** `ux_channels_public_name` indexes
 `lower(name)`, so `#General` collides with `#general`; the stored name keeps the
@@ -60,6 +97,11 @@ still 🔴.
 
 **The `reactions` table.** Not created until reactions are built — an empty
 table is a claim about what the service does that is not yet true.
+
+**`ix_messages_thread`.** The spec's §4 DDL lists it and `0002_messages` does
+not create it. `thread_root_id` ships as a *column* because adding one later
+rewrites the table; an index supporting a query no code makes is dead weight,
+and adding it with the threading feature costs one line and no rewrite.
 
 ## Running it
 
@@ -93,6 +135,14 @@ locally: the SPA is a separate origin, and without it the browser will not call
 this service at all. Empty installs no CORS middleware, which is the deployed
 case behind a single ingress.
 
-All three Redis instances are configured because the service will use all three
-and they are not interchangeable (R1 cache and denylist, R2 the Socket.IO
-backplane, R3 index jobs). Only R1 is used so far, for the token denylist.
+All three Redis instances are configured because they are not interchangeable:
+**R1** cache and token denylist, **R2** the Socket.IO backplane, **R3** index
+jobs. R1 and R2 are in use; R3 is not, because the `jobs:index` producer is not
+built.
+
+**R2 is addressed with an explicit pub/sub channel**, `channel="messaging"`, and
+not `AsyncRedisManager`'s default. Canvas shares this Redis instance, and the
+default is the same string in every service — two managers on one channel would
+deliver each other's emits into each other's processes. Nothing visibly breaks
+while the room names happen not to collide, which is what makes it worth being
+explicit about.

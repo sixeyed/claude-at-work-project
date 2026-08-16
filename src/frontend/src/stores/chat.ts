@@ -15,19 +15,29 @@
 
 import { create } from 'zustand'
 
+/**
+ * Whether the live connection is up. A fact *about* a resource, which is client
+ * state; the socket itself is the resource and lives in a React context.
+ */
+export type ConnectionStatus = 'connecting' | 'connected' | 'disconnected'
+
 interface ChatState {
   activeChannelId: string | null
   /** Per-channel composer text, so switching channels does not lose it. */
   drafts: Record<string, string>
+  connectionStatus: ConnectionStatus
   setActiveChannel: (channelId: string | null) => void
   setDraft: (channelId: string, text: string) => void
   clearDraft: (channelId: string) => void
+  setConnectionStatus: (status: ConnectionStatus) => void
 }
 
 export const useChatStore = create<ChatState>((set) => ({
   activeChannelId: null,
   drafts: {},
+  connectionStatus: 'disconnected',
   setActiveChannel: (channelId) => set({ activeChannelId: channelId }),
+  setConnectionStatus: (status) => set({ connectionStatus: status }),
   setDraft: (channelId, text) =>
     set((state) => ({ drafts: { ...state.drafts, [channelId]: text } })),
   clearDraft: (channelId) =>

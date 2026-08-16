@@ -38,4 +38,4 @@ USER app
 
 EXPOSE 8000
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["uvicorn", "messaging.main:app_factory", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "messaging.main:asgi_factory", "--factory", "--host", "0.0.0.0", "--port", "8000"]

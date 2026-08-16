@@ -4,6 +4,11 @@ Named `test_*` because this is the module pytest collects: `scenarios()` below
 generates one test function per scenario *into this module*, so a file pytest
 skips is a feature file that silently never runs.
 
+Only the phrasing this feature introduces lives here. The steps two feature
+files share — who is signed in, which channels exist, what is in whose sidebar
+— moved to `steps/conftest.py` when `permissions.feature` arrived, because
+pytest-bdd cannot see a step defined in a sibling `test_*.py`.
+
 No selectors here — every one belongs to a page object (`tests/bdd/pages/`).
 A step says what a person did; the page object knows what to click.
 
@@ -44,16 +49,9 @@ def _assert_complaint(shown: str, phrase: str) -> None:
 # --- given ----------------------------------------------------------------
 
 
-@given("Ada is signed in")
-def ada_is_signed_in(ada: ChatPage) -> None:
-    # The context is signed in for the whole session; this loads the app fresh
-    # so each scenario starts from the same place.
-    ada.open()
-
-
-@given(parsers.parse('Ada has created a public channel named "{name}"'))
-def ada_has_created(ada: ChatPage, name: str) -> None:
-    ada.create_channel_and_wait(name)
+@given(parsers.parse('Ada has renamed the channel to "{name}"'))
+def ada_has_renamed(ada: ChatPage, name: str) -> None:
+    ada.rename_channel(name)
 
 
 # --- when -----------------------------------------------------------------
@@ -85,9 +83,14 @@ def ada_tries_too_long(ada: ChatPage) -> None:
     ada.create_channel_expecting_failure("a" * 81)
 
 
-@when("Grace opens CollabHub")
-def grace_opens(grace: ChatPage) -> None:
-    grace.open()
+@when(parsers.parse('Ada renames the channel to "{name}"'))
+def ada_renames(ada: ChatPage, name: str) -> None:
+    ada.rename_channel(name)
+
+
+@when("Ada archives the channel")
+def ada_archives(ada: ChatPage) -> None:
+    ada.archive_channel()
 
 
 # --- then -----------------------------------------------------------------
@@ -96,21 +99,6 @@ def grace_opens(grace: ChatPage) -> None:
 @then(parsers.parse('Ada sees the "{name}" workspace'))
 def ada_sees_workspace(ada: ChatPage, name: str) -> None:
     assert ada.workspace_name() == name
-
-
-@then(parsers.parse('Ada is looking at the "{name}" channel'))
-def ada_is_looking_at(ada: ChatPage, name: str) -> None:
-    assert ada.open_channel_name() == name
-
-
-@then(parsers.parse('"{name}" is in Ada\'s channel list'))
-def in_adas_list(ada: ChatPage, name: str) -> None:
-    assert name in ada.channel_names()
-
-
-@then(parsers.parse('"{name}" is in Grace\'s channel list'))
-def in_graces_list(grace: ChatPage, name: str) -> None:
-    assert name in grace.channel_names()
 
 
 @then(parsers.parse('"{name}" appears in Ada\'s channel list exactly once'))

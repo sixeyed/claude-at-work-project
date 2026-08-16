@@ -28,9 +28,9 @@ async def test_the_expected_tables_exist(engine):
 
     assert "channels" in names
     assert "channel_members" in names
-    # Not created until the features that need them (slice 3, and reactions
-    # later still) — an empty table claims the service does something it cannot.
-    assert "messages" not in names
+    assert "messages" in names
+    # Still not created. An empty table claims the service does something it
+    # cannot, and nothing in this scope reads or writes a reaction.
     assert "reactions" not in names
 
 
@@ -106,3 +106,72 @@ async def test_cross_service_ids_carry_no_foreign_keys(engine):
     assert "user_id" not in definitions
     # The one foreign key that is allowed: both ends are ours.
     assert "REFERENCES channels(id)" in definitions
+
+
+async def test_message_timestamps_are_timestamptz(engine):
+    rows = await _rows(
+        engine,
+        """
+        SELECT column_name, data_type FROM information_schema.columns
+        WHERE table_name = 'messages'
+          AND column_name IN ('created_at', 'edited_at', 'deleted_at')
+        """,
+    )
+
+    assert dict(rows) == {
+        "created_at": "timestamp with time zone",
+        "edited_at": "timestamp with time zone",
+        "deleted_at": "timestamp with time zone",
+    }
+
+
+async def test_the_history_index_is_not_partial(engine):
+    """The read path returns tombstones, so it has no `deleted_at` clause.
+
+    A partial index with `WHERE deleted_at IS NULL` would silently not be used
+    by the query it was created for — the failure mode is a full scan on a busy
+    channel, which no test that only checks results would ever catch.
+    """
+    rows = await _rows(
+        engine,
+        "SELECT indexdef FROM pg_indexes WHERE indexname = 'ix_messages_channel_time'",
+    )
+
+    assert len(rows) == 1
+    definition = rows[0][0]
+    assert "channel_id" in definition
+    assert "DESC" in definition
+    assert "WHERE" not in definition
+
+
+async def test_the_thread_index_is_deliberately_absent(engine):
+    """`ix_messages_thread` is in the design doc and is not built yet.
+
+    Nothing queries `thread_root_id`. Unlike a column, an index can be added
+    later with no table rewrite — so it waits for the feature.
+    """
+    rows = await _rows(engine, "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'")
+    names = {r[0] for r in rows}
+
+    assert "ix_messages_channel_time" in names
+    assert "ix_messages_thread" not in names
+
+
+async def test_a_message_references_its_channel_but_not_its_author(engine):
+    """The Conventions §2 service boundary, drawn in DDL.
+
+    A channel is this service's row and gets a real foreign key. An author is a
+    row in Auth's database and gets none.
+    """
+    rows = await _rows(
+        engine,
+        """
+        SELECT pg_get_constraintdef(oid)
+        FROM pg_constraint
+        WHERE contype = 'f' AND conrelid::regclass::text = 'messages'
+        """,
+    )
+    definitions = " ".join(d for (d,) in rows)
+
+    assert "REFERENCES channels(id)" in definitions
+    assert "author_id" not in definitions

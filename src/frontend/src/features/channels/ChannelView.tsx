@@ -1,10 +1,10 @@
 /**
- * The open channel.
+ * The open channel: its header, its history, its composer and its members.
  *
- * Empty of messages on purpose — sending and reading arrive in the next slice.
- * What it proves now is that a channel opens by id, including a public one the
- * viewer has not joined, and that an id nobody may see is a clean "not found"
- * rather than a crash.
+ * The composition is the point of this file; everything it renders belongs to a
+ * component of its own. What it owns is the one query the others hang off —
+ * the channel itself — and the three states that query can be in, including the
+ * clean "not found" that a channel id nobody may see has to produce.
  */
 
 import { useQuery } from '@tanstack/react-query'
@@ -12,15 +12,20 @@ import { useParams } from 'react-router-dom'
 import { useEffect } from 'react'
 
 import { getChannel } from '../../lib/api/messaging'
+import { ChannelHeader } from './ChannelHeader'
+import { MemberPanel } from './MemberPanel'
+import { MessageComposer } from './MessageComposer'
+import { MessageList } from './MessageList'
 import { channelKeys } from './useChannels'
 import { useChatStore } from '../../stores/chat'
 
 interface Props {
   accessToken: string
   workspaceId: string | null
+  userId: string
 }
 
-export function ChannelView({ accessToken, workspaceId }: Props) {
+export function ChannelView({ accessToken, workspaceId, userId }: Props) {
   const { channelId } = useParams<{ channelId: string }>()
   const setActiveChannel = useChatStore((state) => state.setActiveChannel)
 
@@ -56,21 +61,35 @@ export function ChannelView({ accessToken, workspaceId }: Props) {
   }
 
   return (
-    <section data-testid="channel-view" data-channel-name={channel.name} className="flex h-full flex-col">
-      <header className="border-b border-border px-6 py-4">
-        <h2 data-testid="channel-header-name" className="text-lg font-semibold text-ink">
-          <span aria-hidden="true" className="opacity-50">
-            #
-          </span>{' '}
-          {channel.name}
-        </h2>
-        {channel.topic && <p className="text-sm text-ink-muted">{channel.topic}</p>}
-      </header>
+    <section
+      data-testid="channel-view"
+      data-channel-name={channel.name}
+      className="flex h-full flex-col"
+    >
+      <ChannelHeader accessToken={accessToken} workspaceId={workspaceId} channel={channel} />
 
-      <div className="flex flex-1 items-center justify-center p-6">
-        <p data-testid="channel-empty" className="text-sm text-ink-muted">
-          Nothing here yet.
-        </p>
+      <div className="flex min-h-0 flex-1">
+        <div className="flex min-w-0 flex-1 flex-col">
+          <MessageList
+            accessToken={accessToken}
+            workspaceId={workspaceId}
+            channelId={channel.id}
+            userId={userId}
+            myRole={channel.myRole ?? null}
+          />
+          {/* Enabled for any channel this view can render: visibility is the
+              write test as well as the read one, so someone who can see a
+              public channel can talk in it without joining. */}
+          <MessageComposer
+            accessToken={accessToken}
+            workspaceId={workspaceId}
+            channelId={channel.id}
+            channelName={channel.name}
+            userId={userId}
+          />
+        </div>
+
+        <MemberPanel accessToken={accessToken} workspaceId={workspaceId} channel={channel} />
       </div>
     </section>
   )

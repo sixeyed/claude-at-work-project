@@ -11,6 +11,7 @@
 import { useState, type FormEvent } from 'react'
 
 import { ProblemError } from '../../lib/api/client'
+import type { ChannelKind } from '../../lib/api/messaging'
 import { useCreateChannel } from './useChannels'
 
 interface Props {
@@ -21,6 +22,7 @@ interface Props {
 
 export function CreateChannelDialog({ accessToken, workspaceId, onCreated }: Props) {
   const [name, setName] = useState('')
+  const [kind, setKind] = useState<ChannelKind>('public')
   const create = useCreateChannel(accessToken, workspaceId)
 
   const problem = create.error instanceof ProblemError ? create.error : undefined
@@ -32,10 +34,11 @@ export function CreateChannelDialog({ accessToken, workspaceId, onCreated }: Pro
   function submit(event: FormEvent) {
     event.preventDefault()
     create.mutate(
-      { name },
+      { name, kind },
       {
         onSuccess: (channel) => {
           setName('')
+          setKind('public')
           onCreated(channel.id)
         },
       },
@@ -47,6 +50,21 @@ export function CreateChannelDialog({ accessToken, workspaceId, onCreated }: Pro
       <label htmlFor="channel-name" className="text-xs font-medium text-ink-muted uppercase">
         New channel
       </label>
+      {/* The API has taken `private` since the channel table existed; until now
+          no browser could ask for one, which made every membership rule
+          unreachable from the UI. Public and private only — `dm` is a kind the
+          create endpoint refuses (D8b), so offering it would be a dead option. */}
+      <select
+        data-testid="create-channel-kind"
+        aria-label="Channel visibility"
+        value={kind}
+        onChange={(event) => setKind(event.target.value as ChannelKind)}
+        className="rounded border border-border bg-surface px-2 py-1 text-sm text-ink"
+      >
+        <option value="public">Public — anyone in the workspace</option>
+        <option value="private">Private — invited people only</option>
+      </select>
+
       <div className="flex gap-2">
         <input
           id="channel-name"

@@ -46,10 +46,175 @@ export interface paths {
         get: operations["get_channel_api_v1_channels__channel_id__get"];
         put?: never;
         post?: never;
+        /**
+         * Archive Channel
+         * @description Archive a channel — the soft delete from spec §4. Channel admins only.
+         *
+         *     Unconditional and one-way. Every read in this service goes through
+         *     `get_visible`, which filters `archived_at IS NULL`, so an archived channel
+         *     and its messages are unreachable afterwards by anyone including the admin
+         *     who archived it. Archiving a second time is therefore a 404, which is
+         *     consistent rather than a case to special-case into a 204.
+         *
+         *     The archived channel is returned, since it is the last chance anyone gets to
+         *     see it and the SPA needs the row it is navigating away from. It is re-read
+         *     with `refresh` rather than through `get_visible`, which by now filters it
+         *     out — that being the whole point of the write.
+         */
+        delete: operations["archive_channel_api_v1_channels__channel_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Update Channel
+         * @description Rename a channel, or change its topic. Channel admins only.
+         *
+         *     The response is re-read through `get_visible` rather than built from the
+         *     object in the session: the update went through Core, so the in-session row
+         *     is stale and would report the old name back to the client that just changed
+         *     it. What comes back is what was stored.
+         */
+        patch: operations["update_channel_api_v1_channels__channel_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/channels/{channel_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Members
+         * @description Who is in a channel the caller can see.
+         *
+         *     Guarded by visibility, not by membership — spec §3.1 says "channel member",
+         *     and taken literally that would let Grace see `#general` in her sidebar, read
+         *     every word in it, and get a 403 for asking who else is there. A private
+         *     channel is invisible to non-members already, so the only case this widens is
+         *     a public one, where the membership is not a secret from a workspace that can
+         *     already read the conversation.
+         *
+         *     Ordered by user id, which is arbitrary to a human on purpose: Messaging
+         *     holds no display names, so it has no meaningful order to offer. The panel
+         *     sorts the page it receives.
+         */
+        get: operations["list_members_api_v1_channels__channel_id__members_get"];
+        put?: never;
+        /**
+         * Add Member
+         * @description Add someone to a channel. Channel admins only, including adding yourself.
+         *
+         *     There is no self-join in this scope: joining a channel is something an admin
+         *     does to you, not something you do.
+         */
+        post: operations["add_member_api_v1_channels__channel_id__members_post"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channel_id}/members/{user_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /**
+         * Remove Member
+         * @description Remove someone from a channel. Channel admins only.
+         *
+         *     Nothing else is revoked: channel membership is in no token, so unlike Auth's
+         *     workspace removal there are no sessions to end here. A reviewer who
+         *     remembers that route will look for the equivalent — there is none to write.
+         */
+        delete: operations["remove_member_api_v1_channels__channel_id__members__user_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channel_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Messages
+         * @description A channel's history, newest first, cursor-paginated (Conventions §4.1).
+         *
+         *     Deleted messages are included, with their bodies redacted — the tombstone is
+         *     part of the history, not something the client reconstructs.
+         */
+        get: operations["list_messages_api_v1_channels__channel_id__messages_get"];
+        put?: never;
+        /**
+         * Send Message
+         * @description Say something in a channel the caller can see.
+         *
+         *     Spec §3.1 keeps this as the REST fallback once the Socket.IO send exists;
+         *     both call the same domain function, so the rules cannot drift between them.
+         */
+        post: operations["send_message_api_v1_channels__channel_id__messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/messages/{message_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Message
+         * @description One message, if the caller can see the channel it is in.
+         */
+        get: operations["get_message_api_v1_messages__message_id__get"];
+        put?: never;
+        post?: never;
+        /**
+         * Delete Message
+         * @description Tombstone a message. The author, or an admin of its channel.
+         *
+         *     **200 with the tombstoned message, not 204.** A delete here does not remove
+         *     a row from the list — it stays with `body: ""` and `deletedAt` set, and the
+         *     client has to render it. With 204 the client would have to refetch a page it
+         *     is already holding to learn what to draw; with the row in hand it replaces
+         *     one entry in its cache. The same argument as returning the created row from
+         *     a `POST`, and a deliberate deviation from "DELETE returns 204" rather than a
+         *     surprise in the OpenAPI document.
+         *
+         *     Deleting twice returns the same tombstone, unchanged.
+         */
+        delete: operations["delete_message_api_v1_messages__message_id__delete"];
+        options?: never;
+        head?: never;
+        /**
+         * Edit Message
+         * @description Rewrite a message. **The author, and nobody else.**
+         *
+         *     Not even a channel admin, who *can* delete this message. That asymmetry is
+         *     the point rather than an oversight: deleting someone's words is moderation,
+         *     and rewriting them under their name is forgery.
+         *
+         *     403 here and not 404, which is the opposite of the channel rules two files
+         *     over — and correct. A message the caller cannot see never reaches this
+         *     check; one they can see is already on their screen, so refusing the edit
+         *     discloses nothing, and a 404 would be a lie about a row they are looking at.
+         *
+         *     There is no time window (register D8d).
+         */
+        patch: operations["edit_message_api_v1_messages__message_id__patch"];
         trace?: never;
     };
     "/health/live": {
@@ -91,6 +256,31 @@ export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
         /**
+         * AddChannelMemberRequest
+         * @description Add one person to a channel, by id.
+         *
+         *     Singular, not "add member(s)": a batch add has no honest status code when
+         *     three of five ids are already in the channel. Five calls do.
+         *
+         *     By id and never by email, because Messaging owns no user records and must
+         *     not read Auth's tables (Conventions §2) — it cannot resolve an address, and
+         *     it does not check that the id names a real user either. The browser holds a
+         *     token entitling it to both services and does the resolving.
+         */
+        AddChannelMemberRequest: {
+            /**
+             * Role
+             * @default member
+             * @enum {string}
+             */
+            role: "admin" | "member";
+            /**
+             * Userid
+             * Format: uuid
+             */
+            userId: string;
+        };
+        /**
          * ChannelListResponse
          * @description The list envelope from Conventions §4.1.
          */
@@ -99,6 +289,34 @@ export interface components {
             items: components["schemas"]["ChannelResponse"][];
             /** Nextcursor */
             nextCursor?: string | null;
+        };
+        /** ChannelMemberListResponse */
+        ChannelMemberListResponse: {
+            /** Items */
+            items: components["schemas"]["ChannelMemberResponse"][];
+            /** Nextcursor */
+            nextCursor?: string | null;
+        };
+        /**
+         * ChannelMemberResponse
+         * @description One membership row. A bare `userId`: there is no name here to give.
+         *
+         *     The SPA renders the name by looking the id up in Auth's workspace member
+         *     list, which it is already entitled to read.
+         */
+        ChannelMemberResponse: {
+            /**
+             * Joinedat
+             * Format: date-time
+             */
+            joinedAt: string;
+            /** Role */
+            role: string;
+            /**
+             * Userid
+             * Format: uuid
+             */
+            userId: string;
         };
         /**
          * ChannelResponse
@@ -166,10 +384,143 @@ export interface components {
             /** Topic */
             topic?: string | null;
         };
+        /**
+         * EditMessageRequest
+         * @description Rewrite a message.
+         *
+         *     **Not a JSON Merge Patch of `Message`.** Conventions §4 defines `PATCH` that
+         *     way, and under RFC 7386 `{"version": 3}` would mean *assign 3 to version* —
+         *     the exact opposite of what it means here. `version` is a precondition: the
+         *     version the caller last saw, which the server checks and refuses on.
+         *
+         *     Both fields are required. There is exactly one editable field on a message,
+         *     so "absent means leave it alone" has nothing to express — the
+         *     `model_fields_set` idiom `UpdateChannelRequest` needs is deliberately not
+         *     used here, rather than forgotten.
+         *
+         *     `max_length` is `MAX_BODY_FIELD_LENGTH`, the same bound `SendMessageRequest`
+         *     carries — one constant, not two numbers to drift apart.
+         */
+        EditMessageRequest: {
+            /** Body */
+            body: string;
+            /** Version */
+            version: number;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * MessageListResponse
+         * @description The list envelope from Conventions §4.1. Newest first.
+         */
+        MessageListResponse: {
+            /** Items */
+            items: components["schemas"]["MessageResponse"][];
+            /** Nextcursor */
+            nextCursor?: string | null;
+        };
+        /**
+         * MessageResponse
+         * @description A message as the API reports it (spec §3.1.3).
+         *
+         *     Two absences and one presence are all deliberate.
+         *
+         *     No `reactions`. The design doc has the key; the table does not exist and no
+         *     query makes it, and a field that is always `[]` is a claim the service does
+         *     not honour. `attachments` looks like the same case and is not — it is a real
+         *     column read off a real row that happens to be empty, because the Asset
+         *     service is a skeleton rather than because nothing was built.
+         *
+         *     No `workspaceId`, for the reason `ChannelResponse` gives: it is the token's
+         *     `wsp` claim, and echoing it invites a client to start sending it.
+         *
+         *     `authorId` is a bare id and there is no user expansion. Messaging owns no
+         *     user records and must not read Auth's tables (Conventions §2); the browser
+         *     resolves the name from Auth's own workspace directory, holding a token that
+         *     already entitles it to both.
+         *
+         *     **`body` is `""` on a deleted message, never `null` and never the original
+         *     text.** The redaction is server-side and the type stays non-null, so the
+         *     generated TypeScript does not force a null check at every render site. The
+         *     client renders "this message was deleted" from `deletedAt`, not from an
+         *     empty body.
+         */
+        MessageResponse: {
+            /** Attachments */
+            attachments: string[];
+            /**
+             * Authorid
+             * Format: uuid
+             */
+            authorId: string;
+            /** Body */
+            body: string;
+            /**
+             * Channelid
+             * Format: uuid
+             */
+            channelId: string;
+            /**
+             * Createdat
+             * Format: date-time
+             */
+            createdAt: string;
+            /** Deletedat */
+            deletedAt: string | null;
+            /** Editedat */
+            editedAt: string | null;
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Threadrootid */
+            threadRootId: string | null;
+            /** Version */
+            version: number;
+        };
+        /**
+         * SendMessageRequest
+         * @description Say something in a channel.
+         *
+         *     Carries the body and nothing else. No `channelId` — it is in the path; no
+         *     `authorId` — it is the token's `sub`; no `threadRootId` and no
+         *     `attachmentIds`, because accepting a field the service ignores is a claim it
+         *     does not honour. Both arrive with the features that need them.
+         *
+         *     `max_length` here is a static outer bound and **not** the rule — see
+         *     `MAX_BODY_FIELD_LENGTH`.
+         */
+        SendMessageRequest: {
+            /** Body */
+            body: string;
+        };
+        /**
+         * UpdateChannelRequest
+         * @description Rename a channel, or change its topic.
+         *
+         *     `version` is required and is the version the client last read. The expected
+         *     version travels in the body rather than in an `If-Match` header: nothing on
+         *     this platform emits or parses an ETag, and the `Channel` DTO already carries
+         *     the number the SPA holds in its cache.
+         *
+         *     There is no `archivedAt`. Archiving is `DELETE /channels/{id}`, so no client
+         *     ever writes a server clock into a timestamp column.
+         *
+         *     An absent `topic` leaves the topic alone; an explicit `null` clears it. The
+         *     router tells them apart with `model_fields_set`, which is why the two cases
+         *     do not need two fields.
+         */
+        UpdateChannelRequest: {
+            /** Name */
+            name?: string | null;
+            /** Topic */
+            topic?: string | null;
+            /** Version */
+            version: number;
         };
         /** ValidationError */
         ValidationError: {
@@ -276,6 +627,337 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ChannelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    archive_channel_api_v1_channels__channel_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_channel_api_v1_channels__channel_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateChannelRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_members_api_v1_channels__channel_id__members_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelMemberListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_member_api_v1_channels__channel_id__members_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddChannelMemberRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChannelMemberResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_member_api_v1_channels__channel_id__members__user_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+                user_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_messages_api_v1_channels__channel_id__messages_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_message_api_v1_channels__channel_id__messages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_message_api_v1_messages__message_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_message_api_v1_messages__message_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_message_api_v1_messages__message_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["EditMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageResponse"];
                 };
             };
             /** @description Validation Error */

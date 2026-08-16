@@ -101,3 +101,43 @@ export function me(accessToken: string): Promise<Profile> {
 export function workspaces(accessToken: string): Promise<{ items: Workspace[] }> {
   return request<{ items: Workspace[] }>('/api/v1/workspaces', { headers: authorized(accessToken) })
 }
+
+/** One workspace member. The profile is nested — this is Auth's shape, not a flattening. */
+export interface WorkspaceMember {
+  user: Profile
+  role: string
+  joinedAt: string
+}
+
+/**
+ * Everyone in a workspace, so the UI can put a name to a user id.
+ *
+ * Messaging returns bare ids — it owns no user records and must not read Auth's
+ * tables (Conventions §2) — so the *browser* makes the second call, holding a
+ * token that already entitles it to both services. The alternative, copying a
+ * display name onto Messaging's rows, goes stale the moment someone renames
+ * themselves.
+ *
+ * Pages to exhaustion. The endpoint is cursor-paginated with a default limit of
+ * 50, so a directory that fetched one page would silently lose every member
+ * after the fiftieth — and the symptom would be a few names rendering as ids.
+ */
+export async function workspaceMembers(
+  accessToken: string,
+  workspaceId: string,
+): Promise<WorkspaceMember[]> {
+  const all: WorkspaceMember[] = []
+  let cursor: string | null = null
+
+  do {
+    const query = new URLSearchParams({ limit: '200', ...(cursor ? { cursor } : {}) })
+    const page: { items: WorkspaceMember[]; nextCursor: string | null } = await request(
+      `/api/v1/workspaces/${workspaceId}/members?${query}`,
+      { headers: authorized(accessToken) },
+    )
+    all.push(...page.items)
+    cursor = page.nextCursor
+  } while (cursor)
+
+  return all
+}

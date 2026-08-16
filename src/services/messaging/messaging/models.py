@@ -19,6 +19,15 @@ column is `archived_at` (spec §4, and `DELETE /channels/{id}` is an archive), s
 "filter `deleted_at IS NULL`" from Conventions §3 reads as `archived_at IS NULL`
 for this table. `workspace_id`, `created_by` and `channel_members.user_id` carry
 no foreign keys, because they name rows in other services' databases.
+
+`messages` is the mirror image and the other documented exception to the same
+Conventions §3 rule. It *does* have `deleted_at` — and the read path deliberately
+does **not** filter it. A deleted message stays in history as a tombstone with
+its body redacted server-side, because a tombstone a reload erases is not a
+tombstone. That is why `ix_messages_channel_time` carries no
+`WHERE deleted_at IS NULL` predicate: the query that would use it does not have
+that clause. The rule is "filter the soft-delete column *unless the doc says
+otherwise*", and this is one of the two places it says otherwise.
 """
 
 from __future__ import annotations
@@ -26,8 +35,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import ForeignKey, Index, Integer, String, func, text
-from sqlalchemy.dialects.postgresql import TIMESTAMP, UUID
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, func, text
+from sqlalchemy.dialects.postgresql import ARRAY, TIMESTAMP, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 # Every timestamp on the platform is UTC `timestamptz` (Conventions §3).
@@ -112,3 +121,51 @@ class ChannelMember(Base):
     joined_at: Mapped[datetime] = mapped_column(
         Timestamp, nullable=False, server_default=func.now()
     )
+
+
+class Message(Base):
+    """Something somebody said in a channel (spec §4).
+
+    Three columns ship ahead of their features, on the rule `0001_channels`
+    already set: adding a column later churns the table, so `thread_root_id`
+    (threading, register D8a), `attachments` (the Asset service is a skeleton)
+    and `version` land now. `version` is not idle even so — it is the
+    optimistic-concurrency guard for the edit in the next slice, and the
+    external version an Elasticsearch index would use (register D25).
+
+    `channel_id` carries a foreign key and `author_id` does not, and that is the
+    Conventions §2 boundary drawn in DDL: a channel is this service's row, and a
+    user is Auth's.
+    """
+
+    __tablename__ = "messages"
+    __table_args__ = (
+        # The history read: one channel, newest first. **No
+        # `WHERE deleted_at IS NULL`** — history returns tombstones, so the read
+        # path has no such clause and would not match a partial index.
+        #
+        # `ix_messages_thread` from spec §4 is deliberately absent: nothing
+        # queries `thread_root_id` in this scope, and an index for a query no
+        # code makes is dead weight. Adding it later is one line and no table
+        # rewrite — unlike the column, which is why the column is here.
+        Index("ix_messages_channel_time", "channel_id", text("id DESC")),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("channels.id"), nullable=False
+    )
+    author_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    thread_root_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("messages.id"), nullable=True
+    )
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    attachments: Mapped[list[uuid.UUID]] = mapped_column(
+        ARRAY(UUID(as_uuid=True)), nullable=False, server_default=text("'{}'")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        Timestamp, nullable=False, server_default=func.now()
+    )
+    edited_at: Mapped[datetime | None] = mapped_column(Timestamp, nullable=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(Timestamp, nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")

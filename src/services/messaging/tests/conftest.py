@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Callable, Iterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -38,8 +39,10 @@ AUTH_ISSUER = "https://auth.test"
 AUDIENCE = "collabhub"
 KEY_ID = "messaging-test-key"
 
-#: Child tables first — `channel_members` references `channels`.
-TABLES = "channel_members, channels"
+#: Child tables first — `messages` and `channel_members` both reference
+#: `channels`. `CASCADE` would reach them anyway; being explicit is what stops
+#: the next person wondering whether the order matters.
+TABLES = "messages, channel_members, channels"
 
 ADA = uuid.uuid4()
 GRACE = uuid.uuid4()
@@ -109,6 +112,84 @@ async def client(
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+@pytest.fixture
+def client_for(
+    postgres_dsn: str, redis_url: str, signing_key: rsa.RSAPrivateKey, engine
+) -> Callable[..., AbstractAsyncContextManager[httpx.AsyncClient]]:
+    """A client against an app built with one or two settings changed.
+
+    For the handful of rules that *are* the configuration — the body limit is
+    the one so far. Asserting the default number proves the rule fires; building
+    a second app with a different number proves the rule reads the setting
+    rather than a constant that happens to match it.
+
+    A fixture rather than an import, deliberately. Every service in this repo
+    has a `tests` package, so `from tests.conftest import build_settings` binds
+    to whichever one pytest found first — Auth's, when the whole suite runs.
+    """
+
+    @asynccontextmanager
+    async def build(**overrides: Any) -> AsyncIterator[httpx.AsyncClient]:
+        settings = build_settings(postgres_dsn, redis_url, **overrides)
+        app = create_app(settings, key_source=StaticKeySource({KEY_ID: signing_key.public_key()}))
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+            yield c
+
+    return build
+
+
+@pytest.fixture
+async def realtime_url(
+    app_settings: Settings, signing_key: rsa.RSAPrivateKey, engine
+) -> AsyncIterator[str]:
+    """A real uvicorn serving the Socket.IO app, on an ephemeral port.
+
+    `ASGITransport` cannot carry a WebSocket, so the socket tests need a
+    listening server — and once there is one, the REST calls in those tests go
+    through it too. That matters: the `client` fixture wraps `create_app`, where
+    `app.state.realtime` is `None`, so a REST write through *that* publishes
+    nothing.
+
+    `lifespan="on"` on purpose. `socketio.ASGIApp` handles the lifespan scope
+    itself and only delegates it down when it was constructed without startup
+    hooks, so this fixture is also what proves the FastAPI lifespan — the engine
+    and Redis disposal — still runs underneath the wrapper.
+
+    In `conftest.py` rather than in a test module because the inbound-event
+    tests need the same server, and neither test module owns the other's
+    fixtures.
+    """
+    import uvicorn
+
+    from messaging.main import build_asgi_app
+
+    app = build_asgi_app(
+        app_settings, key_source=StaticKeySource({KEY_ID: signing_key.public_key()})
+    )
+    config = uvicorn.Config(app, host="127.0.0.1", port=0, log_level="warning", lifespan="on")
+    server = uvicorn.Server(config)
+    task = asyncio.get_running_loop().create_task(server.serve())
+
+    # `uvicorn.Server` exposes readiness as a plain bool it flips inside
+    # `serve()`, with no event to await — so polling it is the only handshake
+    # available. Bounded, so a server that never binds fails here rather than
+    # hanging the suite.
+    for _ in range(500):
+        if server.started:
+            break
+        await asyncio.sleep(0.02)
+    else:
+        server.should_exit = True
+        raise AssertionError("the realtime server did not start")
+    port = server.servers[0].sockets[0].getsockname()[1]
+
+    yield f"http://127.0.0.1:{port}"
+
+    server.should_exit = True
+    await task
 
 
 @pytest.fixture

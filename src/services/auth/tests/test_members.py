@@ -17,9 +17,10 @@ from typing import Any
 
 import httpx
 import pytest
-from tests import dexflow
 from tests.conftest import ADA, ALAN, DEMO_WORKSPACE, DEX_PASSWORD, GRACE
 from tests.dexflow import renewed, session_cookie
+
+from tests import dexflow
 
 pytestmark = pytest.mark.integration
 

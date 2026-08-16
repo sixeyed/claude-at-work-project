@@ -57,7 +57,8 @@ fewer moving parts than configuring a library out of doing the things it exists 
 
 ```
 /src
-  /app            # bootstrap, providers, router
+  App.tsx          # routes and the auth guard
+  main.tsx         # bootstrap and providers
   /lib
     /api          # typed REST clients per service (generated from OpenAPI ideally)
     /realtime     # Socket.IO connection managers (messaging, canvas)
@@ -69,9 +70,16 @@ fewer moving parts than configuring a library out of doing the things it exists 
     /canvas       # document view, toolbar, layers, cursors
     /presence     # online users, live cursors, awareness
     /assets       # upload widget, image/file rendering
+  /stores          # Zustand — client state only (register D24)
   /components      # shared UI
-  /types           # shared DTO types (mirrors collabhub-contracts)
+  /types           # generated DTO types (register D23) — never hand-edited
 ```
+
+**Corrected 2026-08-16.** There is no `/src/app`: the router and the providers
+are `App.tsx` and `main.tsx` at the root of `/src`, which is small enough not to
+need a folder of its own. `/features/threads`, `/features/canvas`,
+`/features/presence`, `/features/assets` and `/lib/yjs` are the eventual shape
+and do not exist yet.
 
 ---
 
@@ -145,6 +153,71 @@ offline/reconnecting UI.
   `read_receipt_updated`, `user_typing` and update TanStack Query caches.
 - Debounce `typing`; throttle `mark_read`.
 
+**Added 2026-08-16, while building live delivery.** Four rules the bullets above
+leave implicit, each of which is a bug that only shows up in a running app:
+
+- **One socket for the shell, not one per channel view.** It is mounted where the
+  layout is, so navigating between channels emits `join_channel` /
+  `leave_channel` and never reconnects. A hook mounted in the channel view would
+  cost a handshake, a token verification and a room join for something the user
+  experiences as clicking a link.
+- **Every connect re-joins *and* refetches.** Re-entering a room replays nothing
+  — the server has no connection-state recovery — so everything broadcast while
+  the client was away is gone. Invalidating that channel's message query is the
+  recovery; the re-join only resumes the live stream from that point.
+- **`connect_error` disconnects; a transport drop does not.** A handshake the
+  server refused will be refused identically on every retry, so Socket.IO's
+  backoff would loop forever against a service that has already said no.
+  Recovery comes from the socket being re-created with a fresh token, which is
+  the only thing that could change the answer — and that happens on its own,
+  because the access token is the connection's dependency.
+- **An inbound event for a channel with no cached history is dropped.** Writing
+  into an empty infinite-query key stores whatever the updater returns, so a
+  handler that built a page there would invent a one-message history with no
+  cursor — and the real history would never load. Handlers key on the *event's*
+  `channelId`, so a background channel that is cached still updates.
+
+The three message events all carry the full `Message` — including
+`message_deleted`, which carries the tombstone — and all three go through one
+upsert helper keyed on the message id. **Idempotent, never appending:** the
+sender receives its own broadcast and there is no id to skip it by, so an append
+renders every message twice in its author's own window.
+
+**Optimistic send — added 2026-08-16.** The bullet above says "reconcile on the
+acknowledged `Message` / `message_received`", and the slash hides a race:
+Socket.IO gives **no ordering guarantee between a broadcast and an ack**, and
+the sender is in the room, so `message_received` for your own message can arrive
+before your own acknowledgement does. Reconciling on the ack alone renders it
+twice.
+
+- The optimistic entry is a complete `Message`-shaped object with
+  `id = "temp:<uuid>"`, so the ordinary message component renders it with no
+  branch and no second component. **The `temp:` prefix is the pending marker**
+  — nothing goes in the Zustand store, because a map of in-flight sends keyed by
+  temp id is a second copy of the message list wearing a hat.
+- **Reconciliation is remove-then-upsert**: drop the `temp:` row, then upsert
+  the real message by id. Idempotent, so it does not matter which of the ack and
+  the broadcast arrived first — and it is the same idempotency a reconnect
+  refetch needs anyway.
+- **Every emit carries a five-second ack timeout.** `emit` on a closed socket
+  does not fail — it buffers, and the callback never fires — so without one the
+  bubble would sit greyed forever with no error and no way out.
+- **A timed-out or refused send is never retried automatically.** It rolls back,
+  puts the text back in `drafts[channelId]`, and says why. `send_message`
+  carries no idempotency key, so an automatic retry is how one message becomes
+  two.
+- **There is no offline send queue** (§7 lists one as an aspiration). It would
+  need ordering, durable storage and dedupe against a write that cannot be
+  deduped, and the composer is disabled with a visible reason while the socket
+  is down instead. The reconnect-and-refetch path above already covers what
+  matters: nothing said while you were away is lost.
+
+**Typing** is a leading-edge throttle — one `typing` emit per 2s window, first
+keystroke immediately, because a trailing debounce would delay the indicator by
+its own window. There is no stop event: the receiver drops a name 4s after its
+last `user_typing`. Names are resolved through the workspace directory like
+every other name in the UI; the event carries only a user id.
+
 ### 5.3 Canvas (Yjs over Socket.IO)
 - One `Y.Doc` per open document. A **custom Socket.IO provider** bridges Yjs ↔ the `/canvas`
   namespace:
@@ -176,6 +249,13 @@ offline/reconnecting UI.
   show `errors` map on forms.
 - **Offline / reconnect:** queue outgoing chat sends while disconnected; Yjs naturally
   reconciles canvas edits on reconnect.
+  **Neither half is built — noted 2026-08-16.** There is no outgoing send queue:
+  the composer is disabled while the socket is down, and a send that is refused
+  or times out rolls back and surfaces its problem detail (§5.2). A queue would
+  need ordering, durable storage and dedupe against a write with no idempotency
+  key, and the reconnect-and-refetch path already covers what matters — nothing
+  said while you were away is lost. Yjs reconciliation is Canvas's, and Canvas
+  is scaffold.
 - **Observability:** browser OTel SDK → collector; propagate `traceparent` on REST calls so
   traces stitch across SPA → service → worker.
 - **Accessibility & i18n:** plan from the start (Open Decision on i18n lib).
@@ -183,7 +263,16 @@ offline/reconnecting UI.
 ## 8. Non-Functional & Limits
 - First meaningful paint and channel-switch should feel instant (optimistic + cached).
 - Canvas target 60 fps with N live cursors; throttle awareness broadcasts (~30–60 ms).
-- Respect server limits (message length, attachment count/size) client-side before sending.
+- ~~Respect server limits (message length, attachment count/size) client-side before sending.~~
+  **Corrected 2026-08-16, for message length specifically.** The composer does
+  **not** pre-check the body against `MESSAGING_MAX_BODY_CHARS`, and the
+  textarea carries no `maxlength`. Two reasons, and the first is the one that
+  generalises: a second copy of a server rule is a copy that drifts from the one
+  guarding the database, which is the same call `CreateChannelDialog` makes for
+  channel names. The second is that pre-validating would mean the over-long send
+  never leaves the browser — no optimistic row, nothing to roll back, and the
+  behaviour the rejected-send path exists to provide could not be exercised at
+  all. Attachment count and size are untouched by this and stay as written.
 - PWA/offline shell for the mobile path; service worker caches the app shell, not data.
 
 ## 9. Open Decisions

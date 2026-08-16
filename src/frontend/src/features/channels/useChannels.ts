@@ -11,7 +11,14 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { createChannel, listChannels, type Channel } from '../../lib/api/messaging'
+import {
+  archiveChannel,
+  createChannel,
+  listChannels,
+  updateChannel,
+  type Channel,
+  type ChannelKind,
+} from '../../lib/api/messaging'
 
 export const channelKeys = {
   list: (workspaceId: string | null) => ['channels', workspaceId] as const,
@@ -30,12 +37,63 @@ export function useChannels(accessToken: string, workspaceId: string | null) {
 export function useCreateChannel(accessToken: string, workspaceId: string | null) {
   const queryClient = useQueryClient()
 
-  return useMutation<Channel, Error, { name: string; kind?: string }>({
+  return useMutation<Channel, Error, { name: string; kind: ChannelKind }>({
     mutationFn: (body) => createChannel(accessToken, body),
     onSuccess: async () => {
       // Refetch rather than push the new channel into the cached array: the
       // list is ordered by name, and re-sorting it here would be a second
       // implementation of the server's ordering waiting to disagree with it.
+      await queryClient.invalidateQueries({ queryKey: channelKeys.list(workspaceId) })
+    },
+  })
+}
+
+/**
+ * Rename a channel, or set its topic.
+ *
+ * Both the list and the detail entry are invalidated: the sidebar shows the
+ * name and is ordered by it, and the open channel's header shows it too. A
+ * rename that refreshed only one of them leaves the other reading the old name
+ * until something else happens to refetch it.
+ */
+export function useRenameChannel(
+  accessToken: string,
+  workspaceId: string | null,
+  channelId: string,
+) {
+  const queryClient = useQueryClient()
+
+  return useMutation<Channel, Error, { version: number; name?: string; topic?: string | null }>({
+    mutationFn: (body) => updateChannel(accessToken, channelId, body),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: channelKeys.list(workspaceId) }),
+        queryClient.invalidateQueries({ queryKey: channelKeys.detail(workspaceId, channelId) }),
+      ])
+    },
+  })
+}
+
+/**
+ * Archive a channel.
+ *
+ * The detail entry is removed rather than invalidated: refetching it would ask
+ * for a channel the server now hides, get a 404, and render the error page over
+ * the top of wherever the user has just been sent. Navigating away is the
+ * caller's job, and it has to happen — leaving Ada looking at a channel whose
+ * next fetch 404s is the whole reason this is not just an invalidate.
+ */
+export function useArchiveChannel(
+  accessToken: string,
+  workspaceId: string | null,
+  channelId: string,
+) {
+  const queryClient = useQueryClient()
+
+  return useMutation<Channel, Error, void>({
+    mutationFn: () => archiveChannel(accessToken, channelId),
+    onSuccess: async () => {
+      queryClient.removeQueries({ queryKey: channelKeys.detail(workspaceId, channelId) })
       await queryClient.invalidateQueries({ queryKey: channelKeys.list(workspaceId) })
     },
   })

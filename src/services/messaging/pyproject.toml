@@ -13,7 +13,14 @@ dependencies = [
     "asyncpg>=0.30",
     "alembic>=1.14",
     "redis>=5.2",
+    "python-socketio>=5.12",
 ]
+
+[dependency-groups]
+# `AsyncSimpleClient` in the realtime tests needs the async *client* half, which
+# pulls `aiohttp` — engine.io uses it for both polling and the WebSocket
+# upgrade. The server needs only the plain package above.
+dev = ["python-socketio[asyncio_client]>=5.12"]
 
 [build-system]
 requires = ["hatchling"]

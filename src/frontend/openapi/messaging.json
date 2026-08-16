@@ -1,6 +1,30 @@
 {
   "components": {
     "schemas": {
+      "AddChannelMemberRequest": {
+        "description": "Add one person to a channel, by id.\n\nSingular, not \"add member(s)\": a batch add has no honest status code when\nthree of five ids are already in the channel. Five calls do.\n\nBy id and never by email, because Messaging owns no user records and must\nnot read Auth's tables (Conventions \u00a72) \u2014 it cannot resolve an address, and\nit does not check that the id names a real user either. The browser holds a\ntoken entitling it to both services and does the resolving.",
+        "properties": {
+          "role": {
+            "default": "member",
+            "enum": [
+              "admin",
+              "member"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "userId": {
+            "format": "uuid",
+            "title": "Userid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId"
+        ],
+        "title": "AddChannelMemberRequest",
+        "type": "object"
+      },
       "ChannelListResponse": {
         "description": "The list envelope from Conventions \u00a74.1.",
         "properties": {
@@ -27,6 +51,59 @@
           "items"
         ],
         "title": "ChannelListResponse",
+        "type": "object"
+      },
+      "ChannelMemberListResponse": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChannelMemberResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "ChannelMemberListResponse",
+        "type": "object"
+      },
+      "ChannelMemberResponse": {
+        "description": "One membership row. A bare `userId`: there is no name here to give.\n\nThe SPA renders the name by looking the id up in Auth's workspace member\nlist, which it is already entitled to read.",
+        "properties": {
+          "joinedAt": {
+            "format": "date-time",
+            "title": "Joinedat",
+            "type": "string"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "userId": {
+            "format": "uuid",
+            "title": "Userid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "userId",
+          "role",
+          "joinedAt"
+        ],
+        "title": "ChannelMemberResponse",
         "type": "object"
       },
       "ChannelResponse": {
@@ -145,6 +222,26 @@
         "title": "CreateChannelRequest",
         "type": "object"
       },
+      "EditMessageRequest": {
+        "description": "Rewrite a message.\n\n**Not a JSON Merge Patch of `Message`.** Conventions \u00a74 defines `PATCH` that\nway, and under RFC 7386 `{\"version\": 3}` would mean *assign 3 to version* \u2014\nthe exact opposite of what it means here. `version` is a precondition: the\nversion the caller last saw, which the server checks and refuses on.\n\nBoth fields are required. There is exactly one editable field on a message,\nso \"absent means leave it alone\" has nothing to express \u2014 the\n`model_fields_set` idiom `UpdateChannelRequest` needs is deliberately not\nused here, rather than forgotten.\n\n`max_length` is `MAX_BODY_FIELD_LENGTH`, the same bound `SendMessageRequest`\ncarries \u2014 one constant, not two numbers to drift apart.",
+        "properties": {
+          "body": {
+            "maxLength": 64000,
+            "title": "Body",
+            "type": "string"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "body",
+          "version"
+        ],
+        "title": "EditMessageRequest",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -156,6 +253,178 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "MessageListResponse": {
+        "description": "The list envelope from Conventions \u00a74.1. Newest first.",
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/MessageResponse"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "nextCursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nextcursor"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "title": "MessageListResponse",
+        "type": "object"
+      },
+      "MessageResponse": {
+        "description": "A message as the API reports it (spec \u00a73.1.3).\n\nTwo absences and one presence are all deliberate.\n\nNo `reactions`. The design doc has the key; the table does not exist and no\nquery makes it, and a field that is always `[]` is a claim the service does\nnot honour. `attachments` looks like the same case and is not \u2014 it is a real\ncolumn read off a real row that happens to be empty, because the Asset\nservice is a skeleton rather than because nothing was built.\n\nNo `workspaceId`, for the reason `ChannelResponse` gives: it is the token's\n`wsp` claim, and echoing it invites a client to start sending it.\n\n`authorId` is a bare id and there is no user expansion. Messaging owns no\nuser records and must not read Auth's tables (Conventions \u00a72); the browser\nresolves the name from Auth's own workspace directory, holding a token that\nalready entitles it to both.\n\n**`body` is `\"\"` on a deleted message, never `null` and never the original\ntext.** The redaction is server-side and the type stays non-null, so the\ngenerated TypeScript does not force a null check at every render site. The\nclient renders \"this message was deleted\" from `deletedAt`, not from an\nempty body.",
+        "properties": {
+          "attachments": {
+            "items": {
+              "format": "uuid",
+              "type": "string"
+            },
+            "title": "Attachments",
+            "type": "array"
+          },
+          "authorId": {
+            "format": "uuid",
+            "title": "Authorid",
+            "type": "string"
+          },
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "channelId": {
+            "format": "uuid",
+            "title": "Channelid",
+            "type": "string"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "title": "Createdat",
+            "type": "string"
+          },
+          "deletedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deletedat"
+          },
+          "editedAt": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Editedat"
+          },
+          "id": {
+            "format": "uuid",
+            "title": "Id",
+            "type": "string"
+          },
+          "threadRootId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threadrootid"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "channelId",
+          "authorId",
+          "threadRootId",
+          "body",
+          "attachments",
+          "createdAt",
+          "editedAt",
+          "deletedAt",
+          "version"
+        ],
+        "title": "MessageResponse",
+        "type": "object"
+      },
+      "SendMessageRequest": {
+        "description": "Say something in a channel.\n\nCarries the body and nothing else. No `channelId` \u2014 it is in the path; no\n`authorId` \u2014 it is the token's `sub`; no `threadRootId` and no\n`attachmentIds`, because accepting a field the service ignores is a claim it\ndoes not honour. Both arrive with the features that need them.\n\n`max_length` here is a static outer bound and **not** the rule \u2014 see\n`MAX_BODY_FIELD_LENGTH`.",
+        "properties": {
+          "body": {
+            "maxLength": 64000,
+            "title": "Body",
+            "type": "string"
+          }
+        },
+        "required": [
+          "body"
+        ],
+        "title": "SendMessageRequest",
+        "type": "object"
+      },
+      "UpdateChannelRequest": {
+        "description": "Rename a channel, or change its topic.\n\n`version` is required and is the version the client last read. The expected\nversion travels in the body rather than in an `If-Match` header: nothing on\nthis platform emits or parses an ETag, and the `Channel` DTO already carries\nthe number the SPA holds in its cache.\n\nThere is no `archivedAt`. Archiving is `DELETE /channels/{id}`, so no client\never writes a server clock into a timestamp column.\n\nAn absent `topic` leaves the topic alone; an explicit `null` clears it. The\nrouter tells them apart with `model_fields_set`, which is why the two cases\ndo not need two fields.",
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "topic": {
+            "anyOf": [
+              {
+                "maxLength": 500,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Topic"
+          },
+          "version": {
+            "title": "Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "version"
+        ],
+        "title": "UpdateChannelRequest",
         "type": "object"
       },
       "ValidationError": {
@@ -309,6 +578,48 @@
       }
     },
     "/api/v1/channels/{channel_id}": {
+      "delete": {
+        "description": "Archive a channel \u2014 the soft delete from spec \u00a74. Channel admins only.\n\nUnconditional and one-way. Every read in this service goes through\n`get_visible`, which filters `archived_at IS NULL`, so an archived channel\nand its messages are unreachable afterwards by anyone including the admin\nwho archived it. Archiving a second time is therefore a 404, which is\nconsistent rather than a case to special-case into a 204.\n\nThe archived channel is returned, since it is the last chance anyone gets to\nsee it and the SPA needs the row it is navigating away from. It is re-read\nwith `refresh` rather than through `get_visible`, which by now filters it\nout \u2014 that being the whole point of the write.",
+        "operationId": "archive_channel_api_v1_channels__channel_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Archive Channel",
+        "tags": [
+          "channels"
+        ]
+      },
       "get": {
         "description": "One channel, if the caller may know it exists.",
         "operationId": "get_channel_api_v1_channels__channel_id__get",
@@ -349,6 +660,491 @@
         "summary": "Get Channel",
         "tags": [
           "channels"
+        ]
+      },
+      "patch": {
+        "description": "Rename a channel, or change its topic. Channel admins only.\n\nThe response is re-read through `get_visible` rather than built from the\nobject in the session: the update went through Core, so the in-session row\nis stale and would report the old name back to the client that just changed\nit. What comes back is what was stored.",
+        "operationId": "update_channel_api_v1_channels__channel_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateChannelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Channel",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/v1/channels/{channel_id}/members": {
+      "get": {
+        "description": "Who is in a channel the caller can see.\n\nGuarded by visibility, not by membership \u2014 spec \u00a73.1 says \"channel member\",\nand taken literally that would let Grace see `#general` in her sidebar, read\nevery word in it, and get a 403 for asking who else is there. A private\nchannel is invisible to non-members already, so the only case this widens is\na public one, where the membership is not a secret from a workspace that can\nalready read the conversation.\n\nOrdered by user id, which is arbitrary to a human on purpose: Messaging\nholds no display names, so it has no meaningful order to offer. The panel\nsorts the page it receives.",
+        "operationId": "list_members_api_v1_channels__channel_id__members_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelMemberListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Members",
+        "tags": [
+          "channels"
+        ]
+      },
+      "post": {
+        "description": "Add someone to a channel. Channel admins only, including adding yourself.\n\nThere is no self-join in this scope: joining a channel is something an admin\ndoes to you, not something you do.",
+        "operationId": "add_member_api_v1_channels__channel_id__members_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AddChannelMemberRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelMemberResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Add Member",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/v1/channels/{channel_id}/members/{user_id}": {
+      "delete": {
+        "description": "Remove someone from a channel. Channel admins only.\n\nNothing else is revoked: channel membership is in no token, so unlike Auth's\nworkspace removal there are no sessions to end here. A reviewer who\nremembers that route will look for the equivalent \u2014 there is none to write.",
+        "operationId": "remove_member_api_v1_channels__channel_id__members__user_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "User Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Remove Member",
+        "tags": [
+          "channels"
+        ]
+      }
+    },
+    "/api/v1/channels/{channel_id}/messages": {
+      "get": {
+        "description": "A channel's history, newest first, cursor-paginated (Conventions \u00a74.1).\n\nDeleted messages are included, with their bodies redacted \u2014 the tombstone is\npart of the history, not something the client reconstructs.",
+        "operationId": "list_messages_api_v1_channels__channel_id__messages_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Messages",
+        "tags": [
+          "messages"
+        ]
+      },
+      "post": {
+        "description": "Say something in a channel the caller can see.\n\nSpec \u00a73.1 keeps this as the REST fallback once the Socket.IO send exists;\nboth call the same domain function, so the rules cannot drift between them.",
+        "operationId": "send_message_api_v1_channels__channel_id__messages_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Send Message",
+        "tags": [
+          "messages"
+        ]
+      }
+    },
+    "/api/v1/messages/{message_id}": {
+      "delete": {
+        "description": "Tombstone a message. The author, or an admin of its channel.\n\n**200 with the tombstoned message, not 204.** A delete here does not remove\na row from the list \u2014 it stays with `body: \"\"` and `deletedAt` set, and the\nclient has to render it. With 204 the client would have to refetch a page it\nis already holding to learn what to draw; with the row in hand it replaces\none entry in its cache. The same argument as returning the created row from\na `POST`, and a deliberate deviation from \"DELETE returns 204\" rather than a\nsurprise in the OpenAPI document.\n\nDeleting twice returns the same tombstone, unchanged.",
+        "operationId": "delete_message_api_v1_messages__message_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Delete Message",
+        "tags": [
+          "messages"
+        ]
+      },
+      "get": {
+        "description": "One message, if the caller can see the channel it is in.",
+        "operationId": "get_message_api_v1_messages__message_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Message",
+        "tags": [
+          "messages"
+        ]
+      },
+      "patch": {
+        "description": "Rewrite a message. **The author, and nobody else.**\n\nNot even a channel admin, who *can* delete this message. That asymmetry is\nthe point rather than an oversight: deleting someone's words is moderation,\nand rewriting them under their name is forgery.\n\n403 here and not 404, which is the opposite of the channel rules two files\nover \u2014 and correct. A message the caller cannot see never reaches this\ncheck; one they can see is already on their screen, so refusing the edit\ndiscloses nothing, and a 404 would be a lie about a row they are looking at.\n\nThere is no time window (register D8d).",
+        "operationId": "edit_message_api_v1_messages__message_id__patch",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "message_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Message Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EditMessageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Edit Message",
+        "tags": [
+          "messages"
         ]
       }
     },

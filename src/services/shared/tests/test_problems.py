@@ -12,7 +12,7 @@ from fastapi import FastAPI
 from fastapi import HTTPException as StarletteHTTPException
 from pydantic import BaseModel
 
-from shared import ProblemException, install_problem_handlers
+from shared import ProblemException, install_problem_handlers, problem_body
 
 TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
 
@@ -132,3 +132,58 @@ async def test_problem_exceptions_carry_their_response_headers(
 
     assert resp.status_code == 429
     assert resp.headers["Retry-After"] == "30"
+
+
+# --- the request-free body -------------------------------------------------
+#
+# `problem_body` is the document itself, buildable without a `Request`. A
+# Socket.IO handler has a refusal to describe and no request to describe it
+# from, and the alternative — a second error shape for sockets — would give the
+# platform two error vocabularies for one class of failure.
+
+
+def test_problem_body_carries_the_stable_type_and_the_detail() -> None:
+    body = problem_body(ProblemException.not_found("No such channel."))
+
+    assert body["type"] == "https://collabhub.dev/problems/not-found"
+    assert body["status"] == 404
+    assert body["detail"] == "No such channel."
+
+
+def test_problem_body_keeps_the_field_errors() -> None:
+    body = problem_body(
+        ProblemException.validation_error(
+            "Bad body.", errors={"body": ["A message cannot be empty."]}
+        )
+    )
+
+    assert body["errors"] == {"body": ["A message cannot be empty."]}
+
+
+def test_problem_body_omits_what_it_was_not_given() -> None:
+    """No invented trace id.
+
+    Conventions §4.2 describes `traceId` as the W3C trace id, so a generated one
+    that correlates with nothing in Tempo is worse than its absence — it looks
+    like a lead and is not.
+    """
+    body = problem_body(ProblemException.forbidden("Nope."))
+
+    assert "instance" not in body
+    assert "traceId" not in body
+
+
+async def test_the_http_envelope_is_unchanged_by_the_extraction() -> None:
+    """`problem_response` now builds on `problem_body`; the wire must not move.
+
+    This is the evidence the refactor was faithful — the same assertions the
+    HTTP tests above make, restated against the one path that changed.
+    """
+    transport = httpx.ASGITransport(app=_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get("/domain-error", headers={"traceparent": TRACEPARENT})
+
+    body = response.json()
+    assert body["instance"] == "/domain-error"
+    assert body["traceId"] == "4bf92f3577b34da6a3ce929d0e0e4736"
+    assert body["type"].startswith("https://collabhub.dev/problems/")

@@ -53,6 +53,22 @@ export async function problemFrom(response: Response): Promise<ProblemError> {
   )
 }
 
+/**
+ * Build a `ProblemError` from an already-parsed problem body.
+ *
+ * `problemFrom` above takes a `Response`; this takes the document on its own,
+ * because two callers have one but not the other: `openapi-fetch` hands back the
+ * parsed error body rather than the response, and a Socket.IO acknowledgement
+ * has no response at all. The server sends the same RFC 7807 document either
+ * way, so one parser is enough — which is the whole reason the socket ack
+ * carries a problem document rather than an error shape of its own.
+ */
+export function problemFromBody(status: number, body: unknown): ProblemError {
+  const parsed = (body ?? {}) as ProblemBody
+  const title = parsed.title ?? 'Something went wrong.'
+  return new ProblemError(status, parsed.detail ?? title, title, parsed.errors ?? {})
+}
+
 /** Turn a thrown value into something safe to show a user. */
 export function describeError(caught: unknown): string {
   return caught instanceof Error ? caught.message : 'Something went wrong.'
