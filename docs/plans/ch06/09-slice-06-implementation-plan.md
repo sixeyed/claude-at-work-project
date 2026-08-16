@@ -342,9 +342,30 @@ None of them is a scenario anyone could write honestly through a browser.
 
 ### A. BDD — `tests/bdd/`
 
-- `features/realtime.feature` — **extend** the file S5 created; do not add a second one, and do not
+**The Gherkin is already written, reviewed and merged**, for this slice and for slices 2 to 5
+together, against [`gherkin/00-scenario-vocabulary.md`](./gherkin/00-scenario-vocabulary.md). This
+slice's three scenarios are already in `realtime.feature` below S5's five, tagged `@pending @s6`.
+
+- **First build step: delete `@pending` from those three scenarios.** Keep `@s6` for now (see the
+  last bullet). They have been skipped throughout S5's build so this slice's contract could be
+  merged early without holding the suite red; S5's step module already calls `scenarios()` on the
+  whole file, so removing the tag is all it takes. Watch them fail for the right reason first.
+- `features/realtime.feature` — **do not add a second file and do not rewrite this one**; do not
   call `scenarios()` anywhere but S5's step module (ruling 6: two modules pointing at one feature
-  run every scenario twice).
+  run every scenario twice). **The narrative paragraph and `Background` are S5's** — this slice adds
+  neither; the optimistic-send and typing rules were folded into S5's paragraph when the Gherkin was
+  consolidated. Note that the rejected-send scenario now asserts the pending bubble appeared *and*
+  was withdrawn — that rollback, not the refusal, is what distinguishes it from S3's
+  over-8000-characters scenario.
+- **`steps/conftest.py` holds the shared steps** — S2 created it. The rejected-send scenario reuses
+  three steps S3 wrote (`tries to send a message of 8001 characters`, `is told the message is too
+  long`, `sees no messages in the channel`); if they are not already in `steps/conftest.py`, **move
+  them there rather than re-registering them** in `test_realtime_steps.py`. pytest-bdd cannot see a
+  step defined in a sibling `test_*.py`, and a second spelling of one act is exactly what ruling 14
+  exists to prevent.
+- **Last build step, once delivered and green: delete `@s6` from those three scenarios.** That is
+  the last `@pending`/`@sN` pair in the suite — after Slice 6 no feature file carries either tag,
+  and `pyproject.toml`'s `s2`–`s6` marker declarations can go with it.
 - `steps/test_realtime_steps.py` — **extend** S5's module with the new steps. Synchronous
   throughout; async work goes through the existing `_run_off_loop` helper (`tests/bdd/conftest.py:168`).
   No new fixture: `ada` and `grace` already give two long-lived signed-in contexts, and ruling 6

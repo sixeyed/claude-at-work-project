@@ -276,10 +276,26 @@ gap 7, and cross-workspace tenancy.
 
 ### A. Acceptance — `tests/bdd/`
 
-- `tests/bdd/features/messages.feature` — **extend**, do not create (ruling 6: S3 owns the file,
-  S4 extends it). Five scenarios, in a public channel with no membership step (gap 6). The
-  tombstone scenario reloads through `ChatPage.open()` before asserting, because "a tombstone
-  remains after reload" is the whole point of ruling 1.
+**The Gherkin is already written, reviewed and merged**, for this slice and for slices 2, 3, 5 and 6
+together, against [`gherkin/00-scenario-vocabulary.md`](./gherkin/00-scenario-vocabulary.md). This
+slice's five scenarios are already in `messages.feature` below S3's six, tagged `@pending @s4`.
+
+- **First build step: delete `@pending` from those five scenarios.** Keep `@s4` for now (see the
+  last bullet). They have been skipped throughout S3's build precisely so this slice's contract
+  could be merged early without holding the suite red; S3's step module already calls `scenarios()`
+  on the whole file, so removing the tag is all it takes to make them run. Watch them fail for the
+  right reason first.
+- `tests/bdd/features/messages.feature` — **do not create it and do not rewrite it** (ruling 6: S3
+  owns the file, S4 extends it, and the extension has already landed). The five scenarios are in a
+  public channel with no membership step (gap 6), and the tombstone scenario reloads through
+  `ChatPage.open()` before asserting, because "a tombstone remains after reload" is the whole point
+  of ruling 1. **The narrative paragraph and `Background` are S3's** — this slice adds neither; the
+  edit-and-delete rules were folded into S3's paragraph when the Gherkin was consolidated.
+- **`steps/conftest.py` holds the shared steps** — S2 created it. `Given Ada has sent "{body}" in
+  "{name}"` and the `Ada opens the "{name}" channel` / `Ada reloads CollabHub` family are S3's or
+  shared; reuse them rather than re-registering. New steps this slice's scenarios introduce go in
+  `test_message_steps.py`.
+- **Last build step, once delivered and green: delete `@s4` from those five scenarios.**
 - `tests/bdd/steps/test_message_steps.py` — **extend**. Already named `test_*` and already calls
   `scenarios("../features/messages.feature")`; **do not call `scenarios()` a second time** — two
   calls run every scenario twice (ruling 6). Mirror the shape of

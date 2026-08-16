@@ -59,6 +59,37 @@ SHARED_WORKSPACE = os.environ.get("AUTH_DEMO_WORKSPACE_NAME", "CollabHub Demo")
 #: Child table first — `channel_members` references `channels`.
 MESSAGING_TABLES = "channel_members, channels"
 
+#: Scenarios whose slice has not been built yet.
+#:
+#: The Gherkin for slices 2 to 6 was written and approved up front, all at once,
+#: so the contract for a slice exists before anyone writes code against it. The
+#: cost of that is a suite full of scenarios with no step definitions, which
+#: would be red from the moment they landed and stay red for weeks — and a suite
+#: that is expected to be red is one nobody reads. This tag is the answer: the
+#: scenarios are merged, visible and skipped.
+#:
+#: **Each slice's first build step is to delete this tag from its own scenarios**
+#: and watch them fail for the right reason. Nobody deletes it from anyone
+#: else's — a slice that un-ignores the next slice's scenarios has only made the
+#: suite red again, one slice earlier than before.
+PENDING_TAG = "pending"
+
+
+def pytest_bdd_apply_tag(tag: str, function: Callable[..., object]) -> object:
+    """Turn `@pending` into a skip; leave every other tag to pytest-bdd.
+
+    `pytest_bdd_apply_tag` is `firstresult=True`, so returning a value here
+    short-circuits the default implementation — which applies a marker of the
+    same name and lets the scenario run. Returning `None` for anything else
+    hands `@bdd` and `@smoke` back to that default untouched.
+    """
+    if tag != PENDING_TAG:
+        return None
+    return pytest.mark.skip(
+        reason=f"@{PENDING_TAG}: the slice that owns this scenario has not been built yet"
+    )(function)
+
+
 _UP = "    docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build\n"
 
 _STACK_HINT = (

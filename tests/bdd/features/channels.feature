@@ -4,13 +4,16 @@ Feature: Channels
   Conversation in CollabHub happens in channels. A channel belongs to exactly one
   workspace, and a public channel is visible to everyone in that workspace
   whether or not they have joined it — joining gates reading the messages, not
-  knowing the channel is there.
+  knowing the channel is there. A private channel is the other way round: only
+  the people in it know it is there at all.
 
   A channel name is something people type, say out loud and put in a URL: 3 to 80
   characters, letters, numbers and hyphens only, starting with a letter. Names
   are unique among the public channels in a workspace and case does not make two
   names different, so two people cannot both own #general — though the name is
-  kept as it was typed. Whoever creates a channel administers it.
+  kept as it was typed. Whoever creates a channel administers it, and an admin
+  can rename it — the new name follows it everywhere, for everyone — or archive
+  it, which puts it away and takes it out of the list for good.
 
   Background:
     Given Ada is signed in
@@ -70,3 +73,32 @@ Feature: Channels
     When Ada tries to create a public channel with an 81-character name
     Then Ada is told the name is too long
     And Ada's channel list is empty
+
+  @pending @s2
+  Scenario: A channel admin renames a channel
+    Given Ada has created a public channel named "general"
+    When Ada renames the channel to "general-chat"
+    Then Ada is looking at the "general-chat" channel
+    And "general-chat" is in Ada's channel list
+    But "general" is not in Ada's channel list
+
+  @pending @s2
+  Scenario: A rename is visible to everyone in the workspace
+    Given Ada has created a public channel named "general"
+    And Ada has renamed the channel to "general-chat"
+    When Grace opens CollabHub
+    Then "general-chat" is in Grace's channel list
+    But "general" is not in Grace's channel list
+
+  @pending @s2
+  Scenario: An admin archives a channel and it leaves the list
+    Given Ada has created a public channel named "general"
+    When Ada archives the channel
+    Then "general" is not in Ada's channel list
+
+  @pending @s2
+  Scenario: Ada creates a private channel and only she can see it
+    Given Ada has created a private channel named "launch-plans"
+    When Grace opens CollabHub
+    Then "launch-plans" is not in Grace's channel list
+    But "launch-plans" is in Ada's channel list

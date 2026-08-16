@@ -344,13 +344,36 @@ write (gap 1), the **409** on renaming into a taken name, the **409** last-admin
 
 ### A. BDD — `tests/bdd/`
 
-- `features/channels.feature` — append the four scenarios above to the existing file. Keep the
-  `Background: Given Ada is signed in`. The rename scenarios need a channel first, and
+**The Gherkin is already written, reviewed and merged** — for this slice and for slices 3 to 6, in
+one run, against [`gherkin/00-scenario-vocabulary.md`](./gherkin/00-scenario-vocabulary.md). Step 1
+of this slice is therefore not "write the scenarios" but "turn this slice's scenarios on".
+
+- **First build step: delete `@pending` from this slice's eight scenarios** — the four appended to
+  `features/channels.feature` and the four in `features/permissions.feature`, all tagged
+  `@pending @s2`. Leave `@s2` in place for now (see the last bullet) and **leave every other
+  slice's `@pending` alone**: un-ignoring `@s3` scenarios only makes the suite red one slice early.
+  Then run the suite and watch the eight fail for the right reason — missing step, missing
+  endpoint, not a broken harness.
+- `features/channels.feature` and `features/permissions.feature` — **do not rewrite them.** They
+  carry the approved contract, including the narrative paragraph and the single
+  `Background: Given Ada is signed in` each. Delivery-plan step 4 applies from here: never edit a
+  scenario to fit the implementation. The rename scenarios need a channel first, and
   `Given Ada has created a public channel named "…"` already exists
   (`steps/test_channel_steps.py:54`).
-- `features/permissions.feature` — new, the four permission scenarios. Its narrative paragraph
-  states the rule the file is about: a public channel is the workspace's, a private channel is its
-  members', and administering either takes a channel admin.
+- **`steps/conftest.py` — new, and this slice is the one that has to create it.** pytest-bdd
+  resolves a step from the module that calls `scenarios()` and from `conftest.py`, **not from a
+  sibling `test_*.py`**. `Given Ada is signed in` is in all four `Background`s and
+  `Given Ada has created a public channel named "{name}"` is in all four feature files, but both are
+  defined only in `test_channel_steps.py:47` and `:54` — so `test_permission_steps.py` cannot see
+  them. **Move the shared steps down into `tests/bdd/steps/conftest.py`** rather than copying them:
+  four copies of the two most-used steps in the suite is exactly the divergence ruling 6 exists to
+  prevent, and S3, S5 and S6 all hit it after this slice. Each `test_*.py` then holds only the steps
+  its own feature file introduces. Moving them changes no behaviour — `test_channel_steps.py`'s
+  scenarios must stay green across the move, which is the evidence it was faithful.
+- **Last build step, once the slice is delivered and green: delete `@s2` from those eight
+  scenarios.** The marker exists so a reviewer can read one slice's contract in isolation
+  (`uv run pytest tests/bdd -m s2 --collect-only -q`); a delivered slice does not need one, and a
+  marker left behind stops meaning anything.
 - `steps/test_channel_steps.py` — extend for the channels scenarios. **Named `test_*` and calling
   `scenarios("../features/channels.feature")` exactly once** (ruling 6) — it already does both;
   do not add a second call.
@@ -367,8 +390,16 @@ write (gap 1), the **409** on renaming into a taken name, the **409** last-admin
   `member_names() -> list[str]` · `add_member(display_name)` · `remove_member(display_name)` ·
   `channel_error()` — distinct from the existing `error_message()`, which reads the *create form's*
   errors and would silently pass on the wrong element.
-- `conftest.py` — **unchanged.** `MESSAGING_TABLES` is S3's to widen (ruling 6); the `ada` / `grace`
-  fixtures already cover this slice; no new fixture, and nothing signs out (gap 9).
+  `open_channel_name()` already exists (`chat_page.py:47`) and needs no Grace-specific variant — the
+  page object is per-user, so `Then Grace is looking at the "{name}" channel` is a new step
+  definition over an existing method, not a new method. That step is the one phrase this slice adds
+  beyond its drafted scenarios: ruling 32 extended "An admin adds a member to a private channel and
+  they can see it" so that something in the suite actually **opens** a private channel rather than
+  only finding it in a list.
+- `conftest.py` — **unchanged by this slice.** `MESSAGING_TABLES` is S3's to widen (ruling 6); the
+  `ada` / `grace` fixtures already cover this slice; no new fixture, and nothing signs out (gap 9).
+  It already carries `PENDING_TAG` and the `pytest_bdd_apply_tag` hook that turns `@pending` into a
+  skip — both landed with the Gherkin. Do not remove them: slices 3 to 6 still depend on them.
 
 ### B. Backend — `src/services/messaging/messaging/`
 

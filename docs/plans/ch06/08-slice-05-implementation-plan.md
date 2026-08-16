@@ -348,9 +348,27 @@ isolation between two connected sockets, and the publisher's no-op when `app.sta
 
 ### A. BDD — `tests/bdd/`
 
-- `features/realtime.feature` — new file, the five scenarios above. Written and approved at the
-  gate (step 1), not here. `scenarios("../features/realtime.feature")` is called from exactly one
-  module (ruling 6).
+**The Gherkin is already written, reviewed and merged**, for this slice and for slices 2, 3, 4 and 6
+together, against [`gherkin/00-scenario-vocabulary.md`](./gherkin/00-scenario-vocabulary.md). Step 1
+of this slice is "turn this slice's scenarios on", not "write them".
+
+- **First build step: delete `@pending` from this slice's five scenarios in
+  `tests/bdd/features/realtime.feature`** — they are tagged `@pending @s5`. Keep `@s5` for now (see
+  the last bullet). **Leave S6's three `@pending @s6` scenarios in the same file alone**: this slice
+  calls `scenarios()` on the whole file, so un-ignoring them would run three scenarios for a socket
+  write path this slice does not build. Watch the five fail for the right reason first.
+- `features/realtime.feature` — **do not create it and do not rewrite it.** It holds the approved
+  contract for this slice and for S6, with one narrative paragraph and one `Background`, both this
+  slice's. `scenarios("../features/realtime.feature")` is called from exactly one module (ruling 6).
+  Note the arrangement the review settled on: in the edit and delete scenarios **Ada sends before
+  Grace starts watching**, so Grace loads the original as history and the only live event is the one
+  in the scenario's title.
+- **`steps/conftest.py` holds the shared steps** — S2 created it, because pytest-bdd resolves a step
+  from the calling module and `conftest.py`, never from a sibling `test_*.py`. Reuse
+  `Given Ada has sent "{body}" in "{name}"` and the send/edit/delete family rather than
+  re-registering them in `test_realtime_steps.py`; put only what this slice's scenarios introduce
+  there.
+- **Last build step, once delivered and green: delete `@s5` from those five scenarios.**
 - `steps/test_realtime_steps.py` — new. Named `test_*` or pytest never collects it and the feature
   silently never runs (ruling 6). Mirrors `steps/test_channel_steps.py` exactly: `pytestmark =
   pytest.mark.bdd`, `scenarios(...)` at module top, `given`/`when`/`then` grouped with the same

@@ -291,9 +291,22 @@ Grace sees Ada's message after reloading *(the placeholder for S5's live version
 
 Staying at integration level and deliberately out of Gherkin: tenancy isolation (a workspace-A
 token reading a workspace-B channel's messages), 404-not-403 for a private channel the caller is
-not in, the exact `errors` map and problem `type` of each rejection, cursor mechanics and
-`nextCursor` going null on the last page, and the tombstone read path — which no endpoint can even
-produce until S4, so it is arranged with raw SQL.
+not in, **the positive private-channel case — a member of a private channel `GET`s and `POST`s its
+messages successfully** — the exact `errors` map and problem `type` of each rejection, cursor
+mechanics and `nextCursor` going null on the last page, and the tombstone read path — which no
+endpoint can even produce until S4, so it is arranged with raw SQL.
+
+**Why the private-channel read/write pair is here and not in Gherkin.** Ruling 12 makes
+`messages.py` guard on `channels.get_visible(...)` rather than `channels.is_member(...)`, and that
+is the mistake worth defending against — doc 02 §3.1 says "channel member", so a builder following
+it recreates the gap S1 closed. A **private channel with a member** cannot catch that mistake:
+`get_visible` and `is_member` both return true for them, so the scenario passes under either guard.
+The case that discriminates is **public plus non-member**, and the Gherkin already carries it twice
+— Grace reads `general` without joining it ("Grace sees Ada's message after reloading"), and S4
+arranges two messages by having Grace *post* to it. `get_visible` is `_visible_query` plus an id
+filter (`channels.py:199`), so there is no second visibility path a browser test could reach that
+these do not. What is left is worth a pair of integration cases and not a browser scenario:
+membership-gated visibility composing with the message routes.
 
 ---
 
@@ -301,8 +314,25 @@ produce until S4, so it is arranged with raw SQL.
 
 ### A. Gherkin and harness — `tests/bdd/`
 
-- `tests/bdd/features/messages.feature` — new file, the six scenario titles above fleshed out.
-  Written and approved at the 🛑 gate before anything below exists.
+**The Gherkin is already written, reviewed and merged**, for this slice and for slices 2, 4, 5 and 6
+together, against [`gherkin/00-scenario-vocabulary.md`](./gherkin/00-scenario-vocabulary.md). Step 1
+of this slice is "turn this slice's scenarios on", not "write them".
+
+- **First build step: delete `@pending` from this slice's six scenarios in
+  `tests/bdd/features/messages.feature`** — they are tagged `@pending @s3`. Keep `@s3` for now (see
+  the last bullet). **Leave S4's five `@pending @s4` scenarios in the same file alone**: this slice
+  calls `scenarios()` on the whole file, so un-ignoring them would run five scenarios for behaviour
+  this slice does not build and keep the suite red throughout. Then watch the six fail for the right
+  reason before writing code.
+- `tests/bdd/features/messages.feature` — **do not rewrite it.** It holds the approved contract for
+  this slice and for S4, with one narrative paragraph and one `Background`, both this slice's. Never
+  edit a scenario to fit the implementation (delivery-plan step 4).
+- **`steps/conftest.py` already exists** — S2 created it and moved the shared steps into it, because
+  pytest-bdd resolves a step from the calling module and `conftest.py`, never from a sibling
+  `test_*.py`. Put steps this slice's feature file introduces in `test_message_steps.py`, and any
+  step S4, S5 or S6 will also need in `steps/conftest.py`. **Do not re-register a step that is
+  already there** — a second spelling of one act is the defect the shared module exists to prevent.
+- **Last build step, once delivered and green: delete `@s3` from those six scenarios.**
 - `tests/bdd/steps/test_message_steps.py` — new. **Named `test_*`** (ruling 6): `scenarios()`
   generates one test function per scenario into the calling module, and a module pytest does not
   collect is a feature file that silently never runs. `pytestmark = pytest.mark.bdd`,
@@ -418,7 +448,10 @@ produce until S4, so it is arranged with raw SQL.
     reporting before the static `Field` bound; `GET /messages/{id}`; a **public channel the caller
     has never joined accepts a post and returns history** (ruling 12, and the fact Grace's scenario
     depends on); a private channel the caller is not in gives **404 with
-    `application/problem+json`**, not 403; an archived channel's messages are unreachable; and
+    `application/problem+json`**, not 403; **a private channel the caller *is* a member of accepts a
+    post and returns history** — the positive half of the same rule, and the only place it is
+    proved, since no Gherkin scenario puts messages in a private channel and the
+    "How the slice runs" note explains why; an archived channel's messages are unreachable; and
     `test_a_deleted_row_reads_back_redacted`, which sets `deleted_at` with raw SQL because no
     endpoint can yet, then asserts `body == ""` and `deletedAt` present.
   - `tests/test_pagination.py` — new. 120 messages, `?limit=50`, walk `nextCursor` to exhaustion:

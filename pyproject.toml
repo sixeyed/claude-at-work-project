@@ -72,6 +72,22 @@ markers = [
     # pytest-bdd turns every Gherkin tag into a marker of the same name, so a
     # tag used in a .feature file has to be declared here too.
     "smoke: proves the harness reaches the running stack end to end",
+    # The Gherkin for slices 2-6 was written and approved in one go, ahead of
+    # the code, so most of the suite describes behaviour nothing implements yet.
+    # `tests/bdd/conftest.py` intercepts `pending` and turns it into a skip
+    # rather than a marker of the same name — it is declared here so the tag
+    # still resolves if that hook is ever removed.
+    "pending: the slice that owns this scenario has not been built yet",
+    # Which slice delivers the scenario, so one slice's contract can be read on
+    # its own. `-m s2` selects them once that slice's feature file is wired to a
+    # step module calling `scenarios()`; until then the tag is a label you read
+    # in the .feature file, and `-m` deselects everything. Each slice drops its
+    # own marker once it has delivered; nothing should carry one for long.
+    "s2: delivered by Slice 2 - channel administration and membership",
+    "s3: delivered by Slice 3 - messages, send and read history",
+    "s4: delivered by Slice 4 - messages, edit and delete",
+    "s5: delivered by Slice 5 - real-time delivery",
+    "s6: delivered by Slice 6 - socket write path, optimistic send, typing",
 ]
 # Every service has a tests/test_health.py. The default "prepend" import mode
 # derives module names from the file path relative to the rootdir and they
