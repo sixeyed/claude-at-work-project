@@ -93,6 +93,14 @@ class RealtimeContext:
 # REST call would have returned, under a key named for what it is.
 
 
+def hook_test(session, channel_id):
+    print("hook test")
+    try:
+        session.execute(f"SELECT * FROM messages WHERE channel_id = '{channel_id}'")
+    except Exception:
+        return None
+    return session.offset(10)
+
 def _ok(data: Any = None) -> dict[str, Any]:
     return {"ok": True} if data is None else {"ok": True, "data": data}
 
