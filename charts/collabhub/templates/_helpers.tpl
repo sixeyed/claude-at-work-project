@@ -36,6 +36,24 @@ app.kubernetes.io/managed-by: {{ .root.Release.Service }}
 {{- end -}}
 
 {{/*
+Image reference for one component: `[registry/]repository:tag`. The tag is the
+component's own when set, else the release-wide image.tag, else appVersion — so
+one `--set image.tag` moves every component together, which is how
+scripts/deploy.sh deploys a build.
+
+Usage: {{ include "collabhub.image" (dict "root" $ "component" $component) }}
+*/}}
+{{- define "collabhub.image" -}}
+{{- $registry := .root.Values.image.registry -}}
+{{- $tag := .component.image.tag | default .root.Values.image.tag | default .root.Chart.AppVersion -}}
+{{- if $registry -}}
+{{- printf "%s/%s:%s" $registry .component.image.repository $tag -}}
+{{- else -}}
+{{- printf "%s:%s" .component.image.repository $tag -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 app.kubernetes.io/component is what keeps one component's Deployment from
 selecting another's pods — every component shares the name and instance labels.
 */}}

@@ -1,0 +1,8 @@
+apiVersion: v2
+name: collabhub-local
+description: >-
+  DEV ONLY. What CollabHub needs around it on a local k3d cluster — data stores,
+  Dex, Secrets and a single-origin Ingress. Never install it anywhere else.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -183,6 +183,8 @@ this file so the same release is never announced twice.
   notes: >
     N-2 support policy; supported minors are 1.36, 1.35, 1.34. v1.37 expected 2026-08-26.
     Managed clusters (AKS/EKS/GKE) lag upstream — align to the platform's offered versions.
+    The local k3d cluster pins its k3s image to this track in scripts/k3d/cluster.yaml
+    (rancher/k3s:v1.36.4-k3s1) — move it when pinned_track moves.
 
 - id: otel-collector
   name: OpenTelemetry Collector

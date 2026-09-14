@@ -1,0 +1,42 @@
+# The local Kubernetes cluster `scripts/deploy.sh cluster` creates.
+#
+# k3s is pinned to the Kubernetes track in docs/platform/versions.md — move this
+# when that entry moves, not before.
+apiVersion: k3d.io/v1alpha5
+kind: Simple
+metadata:
+  name: collabhub
+servers: 1
+agents: 0
+image: rancher/k3s:v1.36.4-k3s1
+
+ports:
+  # The only published port. Traefik (bundled with k3s) serves the Ingress from
+  # charts/collabhub-local here: the SPA, the APIs and Dex on one origin.
+  - port: 127.0.0.1:8080:80
+    nodeFilters:
+      - loadbalancer
+
+registries:
+  # Created with the cluster and deleted with it. k3d names the container exactly
+  # this — unlike nodes, a registry created from a config file gets no `k3d-`
+  # prefix — and that name is its hostname on the cluster network.
+  create:
+    name: collabhub-registry
+    host: 127.0.0.1
+    hostPort: "5500"
+  # The mirror is what lets one image name work on both sides. The host pushes
+  # to localhost:5500; inside a node, localhost is the node itself, so without
+  # this every pull of localhost:5500/... would fail.
+  config: |
+    mirrors:
+      "localhost:5500":
+        endpoint:
+          - http://collabhub-registry:5000
+
+options:
+  kubeconfig:
+    updateDefaultKubeconfig: true
+    # Never take over the developer's current context — it may be a real
+    # cluster, and a later bare `kubectl apply` would land here by surprise.
+    switchCurrentContext: false

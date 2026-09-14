@@ -1,0 +1,52 @@
+{{- $component := .Values.components.auth }}
+{{- if $component.enabled }}
+{{- /* Its own component label, so neither the Service nor the Deployment selects this pod. */}}
+{{- $ctx := dict "root" $ "name" "auth-migrate" }}
+# Migrations are a deployment step, not a startup step: replicas rolling out
+# together must not each run them (docker/auth/entrypoint.sh). Helm runs this
+# before it installs or upgrades anything else and waits for it, so no new pod
+# ever starts against an old schema.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "collabhub.componentFullname" $ctx }}
+  labels:
+    {{- include "collabhub.labels" $ctx | nindent 4 }}
+  annotations:
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "collabhub.selectorLabels" $ctx | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml ($component.podSecurityContext | default $.Values.defaults.podSecurityContext) | nindent 8 }}
+      containers:
+        - name: migrate
+          image: {{ include "collabhub.image" (dict "root" $ "component" $component) | quote }}
+          imagePullPolicy: {{ $.Values.imagePullPolicy }}
+          securityContext:
+            {{- toYaml ($component.containerSecurityContext | default $.Values.defaults.containerSecurityContext) | nindent 12 }}
+          # The entrypoint skips its own migration (RUN_MIGRATIONS is false) and
+          # execs these args, so the migration is the whole of this container.
+          args: ["python", "-m", "auth.migrate"]
+          # Inline rather than the component's ConfigMap: a pre-install hook runs
+          # before any of the release's other resources exist.
+          env:
+            {{- range $key, $value := $component.env }}
+            - name: {{ $key }}
+              value: {{ $value | quote }}
+            {{- end }}
+          envFrom:
+            {{- range $component.envFromSecrets }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          resources:
+            {{- toYaml ($component.resources | default $.Values.defaults.resources) | nindent 12 }}
+{{- end }}

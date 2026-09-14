@@ -1,0 +1,80 @@
+# charts/collabhub-local — what CollabHub needs around it on a local k3d cluster,
+# and nothing more. Installed by `scripts/deploy.sh infra`, before the app chart.
+#
+# DEV ONLY. Every credential below is a throwaway, Dex is full of demo accounts,
+# and nothing is backed up. scripts/deploy.sh refuses to install this into any
+# context but k3d-collabhub. Do not install it by hand anywhere else.
+#
+# charts/collabhub deliberately leaves the data stores, Secrets and Ingress to
+# each environment. This chart is the local environment's answer to all three.
+#
+# Images match docker-compose.yml; both follow docs/platform/versions.md. The
+# credentials repeat .env.example, which cannot be read directly: it carries
+# Compose hostnames and `$$` escaping.
+
+# The app chart's release. Its Services are `<release>-<component>`, and its
+# `envFromSecrets` expects Secrets with the same names.
+appRelease: collabhub
+
+# The one origin the browser uses: k3d's load balancer (scripts/k3d/cluster.yaml).
+# Dex's issuer and every redirect URI are built from it.
+origin: http://localhost:8080
+
+postgres:
+  image: postgres:18
+  user: collabhub
+  password: collabhub
+  storage: 5Gi
+  # Supplied with --set-file from docker/postgres/init.sql, so the list of
+  # databases lives in one place.
+  initSql: ""
+
+redis:
+  image: redis:8
+  # Three instances, not interchangeable (Conventions §7). The names match
+  # docker-compose.yml, so the URLs match .env.example. Only streams persists —
+  # an unacked job is work; a cache and a backplane are not.
+  instances:
+    - name: redis-cache
+      persistent: false
+    - name: redis-rt
+      persistent: false
+    - name: redis-streams
+      persistent: true
+  storage: 1Gi
+
+elasticsearch:
+  image: docker.elastic.co/elasticsearch/elasticsearch:9.4.3
+  heap: 512m
+
+garage:
+  image: dxflrs/garage:v2.3.0
+  # Supplied with --set-file from docker/garage/garage.toml.
+  config: ""
+  # Must equal `admin_token` in docker/garage/garage.toml.
+  adminToken: collabhub-local-admin-token
+  storage: 2Gi
+  bucket: collabhub-assets
+  # Garage only accepts keys in its own format — `GK` plus 24 hex digits, and a
+  # 64-hex-digit secret — so .env.example's `collabhub-local` cannot be imported.
+  accessKeyId: GK00000000000000000c011ab0 # gitleaks:allow — local dev key
+  secretAccessKey: "00000000000000000000000000000000000000000000000000000000c011ab00" # gitleaks:allow
+  # The bootstrap Job talks to Garage's admin API from Python. The Garage image
+  # has no shell, and this image is already pulled for every service.
+  bootstrapImage: python:3.12-slim
+
+dex:
+  image: ghcr.io/dexidp/dex:v2.45.1
+  clientSecret: collabhub-local-secret
+  # bcrypt of the shared password "collabhub". Single `$`s: the doubling in
+  # .env.example is Compose escaping and does not apply here.
+  passwordHash: "$2b$10$AjNda/ZYuDZgz2nQA9lAPOb3Y.uGW4xYCWXG8wTfnyb9KjviceU/S"
+
+otelCollector:
+  image: otel/opentelemetry-collector-contrib:0.156.0
+  # Supplied with --set-file from docker/otel-collector/config.yaml.
+  config: ""
+
+# The Worker's client-credentials secret (Conventions §5.5). Auth checks it, the
+# Worker sends it, so both Secrets take it from here.
+workerClientSecret: worker-local-secret

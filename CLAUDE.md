@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-CollabHub — team chat + collaborative canvas. Five Python backend services and a React SPA, specified in `docs/design/` and being built out from that spec. Run locally with Docker Compose; deploy to Kubernetes with Helm.
+CollabHub — team chat + collaborative canvas. Five Python backend services and a React SPA, specified in `docs/design/` and being built out from that spec. Run locally with Docker Compose; deploy to Kubernetes with Helm — locally to k3d through `scripts/deploy.sh`.
 
 **Read `docs/design/00-platform-conventions.md` before writing or changing any service code.** It is the authoritative cross-service contract (errors, pagination, auth, IDs, jobs, config, observability). Where a per-service doc disagrees with it, it wins. Per-service specs are `docs/design/01`–`06`.
 
@@ -20,8 +20,16 @@ docker/                 # one folder per component, holding its Dockerfile and a
 docker-compose.yml      # repo root — Postgres, 3x Redis, Garage, Elasticsearch, OTel collector
 docker-compose.test.yml # override: a second, throwaway stack for tests/bdd
 charts/collabhub/       # a single Helm chart for the whole app
+charts/collabhub-local/ # DEV ONLY — data stores, Dex, Secrets, Ingress for the local k3d cluster
+scripts/                # build.sh, test.sh, deploy.sh — developers and CI call the same ones
 docs/
 ```
+
+**`scripts/` is the entry point for building, checking and deploying.** CI runs the
+same scripts, so a step that only exists in a pipeline file, or only in the README,
+is a bug. They are bash 3.2-compatible (macOS), share `scripts/lib/common.sh`, and
+take their overridable settings — `IMAGE_REGISTRY`, `IMAGE_TAG`, `KUBE_CONTEXT` —
+from the environment.
 
 Per-service tests live beside their service (`src/services/*/tests/`). Only the
 Gherkin suite is at the root, because it spans every service at once. Note that
@@ -32,6 +40,8 @@ root suite avoids the clash by being importable as `bdd.*` (`pythonpath = ["test
 `charts/collabhub` has **dedicated templates per component** under `templates/<component>/`, not one set of templates ranging over a values map. They start near-identical and are expected to diverge — the Worker needs a KEDA `ScaledObject`, the real-time services need session affinity, the frontend has no ConfigMap.
 
 The chart deploys CollabHub's own workloads only. Postgres, Redis, Elasticsearch and Garage are expected to exist already; bundling them would make `helm uninstall` a data-loss command. There is no Ingress in the chart — routing is per-environment, and `/api/v1/internal/` must never be reachable from the public one.
+
+`charts/collabhub-local` is the local k3d environment's answer to all of that — the data stores, Dex, the Secrets the app chart's `envFromSecrets` names, and a single-origin Ingress. **It is development only and must never be installed anywhere else**: throwaway credentials, demo accounts, no backups. `scripts/deploy.sh` refuses any context but `k3d-collabhub`. Its Dex config is a third copy beside `docker/dex/config.yaml` and `config.test.yaml` — change all three together. Gaps a deploy finds in `charts/collabhub` get fixed in that chart, never worked around in the scripts or the local chart.
 
 Service names drop the `collabhub-` prefix used in the design docs (`src/services/auth`, not `collabhub-auth`).
 
@@ -140,8 +150,9 @@ Alembic per service, against that service's own database only (`alembic upgrade 
 commands below run the suites that already exist.
 
 ```bash
-uv run pytest -m "not integration and not bdd"   # fast, no Docker
-uv run pytest src/services/messaging             # integration; starts its own containers
+scripts/test.sh                  # lint, unit, integration — what CI runs
+scripts/test.sh unit             # fast, no Docker
+scripts/test.sh integration -- src/services/messaging   # starts its own containers
 ```
 
 The `tests/bdd` suite is different from both: it drives a real browser and needs

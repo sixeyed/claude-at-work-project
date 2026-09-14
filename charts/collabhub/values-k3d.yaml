@@ -1,0 +1,51 @@
+# charts/collabhub on the local k3d cluster. Layered over values.yaml by
+# scripts/deploy.sh, which also sets image.registry and image.tag.
+#
+# The Secrets, data stores, Dex and the Ingress this expects come from
+# charts/collabhub-local. The browser reaches everything on one origin,
+# http://localhost:8080, so CORS_ALLOWED_ORIGINS stays unset.
+
+# A build from a dirty worktree reuses its tag, so never trust a cached image.
+imagePullPolicy: Always
+
+components:
+  auth:
+    # Two on purpose: both replicas must sign with the one key in the Secret and
+    # publish the same JWKS, and one replica would never show it if they didn't.
+    replicaCount: 2
+    env:
+      # `local` gives every account the shared demo workspace.
+      APP_ENV: local
+      LOG_LEVEL: debug
+      AUTH_ISSUER: http://localhost:8080
+      SPA_REDIRECT_URI: http://localhost:8080/auth/callback
+
+  messaging:
+    # Two, so real-time delivery crosses pods through the R2 backplane.
+    replicaCount: 2
+    env:
+      APP_ENV: local
+      LOG_LEVEL: debug
+      AUTH_ISSUER: http://localhost:8080
+
+  canvas:
+    replicaCount: 1
+    env:
+      APP_ENV: local
+      LOG_LEVEL: debug
+      AUTH_ISSUER: http://localhost:8080
+
+  asset:
+    replicaCount: 1
+    env:
+      APP_ENV: local
+      LOG_LEVEL: debug
+      AUTH_ISSUER: http://localhost:8080
+
+  worker:
+    env:
+      APP_ENV: local
+      LOG_LEVEL: debug
+
+  frontend:
+    replicaCount: 1

@@ -1,0 +1,147 @@
+{{- $ctx := dict "root" $ "name" "garage" }}
+{{- $garage := .Values.garage }}
+# Garage — S3-compatible object storage, behind the ObjectStore protocol.
+#
+# A fresh Garage serves no S3 traffic until a layout is assigned, and has no
+# bucket or key. The bootstrap Job at the bottom does that on every install and
+# upgrade, so nothing here needs the manual steps README.md gives for Compose.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garage
+  labels:
+    {{- include "collabhub-local.labels" $ctx | nindent 4 }}
+data:
+  garage.toml: |
+    {{- required "garage.config is empty: pass --set-file garage.config=docker/garage/garage.toml, as scripts/deploy.sh does" $garage.config | nindent 4 }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: garage
+  labels:
+    {{- include "collabhub-local.labels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "collabhub-local.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: s3
+      port: 3900
+      targetPort: s3
+    - name: admin
+      port: 3903
+      targetPort: admin
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: garage
+  labels:
+    {{- include "collabhub-local.labels" $ctx | nindent 4 }}
+spec:
+  serviceName: garage
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "collabhub-local.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        checksum/config: {{ $garage.config | sha256sum }}
+      labels:
+        {{- include "collabhub-local.selectorLabels" $ctx | nindent 8 }}
+    spec:
+      containers:
+        - name: garage
+          image: {{ $garage.image }}
+          ports:
+            - name: s3
+              containerPort: 3900
+            - name: admin
+              containerPort: 3903
+          # The admin port, not /health: Garage reports unhealthy until a layout
+          # exists, and the layout is assigned by a Job that waits for this pod.
+          readinessProbe:
+            tcpSocket:
+              port: admin
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/garage.toml
+              subPath: garage.toml
+              readOnly: true
+            - name: data
+              mountPath: /var/lib/garage/meta
+              subPath: meta
+            - name: data
+              mountPath: /var/lib/garage/data
+              subPath: data
+      volumes:
+        - name: config
+          configMap:
+            name: garage
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ $garage.storage }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: garage-bootstrap
+  labels:
+    {{- include "collabhub-local.labels" $ctx | nindent 4 }}
+data:
+  garage-bootstrap.py: |
+    {{- .Files.Get "files/garage-bootstrap.py" | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: garage-bootstrap
+  labels:
+    {{- include "collabhub-local.labels" (dict "root" $ "name" "garage-bootstrap") | nindent 4 }}
+  annotations:
+    # After install, so Garage and the script's ConfigMap already exist; Helm
+    # waits for it, so the release is not "deployed" until storage is usable.
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: 300
+  template:
+    metadata:
+      labels:
+        {{- include "collabhub-local.selectorLabels" (dict "root" $ "name" "garage-bootstrap") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bootstrap
+          image: {{ $garage.bootstrapImage }}
+          command: ["python", "/bootstrap/garage-bootstrap.py"]
+          env:
+            - name: GARAGE_ADMIN_URL
+              value: http://garage:3903
+            - name: GARAGE_ADMIN_TOKEN
+              value: {{ $garage.adminToken | quote }}
+            - name: GARAGE_BUCKET
+              value: {{ $garage.bucket | quote }}
+            - name: GARAGE_ACCESS_KEY_ID
+              value: {{ $garage.accessKeyId | quote }}
+            - name: GARAGE_SECRET_ACCESS_KEY
+              value: {{ $garage.secretAccessKey | quote }}
+            # What the node advertises to the layout, not a quota. 1 GiB.
+            - name: GARAGE_CAPACITY_BYTES
+              value: "1073741824"
+          volumeMounts:
+            - name: script
+              mountPath: /bootstrap
+              readOnly: true
+      volumes:
+        - name: script
+          configMap:
+            name: garage-bootstrap

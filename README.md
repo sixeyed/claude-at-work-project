@@ -103,27 +103,33 @@ src/frontend/     React + TypeScript SPA (Vite)
 tests/bdd/        The Gherkin acceptance suite — it spans every service, so it lives here
 docker/           One folder per component: its Dockerfile and any files it needs
 charts/collabhub/ Helm chart covering every component
+charts/collabhub-local/  DEV ONLY: data stores, Dex, Secrets and Ingress for the local k3d cluster
+scripts/          build.sh, test.sh, deploy.sh — the same entry points CI uses
 .claude/skills/   Project skills: adr-writer, stack-update-checker
 ```
 
 ## Running it locally
 
-Prerequisites: [uv](https://docs.astral.sh/uv/), Node 24, Docker.
+Prerequisites: [uv](https://docs.astral.sh/uv/), Node 24, Docker. Deploying to Kubernetes
+also needs [k3d](https://k3d.io), Helm and kubectl.
 
 ```bash
 cp .env.example .env   # nothing in it is a real secret
-uv sync                # one workspace, one lockfile
-uv run pytest          # unit + integration tests (integration needs Docker)
-uv run ruff check . && uv run ruff format --check .
+scripts/test.sh        # lint, unit, then integration (integration needs Docker)
 ```
 
-Integration tests start real Postgres, Redis and Dex containers (Conventions §11). The `bdd`
-suite is different again — it needs the whole Compose stack already running (see below). To
-run only what needs no Docker at all:
+`scripts/test.sh` is the one entry point for checks, and CI runs it too. Name layers to run
+fewer — `lint` is ruff, the CollabHub convention checks, eslint, tsc and `helm lint`; `unit`
+needs no Docker; `integration` starts real Postgres, Redis and Dex containers (Conventions
+§11). Anything after `--` goes to pytest:
 
 ```bash
-uv run pytest -m "not integration and not bdd"
+scripts/test.sh unit                 # fast, no Docker
+scripts/test.sh lint unit -- -x      # stop at the first failure
 ```
+
+The `bdd` suite is not part of it — it needs a whole Compose stack already running (see
+[Acceptance tests](#acceptance-tests)).
 
 Bring up the full stack — Postgres, the three Redis instances, Dex, Garage, Elasticsearch,
 the OTel collector, all five services and the SPA:
@@ -222,14 +228,43 @@ docker compose exec garage /garage bucket allow --read --write collabhub-assets 
 ```
 
 Put the key ID and secret it prints into `OBJECT_STORE_ACCESS_KEY` / `_SECRET_KEY` in `.env`.
-Nothing reads them yet — the Asset service has no object-storage code.
+Nothing reads them yet — the Asset service has no object-storage code. The k3d deployment
+below does all of this for you.
 
-### Deploying
+### Deploying to Kubernetes
+
+`scripts/build.sh` and `scripts/deploy.sh` build the images and install the Helm chart into a
+local [k3d](https://k3d.io) cluster — the same scripts CI will run:
 
 ```bash
-helm lint charts/collabhub
-helm template collabhub charts/collabhub
+scripts/test.sh && scripts/build.sh --push && scripts/deploy.sh
 ```
+
+Then open <http://localhost:8080> and sign in as `ada@collabhub.dev` / `collabhub`, as above.
+Everything is on that one origin: the SPA, every public API and Dex, behind the Traefik
+Ingress k3s ships with.
+
+| | |
+|---|---|
+| `scripts/build.sh [component...] [--push]` | Builds `localhost:5500/collabhub/<component>:<tag>`. The tag is the short commit SHA, plus `-dirty` for uncommitted changes |
+| `scripts/deploy.sh cluster` | Creates the `collabhub` k3d cluster (k3s pinned to `versions.md`) and its registry on `localhost:5500` |
+| `scripts/deploy.sh infra` | Installs `charts/collabhub-local`: Postgres, three Redis, Elasticsearch, Garage (bootstrapped), Dex, the OTel collector, the Secrets and the Ingress |
+| `scripts/deploy.sh app` | Installs `charts/collabhub` at the current tag. Migrations run as Helm hook Jobs before any pod rolls |
+| `scripts/deploy.sh` | All three, in order. Idempotent — re-run it to upgrade |
+| `scripts/deploy.sh status` / `down` | What is running / delete the cluster, its registry and **all its data** |
+
+The scripts never use your current kubectl context. Every call names `k3d-collabhub`, creating
+the cluster does not switch to it, and `cluster`, `infra` and `down` refuse to run against
+anything else. `IMAGE_REGISTRY`, `IMAGE_TAG` and `KUBE_CONTEXT` override the defaults — see
+`.env.example`.
+
+k3d and the Compose development stack can run at the same time, but that is two of
+everything, Elasticsearch included — give Docker the memory for it.
+
+`charts/collabhub-local` is **development only**: its credentials are throwaway, its Dex is full
+of demo accounts, and nothing in it is backed up. Never install it anywhere else.
+
+### What the chart expects of an environment
 
 The chart deploys CollabHub's own workloads only. Postgres, Redis, Elasticsearch and Garage
 are expected to exist already — they have their own lifecycle and backups, and bundling them

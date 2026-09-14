@@ -1,0 +1,23 @@
+# Every image builds with the repo root as its context (the uv lockfile is
+# workspace-wide), so without this the whole checkout is sent to the builder.
+#
+# node_modules is the one that breaks things rather than just slowing them:
+# docker/frontend/Dockerfile runs `npm install` and then `COPY src/frontend/`,
+# which would lay the host's node_modules — macOS binaries for esbuild and
+# rollup — over the Linux ones it just installed.
+**/node_modules
+**/dist
+**/__pycache__
+**/*.pyc
+.venv
+.git
+.pytest_cache
+.ruff_cache
+.claude
+docs
+tests
+
+# Never send local secrets into a build context.
+.env
+.env.*
+*.pem
