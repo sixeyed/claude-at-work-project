@@ -412,6 +412,10 @@ Real-time runs on the Socket.IO `/messaging` namespace (Conventions §6). Client
 events are verbs; server→client events are past-tense facts. `send_message` returns the
 created `Message` via the Socket.IO acknowledgement callback.
 
+**WebSocket only — added 2026-09-14 (register D29).** `build_server` passes
+`transports=["websocket"]`, so a long-polling handshake is refused rather than served, and
+the chart sets no session affinity. See Conventions §6.
+
 **Client → Server**
 
 | Event | Args | Effect |

@@ -1,17 +1,22 @@
 {{- $component := .Values.components.worker }}
 {{- if $component.enabled }}
-{{- $ctx := dict "root" $ "name" "worker" }}
-# Replica count is a floor. Real scaling is KEDA's job, driven by
-# pendingEntriesCount per stream (design doc 05 §5.3); the ScaledObject belongs
-# in this directory when it lands, and should then own replicas instead.
+{{- range $poolName, $pool := $component.pools }}
+{{- $ctx := dict "root" $ "name" "worker" "pool" $poolName }}
+---
+# One Deployment per pool (register D17). Pools share image, ConfigMap and
+# secret, and differ only in WORKER_STREAMS. With autoscaling enabled KEDA owns
+# replicas through scaledobject.yaml, so spec.replicas is omitted — otherwise
+# every `helm upgrade` would reset what the HPA had set.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "collabhub.componentFullname" $ctx }}
+  name: {{ include "collabhub.poolFullname" $ctx }}
   labels:
     {{- include "collabhub.labels" $ctx | nindent 4 }}
 spec:
+  {{- if not $component.autoscaling.enabled }}
   replicas: {{ $component.replicaCount | default 1 }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "collabhub.selectorLabels" $ctx | nindent 6 }}
@@ -38,6 +43,9 @@ spec:
             - name: http
               containerPort: {{ $component.port }}
               protocol: TCP
+          env:
+            - name: WORKER_STREAMS
+              value: {{ join "," $pool.streams | quote }}
           envFrom:
             - configMapRef:
                 name: {{ include "collabhub.componentFullname" $ctx }}
@@ -57,4 +65,5 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml ($component.resources | default $.Values.defaults.resources) | nindent 12 }}
+{{- end }}
 {{- end }}

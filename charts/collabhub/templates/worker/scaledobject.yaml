@@ -1,0 +1,49 @@
+{{- $component := .Values.components.worker }}
+{{- if and $component.enabled $component.autoscaling.enabled }}
+{{- if not ($.Capabilities.APIVersions.Has "keda.sh/v1alpha1") }}
+{{- fail "components.worker.autoscaling.enabled is true, but this cluster has no keda.sh/v1alpha1 API. Install KEDA, set components.worker.autoscaling.enabled=false, or render offline with --api-versions keda.sh/v1alpha1." }}
+{{- end }}
+{{- $scaling := $component.autoscaling }}
+{{- range $poolName, $pool := $component.pools }}
+{{- $ctx := dict "root" $ "name" "worker" "pool" $poolName }}
+---
+# lagCount, not pendingEntriesCount (doc 05 §5.3). Pending entries are ones a
+# consumer has read and not acked: with zero pods nothing is read, the count
+# stays 0, and a pool at zero never wakes. Lag is what the group has not read
+# yet — the only Redis Streams metric KEDA can scale from zero on. Redis 7+.
+# One trigger per stream; the HPA follows whichever asks for the most pods.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: {{ include "collabhub.poolFullname" $ctx }}
+  labels:
+    {{- include "collabhub.labels" $ctx | nindent 4 }}
+spec:
+  scaleTargetRef:
+    name: {{ include "collabhub.poolFullname" $ctx }}
+    # addressFromEnv resolves against this container's env, ConfigMap included.
+    envSourceContainerName: worker
+  minReplicaCount: {{ $pool.minReplicas }}
+  maxReplicaCount: {{ $pool.maxReplicas }}
+  pollingInterval: {{ $scaling.pollingInterval }}
+  cooldownPeriod: {{ $scaling.cooldownPeriod }}
+  # Not for a missing consumer group — KEDA reads that as a real (if wrong)
+  # lag, never an error, so this never engages there. It's for Redis being
+  # unreachable or the trigger's auth failing (plan 01, "Known gap").
+  fallback:
+    failureThreshold: 3
+    replicas: 1
+  triggers:
+    {{- range $pool.streams }}
+    - type: redis-streams
+      metadata:
+        addressFromEnv: REDIS_STREAMS_ADDRESS
+        stream: {{ . | quote }}
+        consumerGroup: {{ $scaling.consumerGroup | quote }}
+        lagCount: {{ $scaling.lagCount | quote }}
+        activationLagCount: "0"
+      authenticationRef:
+        name: {{ include "collabhub.componentFullname" $ctx }}
+    {{- end }}
+{{- end }}
+{{- end }}

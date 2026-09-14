@@ -39,8 +39,8 @@ Service directories drop the `collabhub-` prefix used elsewhere in these docs
 
 **One chart, with dedicated templates per component** under `templates/<component>/` —
 not one set of templates ranging over a values map. They start near-identical and are
-expected to diverge: the Worker needs a KEDA `ScaledObject`, the real-time services need
-session affinity, the frontend has no ConfigMap. The chart deploys CollabHub's own workloads
+expected to diverge: the Worker runs as KEDA-scaled pools, every component has its own
+NetworkPolicy, the frontend has no ConfigMap. The chart deploys CollabHub's own workloads
 only; Postgres, Redis, Elasticsearch and Garage are expected to exist already, because
 bundling them would make `helm uninstall` a data-loss command.
 
@@ -273,8 +273,12 @@ Services that expose real-time features host a **Socket.IO** server (the `python
 ASGI server, mounted alongside FastAPI on the same Uvicorn process) backed by the **Redis
 Real-time backplane (R2)** so that any pod can serve any client.
 
-- **Transport:** WebSockets preferred, automatic fallback to HTTP long-polling
-  (Socket.IO default). The browser uses `socket.io-client`.
+- **Transport:** WebSocket only — **decided 2026-09-14 (register D29).** Servers pass
+  `transports=["websocket"]` and clients `transports: ['websocket']`; there is no HTTP
+  long-polling fallback. A polling session needs every request on one pod, which neither a
+  Service's `sessionAffinity` (bypassed by ingress-nginx) nor the R2 backplane provides, so
+  refusing polling removes the need for affinity anywhere. Cost: a network that blocks
+  WebSockets cannot connect. The browser uses `socket.io-client`.
 - **Auth:** the access token is passed in the Socket.IO handshake `auth` payload
   (`io(url, { auth: { token } })`); a query-string `access_token` is accepted as a fallback.
   The server validates it in the `connect` handler the same way as REST.

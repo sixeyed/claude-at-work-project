@@ -1,0 +1,33 @@
+{{- $component := .Values.components.worker }}
+{{- if and $component.enabled .Values.networkPolicy.enabled }}
+{{- $ctx := dict "root" $ "name" "worker" }}
+# Worker — one policy for every pool: the selector carries no collabhub.io/pool.
+# Nothing may reach it; its port answers kubelet probes only, which come from
+# the node. Reaches R3, Elasticsearch, the object store, Auth for service
+# tokens, and the internal endpoints of Messaging, Canvas and Asset.
+# No notification providers yet: channels are undecided (register D18).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "collabhub.componentFullname" $ctx }}
+  labels:
+    {{- include "collabhub.labels" $ctx | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "collabhub.selectorLabels" $ctx | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress: []
+  egress:
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "worker" "peer" "dns") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "worker" "peer" "redisStreams") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "worker" "peer" "elasticsearch") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "worker" "peer" "objectStore") | nindent 4 }}
+    {{- include "collabhub.egressToComponent" (dict "root" $ "target" "auth") | nindent 4 }}
+    {{- include "collabhub.egressToComponent" (dict "root" $ "target" "messaging") | nindent 4 }}
+    {{- include "collabhub.egressToComponent" (dict "root" $ "target" "canvas") | nindent 4 }}
+    {{- include "collabhub.egressToComponent" (dict "root" $ "target" "asset") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "worker" "peer" "otelCollector") | nindent 4 }}
+{{- end }}

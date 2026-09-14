@@ -133,8 +133,37 @@ Worker's surface. The failure mode is unchanged — delay, not loss. See the
 [ADR](../adr/260727-worker-never-reads-service-databases.md).
 
 ### 5.3 Scaling (KEDA)
-`ScaledObject` with the Redis Streams scaler on `pendingEntriesCount` per stream; scale 0→N
-on depth, scale to zero when idle (except a floor for latency-sensitive `jobs:notify`).
+🟢 **Decided 2026-09-14 (register D17)** — two pools, split on latency. See the
+[ADR](../adr/260914-worker-pools-split-on-latency.md).
+
+| Pool | Streams | Replicas |
+|------|---------|----------|
+| `notify` | `jobs:notify` | 1 → N. The floor holds the < 5 s p95 target (§8) |
+| `batch` | `jobs:index`, `jobs:thumbnail`, `jobs:export`, `jobs:retention` | 0 → N |
+
+Each pool is its own Deployment with `WORKER_STREAMS` set to its streams, and its own
+`ScaledObject` with one Redis Streams trigger per stream on **`lagCount`** for consumer group
+`worker`. **Corrected 2026-09-14 — this section said `pendingEntriesCount`**, which counts
+entries a consumer has read and not acked. With zero pods nothing is read, so the count never
+leaves 0 and a pool at zero never wakes. Lag is what the group has not yet read; it is the only
+Redis Streams metric KEDA can scale from zero on, and needs Redis 7+.
+
+The split is on latency, not the CPU/IO axis this doc first suggested, because one Deployment
+cannot both scale to zero and hold a notify floor. Splitting `batch` by CPU/IO later needs no
+code change — only another pool.
+
+**Consumer groups must exist before a producer writes to their stream.** The Worker does not
+create them yet, and no service produces jobs yet either, so today this is silent: KEDA (v2.20.1)
+reads a missing stream as lag `0` with no error, so `batch` correctly sits at zero. **Corrected
+2026-09-14** — the earlier version of this paragraph said the triggers error and the fallback
+holds each pool at one replica until the groups exist; that is not what the scaler does. A
+missing *group* on a stream that already exists is also not an error — KEDA reads `XLEN` as the
+lag instead, so if a producer ships before the Worker creates its groups, the affected pool scales
+to its max and nothing drains it, because no consumer is reading. The fallback's real job is
+covering Redis being unreachable or the trigger's auth failing, not a missing group. Consumer
+groups must therefore be created before, or in the same slice as, the first producer for their
+stream — from ID `0`, `XGROUP CREATE <stream> worker 0 MKSTREAM` — so the lag KEDA measures
+matches what's already in the stream.
 
 ---
 
@@ -144,7 +173,7 @@ Common vars (Conventions §8). Plus:
 | Var | Notes |
 |-----|-------|
 | `ELASTICSEARCH_URL` | ES endpoint. |
-| `WORKER_STREAMS` | Which streams this deployment consumes (allows specialised worker pools). |
+| `WORKER_STREAMS` | Which streams this deployment consumes. Set per pool by the chart — `notify` and `batch` (§5.3, register D17); defaults to every stream for a single local/Compose process. |
 | `WORKER_MAX_ATTEMPTS` | Default 5. |
 | `WORKER_VISIBILITY_TIMEOUT_SECONDS` | Reclaim threshold. |
 | `WORKER_BATCH_SIZE` | `COUNT` per read. |
@@ -170,9 +199,9 @@ histograms, ES bulk latency.
 - ~~**Whether the Worker reads service databases**~~ — 🟢 **Decided 2026-07-27 (register
   D25).** It does not. Fat job payloads plus internal endpoints. See §5.2 and the
   [ADR](../adr/260727-worker-never-reads-service-databases.md).
-- **Specialised worker pools** (separate deployments per stream for independent scaling) vs.
-  one deployment consuming all streams. Recommend splitting CPU-heavy (thumbnail/export) from
-  IO-heavy (index/notify).
+- ~~**Specialised worker pools**~~ — 🟢 **Decided 2026-09-14 (register D17).** Two pools,
+  `notify` and `batch`, split on latency. See §5.3 and the
+  [ADR](../adr/260914-worker-pools-split-on-latency.md).
 - Notification channels in scope for v1 (in-app only vs. push + email).
 - Whether canvas search (`canvas` index) ships in v1 — depends on Canvas producing a text
   projection.
@@ -184,3 +213,8 @@ histograms, ES bulk latency.
   to resolve a recipient's notification address from Auth, and every `retention.sweep` scope
   needs its owning service's sweep endpoint. They are specified in each service's §3 but
   unbuilt, so those handlers cannot ship before them.
+- **Consumer-group creation must land before, or alongside, the first producer of any given
+  stream** (§5.3) — create each stream's group from ID `0` (`XGROUP CREATE <stream> worker 0
+  MKSTREAM`) as part of the same slice that starts writing to it, not after. A producer that
+  ships first leaves KEDA reading `XLEN` as lag with no consumer group to drain it, pinning that
+  pool at its max replica count.

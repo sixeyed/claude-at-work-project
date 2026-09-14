@@ -25,8 +25,11 @@ class Settings(BaseSettings):
     object_store_secret_key: str = ""
     object_store_bucket: str = "collabhub-assets"
 
-    # Which streams this deployment consumes, so CPU-heavy and IO-heavy pools can
-    # be split later without a code change (register D17, still open).
+    # Which streams this deployment consumes. Register D17 is decided: the chart
+    # runs two KEDA-scaled pools, `notify` and `batch`, each setting this to its
+    # own subset (docs/design/05-worker-service.md §5.3). The default below —
+    # every stream — is what local/Compose runs, where there is only ever one
+    # Worker process.
     worker_streams: str = "jobs:index,jobs:thumbnail,jobs:notify,jobs:export,jobs:retention"
     worker_max_attempts: int = 5
     worker_visibility_timeout_seconds: int = 60

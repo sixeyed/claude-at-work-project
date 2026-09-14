@@ -184,6 +184,23 @@ this file so the same release is never announced twice.
     N-2 support policy; supported minors are 1.36, 1.35, 1.34. v1.37 expected 2026-08-26.
     Managed clusters (AKS/EKS/GKE) lag upstream — align to the platform's offered versions.
 
+- id: keda
+  name: KEDA
+  category: orchestration
+  used_for: Autoscales the Worker pools on Redis Streams lag (doc 05 §5.3); a cluster add-on the Helm chart requires
+  pinned_track: "2"
+  current_stable: "2.20.2"
+  last_notified: "2.20.2"   # watermark: last version announced to #stack-updates; skill only alerts when upstream > this
+  released: "2026-07-31"
+  base_image_hint: n/a           # cluster add-on, installed once per cluster, not an app base image
+  check_url: https://github.com/kedacore/keda/releases
+  eol_url: https://keda.sh/docs/latest/operate/cluster/
+  notes: >
+    Installed per cluster, not by the CollabHub chart, which fails to render without the
+    keda.sh/v1alpha1 API. The redis-streams trigger's lagCount is the only metric that
+    scales from zero and needs Redis 7+ (pinned track is 8). Check KEDA's Kubernetes
+    compatibility table before a cluster upgrade. sixeyed runs 2.20.1 as of 2026-09-14.
+
 - id: otel-collector
   name: OpenTelemetry Collector
   category: observability
