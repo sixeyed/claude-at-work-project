@@ -26,11 +26,18 @@ class Settings(BaseSettings):
     object_store_bucket: str = "collabhub-assets"
 
     # Which streams this deployment consumes, so CPU-heavy and IO-heavy pools can
-    # be split later without a code change (register D17, still open).
-    worker_streams: str = "jobs:index,jobs:thumbnail,jobs:notify,jobs:export,jobs:retention"
+    # be split later without a code change (register D17, still open). Only
+    # streams with handlers belong here: the Worker refuses to start on one it
+    # cannot handle, rather than dead-lettering every job on it. `jobs:index` is
+    # the only one built.
+    worker_streams: str = "jobs:index"
     worker_max_attempts: int = 5
     worker_visibility_timeout_seconds: int = 60
     worker_batch_size: int = 16
+    # Dead-letter entries hold job payloads, which for index jobs means message
+    # bodies (doc 05 §8) — so the dead stream is capped deliberately, not left
+    # to grow.
+    worker_dead_letter_maxlen: int = 10_000
 
     # Auth is a runtime dependency: the Worker exchanges these for a service
     # token to call Asset's internal endpoint (Conventions §5.5).

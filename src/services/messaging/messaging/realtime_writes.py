@@ -47,7 +47,7 @@ from typing import Any
 import socketio
 from pydantic import Field, ValidationError
 
-from messaging import channels, messages, realtime
+from messaging import channels, indexing, messages, realtime
 from messaging.realtime import NAMESPACE, RealtimeContext, _acked, _ok
 from messaging.routers.messages import _as_message
 from messaging.schemas import MAX_BODY_FIELD_LENGTH, CamelRequest
@@ -195,6 +195,7 @@ def register_write_handlers(  # noqa: C901 — a registry of handlers; mccabe co
         # Commit, then publish. A broadcast for a row whose transaction failed
         # is a message that exists only in other people's windows.
         await realtime.publish_message_received(sio, response)
+        await indexing.enqueue_upsert(context.jobs, response, workspace_id=principal.workspace_id)
         return _ok(response.model_dump(mode="json", by_alias=True))
 
     @sio.event(namespace=NAMESPACE)
@@ -238,6 +239,7 @@ def register_write_handlers(  # noqa: C901 — a registry of handlers; mccabe co
             await session.commit()
 
         await realtime.publish_message_edited(sio, response)
+        await indexing.enqueue_upsert(context.jobs, response, workspace_id=principal.workspace_id)
         return _ok(response.model_dump(mode="json", by_alias=True))
 
     @sio.event(namespace=NAMESPACE)
@@ -249,7 +251,7 @@ def register_write_handlers(  # noqa: C901 — a registry of handlers; mccabe co
 
         async with context.sessions() as session:
             try:
-                deleted = await messages.delete(
+                result = await messages.delete(
                     session,
                     workspace_id=principal.workspace_id,
                     user_id=principal.user_id,
@@ -260,13 +262,18 @@ def register_write_handlers(  # noqa: C901 — a registry of handlers; mccabe co
                     "Only the author or a channel admin can delete a message."
                 ) from exc
 
-            if deleted is None:
+            if result is None:
                 raise ProblemException.not_found("No such channel.")
 
-            response = _as_message(deleted)
+            response = _as_message(result.message)
             await session.commit()
 
         await realtime.publish_message_deleted(sio, response)
+        # A repeat delete changed nothing, so it has nothing to index.
+        if result.deleted_now:
+            await indexing.enqueue_delete(
+                context.jobs, response, workspace_id=principal.workspace_id
+            )
         # The tombstone, not an id — the row stays in the history and the client
         # that issued the delete has to render it like everyone else.
         return _ok(response.model_dump(mode="json", by_alias=True))

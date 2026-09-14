@@ -326,9 +326,16 @@ Every stream entry has a single field `data` containing this JSON envelope:
   `jobs:notify`, `jobs:export`, `jobs:retention`. (Producers know which stream; see service docs.)
 - **Consumer group:** `worker` on every stream. Worker instances are distinct consumers.
 - **Idempotency:** `jobId` is the idempotency key. Handlers MUST be safe to run more than once.
-- **Ack / retry:** Worker `XACK`s on success. Unacked entries are reclaimed via `XAUTOCLAIM`
-  after a visibility timeout. After `maxAttempts` (default 5, incremented in `attempt`),
-  the entry is moved to `jobs:<name>:dead` and acked.
+- **Ack / retry:** Worker `XACK`s on success and then `XDEL`s the entry, so job payloads —
+  which can hold user content — do not outlive their processing. Unacked entries are
+  reclaimed via `XAUTOCLAIM` after a visibility timeout. **Attempts are counted with Redis's
+  delivery count**, because a stream entry cannot be edited: `attempt` in the envelope is
+  written as `1` and is informational. A job runs at most `maxAttempts` times (default 5);
+  the next delivery moves it to `jobs:<name>:dead` (capped with an approximate `MAXLEN`) and
+  acks it. A malformed envelope or an unknown `type` is dead-lettered on first delivery.
+  *(Clarified 2026-09-14 while building message search.)*
+- **Only consume what you can handle.** A Worker refuses to start on a stream it has no
+  handlers for, rather than dead-lettering every job on it.
 - **Producers never block on the Worker.** Enqueue is fire-and-forget after the primary
   write succeeds.
 

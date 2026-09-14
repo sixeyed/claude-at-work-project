@@ -26,6 +26,7 @@ documented, message-specific exception to Conventions §3 — and it is why
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,6 +40,7 @@ __all__ = [
     "AlreadyDeletedError",
     "BodyRequiredError",
     "BodyTooLongError",
+    "DeleteResult",
     "NotAuthorError",
     "NotDeletableError",
     "VersionConflictError",
@@ -255,21 +257,34 @@ async def edit(
     return message
 
 
+@dataclass(frozen=True)
+class DeleteResult:
+    """The tombstone, and whether *this* call made it.
+
+    A repeat delete returns the existing tombstone without bumping `version`,
+    and the index producer needs to know that: a job for an unchanged version
+    would be refused by Elasticsearch anyway, so it is not worth sending.
+    """
+
+    message: Message
+    deleted_now: bool
+
+
 async def delete(
     session: AsyncSession,
     *,
     workspace_id: uuid.UUID,
     user_id: uuid.UUID,
     message_id: uuid.UUID,
-) -> Message | None:
+) -> DeleteResult | None:
     """Tombstone a message. Author, or an admin of the channel it is in.
 
     **Unconditional on version** — deleting a message someone just edited is not
     a conflict worth surfacing — but conditional on not being deleted already.
-    A second delete returns the existing tombstone untouched: no second
-    timestamp and no second version bump, which is what idempotent has to mean
-    and what keeps the Elasticsearch external version from moving for a document
-    that did not change.
+    A second delete returns the existing tombstone untouched, with
+    `deleted_now=False`: no second timestamp and no second version bump, which
+    is what idempotent has to mean and what keeps the Elasticsearch external
+    version from moving for a document that did not change.
 
     **The stored `body` is left alone.** Blanking it looks tidy, changes nothing
     a client can see — the mapper redacts every deleted row on the way out — and
@@ -294,7 +309,7 @@ async def delete(
         raise NotDeletableError(message_id)
 
     if message.deleted_at is not None:
-        return message
+        return DeleteResult(message, deleted_now=False)
 
     await session.execute(
         update(Message)
@@ -302,4 +317,4 @@ async def delete(
         .values(deleted_at=func.now(), version=Message.version + 1)
     )
     await session.refresh(message)
-    return message
+    return DeleteResult(message, deleted_now=True)

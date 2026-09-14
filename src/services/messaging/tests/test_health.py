@@ -12,6 +12,7 @@ def _settings() -> Settings:
         redis_cache_url="redis://redis-cache:6379/0",
         redis_realtime_url="redis://redis-rt:6379/0",
         redis_streams_url="redis://redis-streams:6379/0",
+        elasticsearch_url="http://elasticsearch:9200",
         auth_issuer="http://localhost:8001",
         auth_jwks_url="http://auth:8000/.well-known/jwks.json",
     )

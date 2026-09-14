@@ -380,6 +380,20 @@ async def get_visible(
     return VisibleChannel(channel=row[0], my_role=row[1]) if row else None
 
 
+async def visible_ids(
+    session: AsyncSession, *, workspace_id: uuid.UUID, user_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """Every channel id this caller may see — the search route's filter.
+
+    The same `_visible_query` as every other read, reduced to ids, so search
+    cannot drift from what the sidebar and the history routes allow. Computed
+    per request, which is why removing someone from a private channel or
+    archiving one takes effect in search immediately with nothing to reindex.
+    """
+    query = _visible_query(workspace_id, user_id).with_only_columns(Channel.id).order_by(None)
+    return list((await session.execute(query)).scalars().all())
+
+
 async def is_member(session: AsyncSession, *, channel_id: uuid.UUID, user_id: uuid.UUID) -> bool:
     return await _role(session, channel_id=channel_id, user_id=user_id) is not None
 

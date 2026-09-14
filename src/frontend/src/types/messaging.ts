@@ -194,7 +194,8 @@ export interface paths {
          *     a `POST`, and a deliberate deviation from "DELETE returns 204" rather than a
          *     surprise in the OpenAPI document.
          *
-         *     Deleting twice returns the same tombstone, unchanged.
+         *     Deleting twice returns the same tombstone, unchanged — and enqueues no
+         *     second index job, because nothing about the document changed.
          */
         delete: operations["delete_message_api_v1_messages__message_id__delete"];
         options?: never;
@@ -215,6 +216,29 @@ export interface paths {
          *     There is no time window (register D8d).
          */
         patch: operations["edit_message_api_v1_messages__message_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/search/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Messages
+         * @description Messages matching every word of `q`, newest first, in channels the caller can see.
+         *
+         *     **A short page is not the last page** — hydration can drop a hit whose row
+         *     was deleted after it was indexed. Only `nextCursor: null` means the end.
+         */
+        get: operations["search_messages_api_v1_search_messages_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/health/live": {
@@ -958,6 +982,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_messages_api_v1_search_messages_get: {
+        parameters: {
+            query: {
+                q: string;
+                limit?: number;
+                cursor?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageListResponse"];
                 };
             };
             /** @description Validation Error */

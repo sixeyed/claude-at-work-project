@@ -54,7 +54,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from messaging import channels
 from messaging.schemas import MessageResponse
 from messaging.settings import Settings
-from shared import ProblemException, SecurityContext, problem_body, verify_user_token
+from shared import JobQueue, ProblemException, SecurityContext, problem_body, verify_user_token
 
 _log = logging.getLogger("collabhub.messaging.realtime")
 
@@ -94,6 +94,8 @@ class RealtimeContext:
     settings: Settings
     sessions: async_sessionmaker[AsyncSession]
     security: SecurityContext
+    #: The `jobs:index` producer's queue, shared with the REST routers.
+    jobs: JobQueue
 
 
 # --- the ack envelope ------------------------------------------------------

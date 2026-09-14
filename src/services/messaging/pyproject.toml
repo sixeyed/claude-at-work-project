@@ -14,6 +14,7 @@ dependencies = [
     "alembic>=1.14",
     "redis>=5.2",
     "python-socketio>=5.12",
+    "elasticsearch[async]>=9.1,<10",
 ]
 
 [dependency-groups]

@@ -22,6 +22,11 @@ expressed). Both were forced by building the first messaging slice.
 **Settled 2026-08-16:** D8d — message edit and delete semantics. See its row
 under *Messaging* for the scope, which is narrower than the row's old title:
 **retention values are still D16, and still 🔴.**
+**Settled 2026-09-14:** message search is built — the Worker writes a `messages`
+index from `jobs:index`, and `GET /search/messages` treats it as a candidate list
+hydrated from Postgres (D8c stays 🟡, now built against).
+[ADR](../adr/260914-message-search-index-is-a-candidate-list.md). It opened
+**D29, a reindex path, 🔴** — see *Worker*.
 
 - 🟢 **Identity federation** [D5] — Auth is an OIDC *relying party*, never a provider. Dex is
   the upstream locally; a customer's own IdP elsewhere. `dev-login` is deleted.
@@ -64,7 +69,7 @@ under *Messaging* for the scope, which is narrower than the row's old title:
 |----|----------|-----------------|----------------|-------|
 | D8a | Threading depth | 🟡 Single-level | Confirm against UX needs. **Built against it 2026-08-16:** `thread_root_id` ships as a column and serializes as `null`; there is no thread API and `ix_messages_thread` is not created | Messaging |
 | D8b | DM modelling | 🟡 `kind='dm'` channels | **Built against it 2026-08-16:** `kind='dm'` is rejected by `CREATABLE_KINDS` in `messaging/models.py`, and nothing creates or lists a DM. The column accepts it; the API does not | Messaging |
-| D8c | `/search/messages` lives in Messaging vs. a dedicated search gateway | 🟡 Thin proxy in Messaging | Revisit if search grows. **Built against it 2026-08-16:** neither exists — no `/search/messages`, and no `jobs:index` producer to feed one (doc 02 §5) | Messaging |
+| D8c | `/search/messages` lives in Messaging vs. a dedicated search gateway | 🟡 Thin proxy in Messaging | Revisit if search grows. **Built against it 2026-09-14:** `GET /api/v1/search/messages` is a thin proxy in Messaging over the `messages` index the Worker writes from `jobs:index`. Visibility is filtered per request and results are hydrated from Postgres, so the index is never the authority — see the [ADR](../adr/260914-message-search-index-is-a-candidate-list.md) and doc 02 §3.1.6 | Messaging |
 | D8d | Edit/delete semantics and tombstone retention | 🟢 **Decided 2026-08-16** — see below | [ADR](../adr/260816-message-edit-and-delete-semantics.md) | Messaging + Worker |
 
 **D8d, in full.** No time window on either action. The author edits their own
@@ -107,7 +112,8 @@ outlives a user pressing "delete" until D16 says otherwise.
 | D17 | Specialised worker pools vs. one deployment for all streams | 🟡 Single, split suggested | Split CPU-heavy (thumbnail/export) from IO-heavy (index/notify) | Worker |
 | D18 | Notification channels in v1 | 🔴 Open | In-app first; push/email later | Worker |
 | D19 | Canvas export rendering engine (headless renderer / server-side Yjs via `pycrdt` + skia) | 🔴 Open | Non-trivial; consider deferring | Worker |
-| D25 | How the Worker gets the data its handlers need | 🟢 **Decided (2026-07-27):** producers put what they already hold into the job payload; anything else is fetched from the owning service's internal endpoint with a service token. No database connection, and retention inverts to a per-service internal sweep endpoint | Index jobs need a monotonic version for Elasticsearch external versioning; `messages` has no `version` column yet. See [ADR 260727](../adr/260727-worker-never-reads-service-databases.md) | Cross-cutting (Worker, Messaging, Canvas, Asset, Auth) |
+| D25 | How the Worker gets the data its handlers need | 🟢 **Decided (2026-07-27):** producers put what they already hold into the job payload; anything else is fetched from the owning service's internal endpoint with a service token. No database connection, and retention inverts to a per-service internal sweep endpoint | Index jobs need a monotonic version for Elasticsearch external versioning; `messages.version` is it. **Built against it 2026-09-14:** the `jobs:index` producer (Messaging) and consumer (Worker) exist, and delete jobs carry `body: ""`. See [ADR 260727](../adr/260727-worker-never-reads-service-databases.md) | Cross-cutting (Worker, Messaging, Canvas, Asset, Auth) |
+| D29 | Reindex / backfill path for search (raised 2026-09-14) | 🔴 Open | Needed before search can be trusted after an R3 outage: enqueue is fire-and-forget (Conventions §7), so a job lost between commit and `XADD` leaves the index wrong until something rebuilds it. Likely a Messaging internal endpoint that pages messages, plus a `reindex` job type into a fresh `messages-v2` behind the alias (doc 05 §4). Not a correctness risk for *visibility* — results are hydrated from Postgres — only for recall | Worker + Messaging |
 
 ## Frontend SPA
 

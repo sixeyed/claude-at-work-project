@@ -11,6 +11,7 @@ dependencies = [
     "pydantic-settings>=2.6",
     "redis>=5.2",
     "httpx>=0.28",
+    "elasticsearch[async]>=9.1,<10",
 ]
 
 [project.scripts]
