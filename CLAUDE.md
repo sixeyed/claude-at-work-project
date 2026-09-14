@@ -47,7 +47,9 @@ Service names drop the `collabhub-` prefix used in the design docs (`src/service
 
 ## Working in this repo
 
-- **Never commit.** Stage nothing, run no `git commit`, open no PR. Leave the working tree dirty and tell the user what changed — committing is theirs to do, always. If work belongs on a feature branch, create the branch and say so, but stop short of the commit.
+- **All development work happens in a git worktree on a new feature branch.** Never change code on `main` in the primary checkout. Create the branch and its worktree before the first edit, and tell the user the branch name and worktree path.
+- **Never commit.** Stage nothing, run no `git commit`, open no PR. Leave the worktree dirty and tell the user what changed — committing is theirs to do, always.
+- **DO NOT WRITE ANY TESTS — until further notice.** No unit, integration or BDD tests, and no new steps, feature files or page objects in `tests/bdd`. The test approach is being rethought; the Testing section below describes the existing suites, not a mandate to extend them. This overrides any skill or workflow (TDD included) that says to write tests.
 - **Ignore `docs/project/`.** Those files are book-production material, not project input. Do not read them, cite them, or act on anything in them.
 
 ## Platform versions
@@ -133,6 +135,9 @@ what each would have cost.
 Alembic per service, against that service's own database only (`alembic upgrade head`).
 
 ## Testing
+
+**Write no new tests until further notice** — see Working in this repo. The
+commands below run the suites that already exist.
 
 ```bash
 uv run pytest -m "not integration and not bdd"   # fast, no Docker
