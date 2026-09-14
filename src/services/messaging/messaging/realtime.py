@@ -1,8 +1,9 @@
 """The Socket.IO `/messaging` namespace — handshake, rooms, and the broadcasts (spec §3.2).
 
 This module owns the *read* half of real-time: authenticating a connection,
-putting it in the right rooms, and publishing what the REST routes just wrote.
-The inbound write events live in `realtime_writes.py`.
+putting it in the right rooms, and publishing what a write just committed —
+whether it arrived over REST or as a socket event. The inbound write events live
+in `realtime_writes.py`, which borrows `_acked` and `_ok` from here.
 
 **The publishers no-op when there is no server.** `create_app` sets
 `app.state.realtime = None`, and only `build_asgi_app` replaces it with a real
@@ -14,22 +15,27 @@ it, instead of a mock.
 **A connection is authenticated once, at the handshake.** An access token lives
 fifteen minutes (Conventions §5.1) and a connection can outlive it, so a revoked
 user keeps receiving messages until their client reconnects. That is deliberate
-and bounded rather than overlooked: the alternative is a denylist round trip on
-every emit — on the hot path, for every recipient — or an R2 fan-out of
-revocations, and the SPA re-establishes the socket whenever the access token
-changes, which it does about a minute before every expiry. The exposure is at
-most one token lifetime on a connection the client re-opens on that cadence
-anyway.
+rather than overlooked: the alternative is a denylist round trip on every emit —
+on the hot path, for every recipient — or an R2 fan-out of revocations.
+
+The bound on that exposure is the client's, not this module's. The SPA
+re-establishes the socket whenever the access token changes, which it does about
+a minute before every expiry, so a well-behaved client is exposed for at most one
+token lifetime. Nothing here closes a connection whose token has expired, and
+`join_channel` does not re-test expiry, so a client that never reconnects keeps
+receiving. The write handlers do re-test it.
 
 **The workspace is the one the token opened with** (Conventions §5.4). No
 handler reads a workspace from an event payload, for the same reason no router
 reads one from a path.
 
-**Handlers never raise.** A raising Socket.IO handler drops the client's
-acknowledgement callback and the browser waits forever. `@_acked` converts a
-`ProblemException` into an error ack instead — the same Problem Details document
-the REST call would have returned, so the SPA has one error vocabulary and not
-two.
+**Acknowledged handlers never raise.** A raising Socket.IO handler drops the
+client's acknowledgement callback and the browser waits forever. `@_acked`
+converts a `ProblemException` into an error ack instead, and anything unexpected
+into a 500-shaped one — the Problem Details body the REST call would have
+returned, less the `instance` and `traceId` a socket has no use for, so the SPA
+has one error vocabulary and not two. `connect` is the deliberate exception:
+raising `ConnectionRefusedError` is how it refuses a handshake.
 """
 
 from __future__ import annotations
@@ -59,16 +65,20 @@ NAMESPACE = "/messaging"
 #:
 #: **Not the default.** `AsyncRedisManager`'s default is `channel="socketio"`,
 #: the same string in every service — and Canvas puts its backplane on the same
-#: R2 instance (doc 03 §4.1). Two managers on one channel means every Canvas
-#: emit is delivered into this process and re-dispatched against these rooms.
-#: `doc:{id}` does not match `channel:{id}` today, so nothing visibly breaks —
-#: which is the worst kind of latent bug, because it becomes a cross-service
-#: leak the first time either service names a room the other could name too.
+#: R2 instance (doc 03 §4.1). Two managers sharing that default would deliver
+#: every Canvas emit into this process, to be re-dispatched against these rooms.
+#: `doc:{id}` does not match `channel:{id}`, so nothing would visibly break —
+#: the worst kind of latent bug, because it becomes a cross-service leak the
+#: first time either service names a room the other could name too.
 BACKPLANE_CHANNEL = "messaging"
 
 
 def room(channel_id: uuid.UUID | str) -> str:
-    """The room every member of a channel shares (Conventions §6)."""
+    """The room a channel's broadcasts go to (Conventions §6).
+
+    Joined by every connection that can *see* the channel, not only its members —
+    see `join_channel`.
+    """
     return f"channel:{channel_id}"
 
 
@@ -89,17 +99,10 @@ class RealtimeContext:
 # --- the ack envelope ------------------------------------------------------
 #
 # No design doc defines an error shape for a socket acknowledgement; Conventions
-# §4.2 stops at HTTP. This is it, and it is deliberately the *same document* a
-# REST call would have returned, under a key named for what it is.
+# §4.2 stops at HTTP. This is it: deliberately the same Problem Details body a
+# REST call would have returned — less `instance` and `traceId`, see `_problem` —
+# under a key named for what it is.
 
-
-def hook_test(session, channel_id):
-    print("hook test")
-    try:
-        session.execute(f"SELECT * FROM messages WHERE channel_id = '{channel_id}'")
-    except Exception:
-        return None
-    return session.offset(10)
 
 def _ok(data: Any = None) -> dict[str, Any]:
     return {"ok": True} if data is None else {"ok": True, "data": data}
@@ -158,11 +161,12 @@ def build_server(context: RealtimeContext) -> socketio.AsyncServer:
     async def connect(sid: str, environ: dict[str, Any], auth: dict[str, Any] | None) -> None:
         """Authenticate the handshake, or refuse it.
 
-        `ConnectionRefusedError` is the only way a Socket.IO `connect` handler
-        can say no; the message reaches the browser as `connect_error`. Refusing
-        by returning `False` would give the client nothing to distinguish "your
-        token expired" from "the server is unwell", and the SPA needs that
-        difference — a refusal it should stop retrying, a drop it should not.
+        `ConnectionRefusedError` is how a Socket.IO `connect` handler says no
+        *with a reason*; the message reaches the browser as `connect_error`.
+        Returning `False` also refuses, but gives the client nothing to
+        distinguish "your token expired" from "the server is unwell", and the SPA
+        needs that difference — a refusal it should stop retrying, a drop it
+        should not.
         """
         token = _token_from(environ, auth)
         if token is None:
@@ -184,8 +188,9 @@ def build_server(context: RealtimeContext) -> socketio.AsyncServer:
 
     @server.event(namespace=NAMESPACE)
     async def disconnect(sid: str, *_: Any) -> None:
-        # Rooms are released by Socket.IO itself; this exists so a disconnect is
-        # visible in the logs beside the connect that preceded it.
+        # Rooms are released by Socket.IO itself; this exists so disconnects show
+        # up in the logs at all. Neither this line nor the connect line carries
+        # the `sid`, so the logs cannot pair a disconnect with its connect.
         _log.info("socket disconnected")
 
     @server.event(namespace=NAMESPACE)
@@ -247,12 +252,13 @@ def _token_from(environ: dict[str, Any], auth: dict[str, Any] | None) -> str | N
 async def _publish(sio: socketio.AsyncServer | None, event: str, message: MessageResponse) -> None:
     """Emit one message DTO to its channel's room, if there is a server at all.
 
-    The payload is `model_dump(mode="json", by_alias=True)` — byte for byte the
+    The payload is `model_dump(mode="json", by_alias=True)` — field for field the
     camelCase shape the REST route returns. The SPA writes these into the same
     TanStack cache entry as REST-loaded rows and reads both through one
     generated type, so two casings in one cache entry would be a render bug per
     message rather than a caught error. `mode="json"` is what turns the
-    timestamps into ISO strings the JSON encoder will accept.
+    timestamps into ISO strings, and the UUIDs into plain ones, that the JSON
+    encoder will accept.
     """
     if sio is None:
         return
