@@ -44,7 +44,7 @@ async def run(settings: Settings) -> None:
         create_health_app(settings),
         # Binds all interfaces because the container is the boundary; what is
         # reachable is the pod's and the ingress's concern, not the process's.
-        host="0.0.0.0",
+        host="0.0.0.0",  # noqa: S104
         port=HEALTH_PORT,
         log_level=settings.log_level,
     )

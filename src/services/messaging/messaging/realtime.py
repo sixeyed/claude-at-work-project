@@ -118,7 +118,9 @@ def _acked(handler):
             return await handler(*args, **kwargs)
         except ProblemException as exc:
             return _problem(exc)
-        except Exception:
+        # BLE001: this wrapper is the last line before the socket, and its whole
+        # job is that nothing escapes it as an unhandled event error.
+        except Exception:  # noqa: BLE001
             _log.exception("unhandled error in socket handler %s", handler.__name__)
             return _problem(ProblemException(500))
 

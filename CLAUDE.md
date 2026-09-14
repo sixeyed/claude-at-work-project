@@ -88,6 +88,46 @@ D8d settles the *semantics* only. **How long a tombstone is kept before hard del
 
 When a decision gets made: update the register's status, reflect it back into the source design doc, and write an ADR in `docs/adr/` with the `adr-writer` skill if it's significant. Record it **in the slice that makes it**, not in a docs sweep at the end — a register that says 🔴 for something already built on is worse than no register.
 
+## Code quality
+
+Two Claude Code hooks, wired in `.claude/settings.json`:
+
+- **After every `Write`, `Edit` or `Bash`** — `.claude/hooks/lint.sh` formats and
+  lints the files that changed (`ruff` for Python, `eslint` for `.ts`/`.tsx`),
+  autofixing what it can. It **blocks** on anything left, because lint findings
+  are mechanical and always fixable. Roughly 0.3s for Python, 1.1s for
+  TypeScript. `Bash` is in the matcher because a heredoc or `sed -i` changes a
+  file just as surely as `Edit` does — those arrive in
+  `tool_response.bashEditDiff.changedFiles`, and a Bash command that touched no
+  file exits in ~0.1s.
+- **At the end of a turn** — `.claude/hooks/security.sh` runs `ruff --select S`
+  (flake8-bandit), the convention checks below, `gitleaks` over the working tree,
+  and `semgrep` with `p/python` + `p/secrets`. About 4s. It is **advisory**: it
+  reports and lets the turn end, because a false positive must never strand a
+  session.
+
+`.claude/hooks/checks/conventions.py` is the part no off-the-shelf tool can do —
+CH001 tenancy id taken from the request rather than the `wsp` claim · CH002
+`require_user` and `require_service` on one route · CH003 an `/internal/` route
+with no `require_service` · CH004 a 403 answering a lookup that came back empty
+· CH005 `OFFSET` · CH006 SQL built by interpolation · CH007 exception text in a
+Problem Details `detail` · CH008 PII in a log call · CH009 `select()` on a
+soft-delete table with no `deleted_at` filter. It runs over everything changed
+since HEAD; run it by hand with `python3 .claude/hooks/checks/conventions.py
+[files...]`.
+
+Waive a finding on its own line or in the comment block above it, always with a
+reason:
+
+```python
+# conventions: ok — the caller's own account state, not someone else's row.
+raise ProblemException.forbidden("This account belongs to no workspace.")
+```
+
+The rule sets are tuned so the tree is **clean today**: a new finding means new
+code, not a backlog. `ruff.toml` records which rule families were left out and
+what each would have cost.
+
 ## Migrations
 
 Alembic per service, against that service's own database only (`alembic upgrade head`).

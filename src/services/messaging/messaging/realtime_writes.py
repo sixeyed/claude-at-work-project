@@ -106,7 +106,9 @@ def _parse(model: type[CamelRequest], payload: Any) -> Any:
         ) from exc
 
 
-def register_write_handlers(sio: socketio.AsyncServer, context: RealtimeContext) -> None:
+def register_write_handlers(  # noqa: C901 — a registry of handlers; mccabe counts each one
+    sio: socketio.AsyncServer, context: RealtimeContext
+) -> None:
     """Attach the inbound events to a server S5 already built."""
 
     async def principal_of(sid: str) -> UserPrincipal:

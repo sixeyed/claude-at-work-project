@@ -42,7 +42,7 @@ async def _run_check(check: HealthCheck, timeout: float) -> str | None:  # noqa:
         await asyncio.wait_for(check(), timeout)
     except TimeoutError:
         return f"timed out after {timeout}s"
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         # Any failure at all means not ready; the reason goes in the body.
         return f"{type(exc).__name__}: {exc}"
     return None
