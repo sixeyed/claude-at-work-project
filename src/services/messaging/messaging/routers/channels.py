@@ -68,12 +68,34 @@ def _name_problem(exc: Exception) -> ProblemException:
 
 
 def _as_channel(visible: channels.VisibleChannel) -> ChannelResponse:
-    response = ChannelResponse.model_validate(visible.channel, from_attributes=True)
-    return response.model_copy(update={"my_role": visible.my_role})
+    """The DTO, built field by field.
+
+    Not `model_validate(visible.channel, from_attributes=True)` any more: the
+    read state is on the `VisibleChannel`, not the row, and the DTO requires it.
+    """
+    channel = visible.channel
+    return ChannelResponse(
+        id=channel.id,
+        name=channel.name,
+        topic=channel.topic,
+        kind=channel.kind,
+        created_by=channel.created_by,
+        created_at=channel.created_at,
+        updated_at=channel.updated_at,
+        archived_at=channel.archived_at,
+        version=channel.version,
+        last_read_id=visible.last_read_id,
+        unread_count=visible.unread_count,
+        my_role=visible.my_role,
+    )
 
 
 async def _visible_or_404(
-    session: AsyncSession, principal: UserPrincipal, channel_id: uuid.UUID
+    session: AsyncSession,
+    principal: UserPrincipal,
+    channel_id: uuid.UUID,
+    *,
+    with_read_state: bool = False,
 ) -> channels.VisibleChannel:
     """The channel, or the 404 that covers every reason it is not available."""
     found = await channels.get_visible(
@@ -81,6 +103,7 @@ async def _visible_or_404(
         workspace_id=principal.workspace_id,
         user_id=principal.user_id,
         channel_id=channel_id,
+        with_read_state=with_read_state,
     )
     if found is None:
         raise ProblemException.not_found("No such channel.")
@@ -159,17 +182,8 @@ async def get_channel(
     principal: UserPrincipal = Depends(require_user),
     session: AsyncSession = Depends(db_session),
 ) -> ChannelResponse:
-    """One channel, if the caller may know it exists."""
-    found = await channels.get_visible(
-        session,
-        workspace_id=principal.workspace_id,
-        user_id=principal.user_id,
-        channel_id=channel_id,
-    )
-    if found is None:
-        raise ProblemException.not_found("No such channel.")
-
-    return _as_channel(found)
+    """One channel, if the caller may know it exists — with their read state."""
+    return _as_channel(await _visible_or_404(session, principal, channel_id, with_read_state=True))
 
 
 @router.patch("/{channel_id}", response_model=ChannelResponse)
@@ -212,7 +226,7 @@ async def update_channel(
     # Expire first, or the re-read comes back out of the identity map still
     # holding the pre-update values — the Core `UPDATE` never touched the object.
     session.expire(visible.channel)
-    updated = await _visible_or_404(session, principal, channel_id)
+    updated = await _visible_or_404(session, principal, channel_id, with_read_state=True)
     response = _as_channel(updated)
     await session.commit()
     return response
@@ -237,7 +251,7 @@ async def archive_channel(
     with `refresh` rather than through `get_visible`, which by now filters it
     out — that being the whole point of the write.
     """
-    visible = await _visible_or_404(session, principal, channel_id)
+    visible = await _visible_or_404(session, principal, channel_id, with_read_state=True)
     _admin_or_403(visible)
 
     await channels.archive(session, channel_id=channel_id)

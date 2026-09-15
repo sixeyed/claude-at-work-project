@@ -21,11 +21,20 @@ import re
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import Select, delete, func, or_, select, tuple_, update
+from sqlalchemy import Row, Select, delete, func, or_, select, tuple_, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from messaging.models import ADMIN, CREATABLE_KINDS, MEMBER, PUBLIC, Channel, ChannelMember
+from messaging.models import (
+    ADMIN,
+    CREATABLE_KINDS,
+    MEMBER,
+    PUBLIC,
+    Channel,
+    ChannelMember,
+    ChannelRead,
+    Message,
+)
 from shared import Page, PageRequest, build_page, uuid7
 
 MIN_NAME_LENGTH = 3
@@ -94,10 +103,16 @@ class VisibleChannel:
 
     The role is part of the read rather than a second query, because the sidebar
     needs it for every row and the UI decides what to offer from it.
+
+    The read state is filled only by the reads that build a `Channel` DTO —
+    `list_page`, and `get_visible(with_read_state=True)`. The guards every write
+    path runs leave it at its defaults and do not pay for a count.
     """
 
     channel: Channel
     my_role: str | None
+    last_read_id: uuid.UUID | None = None
+    unread_count: int = 0
 
 
 def validate_name(raw: str) -> str:
@@ -341,6 +356,60 @@ def _visible_query(workspace_id: uuid.UUID, user_id: uuid.UUID) -> Select:
     )
 
 
+def _with_read_state(query: Select, user_id: uuid.UUID) -> Select:
+    """Add the caller's marker and unread count to a `_visible_query`.
+
+    Unread is every message after the marker that **someone else** wrote and
+    that **is not deleted** — with no marker, every such message in the
+    channel. Your own messages are never unread to you, and a tombstone is not
+    something to catch up on.
+
+    A correlated count per channel row. `ix_messages_channel_time` is
+    `(channel_id, id DESC)`, so `id > last_read_id` is a range on it; the
+    author and `deleted_at` tests are filters on the rows in that range.
+
+    Not folded into `_visible_query`: `send_message`, `join_channel` and every
+    member route authorize through that query, and none of them should pay for
+    a count they never read.
+    """
+    unread = (
+        select(func.count(Message.id))
+        .where(
+            Message.channel_id == Channel.id,
+            Message.author_id != user_id,
+            Message.deleted_at.is_(None),
+            or_(ChannelRead.last_read_id.is_(None), Message.id > ChannelRead.last_read_id),
+        )
+        .correlate(Channel, ChannelRead)
+        .scalar_subquery()
+    )
+    return query.outerjoin(
+        ChannelRead,
+        (ChannelRead.channel_id == Channel.id) & (ChannelRead.user_id == user_id),
+    ).add_columns(
+        ChannelRead.last_read_id.label("last_read_id"),
+        unread.label("unread_count"),
+    )
+
+
+def _visible_from(row: Row) -> VisibleChannel:
+    """A `_visible_query` row, with or without `_with_read_state` on it.
+
+    The read state is read **by label, not by position**. Unpacking the row
+    straight into the dataclass would tie its field order to the order
+    `add_columns` happens to list them in, and a swap would surface as a 500
+    at serialization, a long way from its cause. The labels also name the
+    count in the SQL itself, rather than leaving it an anonymous column.
+    """
+    columns = row._mapping
+    return VisibleChannel(
+        channel=row[0],
+        my_role=row[1],
+        last_read_id=columns.get("last_read_id"),
+        unread_count=columns.get("unread_count", 0),
+    )
+
+
 async def list_page(
     session: AsyncSession,
     *,
@@ -348,8 +417,8 @@ async def list_page(
     user_id: uuid.UUID,
     page: PageRequest,
 ) -> Page[VisibleChannel]:
-    """One page of the caller's visible channels, keyset-paginated."""
-    query = _visible_query(workspace_id, user_id)
+    """One page of the caller's visible channels, keyset-paginated, with read state."""
+    query = _with_read_state(_visible_query(workspace_id, user_id), user_id)
 
     if page.cursor:
         name, channel_id = page.cursor
@@ -358,7 +427,7 @@ async def list_page(
         query = query.where(tuple_(Channel.name, Channel.id) > tuple_(name, uuid.UUID(channel_id)))
 
     result = await session.execute(query.limit(page.fetch_limit))
-    rows = [VisibleChannel(channel=channel, my_role=role) for channel, role in result.all()]
+    rows = [_visible_from(row) for row in result.all()]
     return build_page(rows, page, key=lambda v: (v.channel.name, str(v.channel.id)))
 
 
@@ -368,16 +437,23 @@ async def get_visible(
     workspace_id: uuid.UUID,
     user_id: uuid.UUID,
     channel_id: uuid.UUID,
+    with_read_state: bool = False,
 ) -> VisibleChannel | None:
     """One channel, if this caller is allowed to know it exists.
 
     `None` covers every negative case — wrong workspace, archived, private and
     not a member, or simply absent — because the router turns them all into the
     same 404 on purpose.
+
+    `with_read_state` is for the routes that return a `Channel` DTO. A guard
+    leaves it off; the row then carries the dataclass defaults, which nothing on
+    that path serializes.
     """
-    query = _visible_query(workspace_id, user_id).where(Channel.id == channel_id)
-    row = (await session.execute(query)).first()
-    return VisibleChannel(channel=row[0], my_role=row[1]) if row else None
+    query = _visible_query(workspace_id, user_id)
+    if with_read_state:
+        query = _with_read_state(query, user_id)
+    row = (await session.execute(query.where(Channel.id == channel_id))).first()
+    return _visible_from(row) if row else None
 
 
 async def visible_ids(

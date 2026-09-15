@@ -55,7 +55,7 @@ blobs; messages reference asset IDs).
 | GET | `/messages/{id}/thread` | channel member | Replies in a thread (cursor paginated). |
 | POST | `/messages/{id}/reactions` | channel member | Add reaction `{ "emoji": ":+1:" }`. |
 | DELETE | `/messages/{id}/reactions/{emoji}` | channel member | Remove own reaction. |
-| POST | `/channels/{id}/read` | channel member | Mark read up to `{ "messageId": "..." }`. |
+| POST | `/channels/{id}/read` | see §3.1.7 | Mark read up to `{ "messageId": "..." }`. 204; the marker only moves forward. |
 | GET | `/search/messages?q=` | any workspace member — see §3.1.6 | Thin proxy to Elasticsearch (D8c). Newest first, only channels the caller can see. |
 
 **Internal** (`/api/v1/internal/`, service token only — Conventions §5.5; never reachable
@@ -193,9 +193,15 @@ creator-as-admin.
   "kind": "public|private|dm", "createdBy": "uuid",
   "createdAt": "...", "updatedAt": "...", "archivedAt": "...|null",
   "version": 0,
+  "lastReadId": "uuid|null", "unreadCount": 0,
   "myRole": "admin|member|null"
 }
 ```
+
+`lastReadId` and `unreadCount` — **added 2026-09-15** — are the caller's read
+state (§3.1.7). Both are always present and neither is optional in the OpenAPI
+document, so the generated type does not make every sidebar render null-check a
+count the server always sends. A channel just created reports `null` and `0`.
 
 There is deliberately no `workspaceId`: a channel is always in the workspace
 named by the caller's `wsp` claim, and echoing it invites a client to start
@@ -398,13 +404,13 @@ design doc — rather than a plan or a service README — knows which is which.
 |---|---|---|
 | `GET /messages/{id}/thread` | threading is unbuilt; `thread_root_id` ships as a column and is always `null` | D8a 🟡 |
 | `POST` / `DELETE /messages/{id}/reactions*` | the `reactions` table is not created — an empty table claims a capability the service does not have | — |
-| `POST /channels/{id}/read` | `last_read_id` shipped with `channel_members` in `0001_channels`; nothing writes it | — |
 | `POST /internal/messages/sweep` | retention values are unset, and nothing hard-deletes a message | D16 🔴 |
 
 Two things the *columns* do ship for, ahead of their features, because adding a
 column later rewrites a table and adding an index or a route later does not:
-`thread_root_id` and `attachments` on `messages`, and `last_read_id` on
-`channel_members`.
+`thread_root_id` and `attachments` on `messages`. (`last_read_id` on
+`channel_members` was a third, and was dropped unused when read state was built
+in a table of its own — §3.1.7.)
 
 #### 3.1.6 Search — added 2026-09-14
 
@@ -439,6 +445,45 @@ truth** — see the [ADR](../adr/260914-message-search-index-is-a-candidate-list
 - **Recall is only as good as the index.** Enqueue is fire-and-forget (§5), so a job lost to
   an R3 outage is a message search never finds until a reindex path exists (register D29 🔴).
 
+#### 3.1.7 Read state — added 2026-09-15
+
+Register **D31** is settled — see the
+[ADR](../adr/260915-read-state-follows-channel-visibility.md). The doc gave one
+table row, one socket event, one column and "unread counts are derived", and
+none of them said who may mark a channel read, what counts as unread, or who is
+told.
+
+- **Visibility gates it, not membership.** Anyone who can see a channel may mark
+  it read — the same test as reading its history and posting in it (§3.1.1).
+  The pointer lives in its own table, `channel_reads`, not on `channel_members`:
+  nobody can join a channel themselves, so a membership column would give most
+  people reading a public channel no unread count at all. `0003_channel_reads`
+  drops the `last_read_id` column `0001` had shipped unused.
+- **`POST /channels/{id}/read`** takes `{ "messageId": "uuid" }` and answers
+  **204** with no body. The message must be in that channel. A channel the
+  caller cannot see, a message from another channel and an unknown id are all
+  the same 404, `"No such channel."`, so an id cannot be probed. A tombstone may
+  be marked read — it is part of the history.
+- **The marker only moves forward.** Marking an older message than the current
+  marker is a 204 that changes nothing: two tabs racing each other is the normal
+  case, not a conflict. This stands in for Conventions §3's `version` column on
+  this table — the upsert is guarded by `last_read_id < excluded.last_read_id`,
+  so there is no lost update to detect and nothing for a client to send back.
+- **Unread** is every message after the marker that **someone else** wrote and
+  that **is not deleted**; with no marker, every such message in the channel.
+  The count is exact and uncapped, so a public channel nobody has opened counts
+  its whole history — the first thing to revisit if the sidebar gets slow.
+- **Only the reads that return a `Channel` pay for the count** — the list,
+  detail, the re-read after a rename, and archive. The visibility guard every
+  write authorizes through does not.
+- **Receipts go to the reader, never the channel.** A read that moved the marker
+  broadcasts `read_receipt_updated` to `user:{workspaceId}:{userId}` — that
+  person's own connections in this workspace, which every connection joins on
+  connect. A read over the socket skips the connection it came from. Nobody
+  learns how far anyone else has read.
+- **Sending a message does not move your own marker.** It does not need to: your
+  own messages are never in your count.
+
 ### 3.2 Socket.IO namespace — `/messaging`
 
 Real-time runs on the Socket.IO `/messaging` namespace (Conventions §6). Client→server
@@ -459,7 +504,7 @@ the chart sets no session affinity. See Conventions §6.
 | `edit_message` | `{ messageId, body, version }` — **`version` added 2026-08-16** | Author-only edit + broadcast. Acks the edited `Message`. |
 | `delete_message` | `{ messageId }` | Author/channel-admin delete + broadcast. Acks the **tombstoned `Message`**. |
 | `add_reaction` / `remove_reaction` | `{ messageId, emoji }` | Broadcast reaction change. |
-| `mark_read` | `{ channelId, messageId }` | Update read receipt; broadcast to user's other sessions. |
+| `mark_read` | `{ channelId, messageId }` | Move the read marker forward; acks `{ ok: true }`. If it moved, broadcast `read_receipt_updated` to the reader's own room, skipping this connection — §3.1.7. |
 | `typing` | `{ channelId }` | Ephemeral; fan out `user_typing` (not persisted). |
 
 **Server → Client (events)**
@@ -470,7 +515,7 @@ the chart sets no session affinity. See Conventions §6.
 | `message_edited` | `Message` |
 | `message_deleted` | `Message`, redacted — **corrected 2026-08-16**, see below |
 | `reaction_changed` | `{ messageId, emoji, count, userId, added }` |
-| `read_receipt_updated` | `{ channelId, userId, messageId }` |
+| `read_receipt_updated` | `{ channelId, userId, messageId }` — to room `user:{workspaceId}:{userId}` only, never the channel's |
 | `user_typing` | `{ channelId, userId }` — see §3.2.4 |
 
 Rooms and naming follow Conventions §6. Presence (online/away) is published to R2 and
@@ -608,7 +653,7 @@ tolerable while the socket could only read:
 | Check | When | On failure |
 |---|---|---|
 | the principal has not expired | every inbound event, **including `typing`** | `unauthorized` ack, 401 |
-| the token is not on the denylist | the three write events only | revoked → 401 · unreachable R1 → **proceed** |
+| the token is not on the denylist | the four write events only — `send_message`, `edit_message`, `delete_message`, `mark_read` | revoked → 401 · unreachable R1 → **proceed** |
 
 The denylist **fails open** here, matching §3.1: channel writes are outside
 Conventions §5.2's fail-closed set. `typing` skips it because it persists
@@ -691,7 +736,6 @@ CREATE TABLE channel_members (
     channel_id   uuid NOT NULL REFERENCES channels(id),
     user_id      uuid NOT NULL,
     role         text NOT NULL DEFAULT 'member',  -- admin | member
-    last_read_id uuid NULL,                        -- read receipt pointer
     joined_at    timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (channel_id, user_id)
 );
@@ -700,6 +744,19 @@ CREATE TABLE channel_members (
 -- is in this channel?" but not "which channels is this user in?" — which is the
 -- query the sidebar runs for every signed-in user.
 CREATE INDEX ix_channel_members_user ON channel_members (user_id, channel_id);
+
+-- Added 2026-09-15 (register D31, §3.1.7), replacing `channel_members.last_read_id`.
+-- Keyed on visibility, not membership: anyone who can see a channel has a place
+-- they have read up to. No `version` — the upsert only ever moves `last_read_id`
+-- forward, so there is no lost update to catch. No foreign key on `last_read_id`,
+-- so a retention job (D16) can hard-delete the message it points at.
+CREATE TABLE channel_reads (
+    channel_id   uuid NOT NULL REFERENCES channels(id),
+    user_id      uuid NOT NULL,
+    last_read_id uuid NOT NULL,
+    updated_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (channel_id, user_id)
+);
 
 CREATE TABLE messages (
     id             uuid PRIMARY KEY,                -- UUID v7 → time-ordered
@@ -756,8 +813,9 @@ unless this document says otherwise", and both places it says otherwise are
 here.
 
 Threading is single-level: a reply sets `thread_root_id` to the top-level message; replies to
-replies still point at the root. Read state is a per-member pointer (`last_read_id`); unread
-counts are derived (messages with `id > last_read_id`).
+replies still point at the root. Read state is a per-person, per-channel pointer in
+`channel_reads` that only moves forward; unread counts are derived per request — messages after
+the pointer, written by someone else, not deleted (§3.1.7).
 
 ### 4.1 Redis usage
 - **R1:** cache channel membership sets and recent-message windows for fast event authorization.

@@ -30,6 +30,9 @@ hydrated from Postgres (D8c stays 🟡, now built against).
 **Settled 2026-09-14:** D17 — the Worker runs as two KEDA-scaled pools split on
 latency — and D30 — Socket.IO is WebSocket-only, which is what lets the Helm chart
 carry no session affinity.
+**Settled 2026-09-15:** D31 — read state follows channel *visibility*, not
+membership, in a `channel_reads` table with a forward-only marker.
+[ADR](../adr/260915-read-state-follows-channel-visibility.md).
 
 - 🟢 **Identity federation** [D5] — Auth is an OIDC *relying party*, never a provider. Dex is
   the upstream locally; a customer's own IdP elsewhere. `dev-login` is deleted.
@@ -74,6 +77,7 @@ carry no session affinity.
 | D8b | DM modelling | 🟡 `kind='dm'` channels | **Built against it 2026-08-16:** `kind='dm'` is rejected by `CREATABLE_KINDS` in `messaging/models.py`, and nothing creates or lists a DM. The column accepts it; the API does not | Messaging |
 | D8c | `/search/messages` lives in Messaging vs. a dedicated search gateway | 🟡 Thin proxy in Messaging | Revisit if search grows. **Built against it 2026-09-14:** `GET /api/v1/search/messages` is a thin proxy in Messaging over the `messages` index the Worker writes from `jobs:index`. Visibility is filtered per request and results are hydrated from Postgres, so the index is never the authority — see the [ADR](../adr/260914-message-search-index-is-a-candidate-list.md) and doc 02 §3.1.6 | Messaging |
 | D8d | Edit/delete semantics and tombstone retention | 🟢 **Decided 2026-08-16** — see below | [ADR](../adr/260816-message-edit-and-delete-semantics.md) | Messaging + Worker |
+| D31 | Read state: where the marker lives, what counts as unread, who is told (raised 2026-09-15; the docs gave a column and "counts are derived") | 🟢 **Decided (2026-09-15):** a `channel_reads` table gated on channel *visibility*, not membership; the marker only moves forward; unread = messages after it that someone else wrote and nobody deleted; `read_receipt_updated` goes only to the reader's own room `user:{workspaceId}:{userId}` | `channel_members.last_read_id` is dropped. The count is exact and uncapped — revisit if sidebar load gets slow. See [ADR 260915](../adr/260915-read-state-follows-channel-visibility.md) and doc 02 §3.1.7 | Messaging |
 
 **D8d, in full.** No time window on either action. The author edits their own
 message; the author or an admin of the channel deletes it — admins moderate by

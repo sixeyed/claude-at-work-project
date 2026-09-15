@@ -42,7 +42,7 @@ KEY_ID = "messaging-test-key"
 #: Child tables first — `messages` and `channel_members` both reference
 #: `channels`. `CASCADE` would reach them anyway; being explicit is what stops
 #: the next person wondering whether the order matters.
-TABLES = "messages, channel_members, channels"
+TABLES = "messages, channel_reads, channel_members, channels"
 
 ADA = uuid.uuid4()
 GRACE = uuid.uuid4()

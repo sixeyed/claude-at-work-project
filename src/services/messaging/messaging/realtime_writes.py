@@ -6,8 +6,9 @@ client can ask the server to do. `register_write_handlers` is the entry point,
 called once from `build_asgi_app`.
 
 Four rules run through every write handler here — `send_message`,
-`edit_message` and `delete_message`. `typing` persists nothing and acks nothing,
-and of these rules it keeps only the expiry half of the token check.
+`edit_message`, `delete_message` and `mark_read`. `typing` persists nothing
+and acks nothing, and of these rules it keeps only the expiry half of the token
+check.
 
 **Nothing raises.** A python-socketio handler that raises never sends its
 acknowledgement, so the client's callback simply never fires and the optimistic
@@ -47,7 +48,7 @@ from typing import Any
 import socketio
 from pydantic import Field, ValidationError
 
-from messaging import channels, indexing, messages, realtime
+from messaging import channels, indexing, messages, read_state, realtime
 from messaging.realtime import NAMESPACE, RealtimeContext, _acked, _ok
 from messaging.routers.messages import _as_message
 from messaging.schemas import MAX_BODY_FIELD_LENGTH, CamelRequest
@@ -94,6 +95,13 @@ class DeleteMessagePayload(CamelRequest):
     """Unconditional, so no `version` — a channel admin deleting a message its
     author has just edited is not a conflict worth surfacing."""
 
+    message_id: uuid.UUID
+
+
+class MarkReadPayload(CamelRequest):
+    """`mark_read`: `{channelId, messageId}` (spec §3.2)."""
+
+    channel_id: uuid.UUID
     message_id: uuid.UUID
 
 
@@ -277,6 +285,42 @@ def register_write_handlers(  # noqa: C901 — a registry of handlers; mccabe co
         # The tombstone, not an id — the row stays in the history and the client
         # that issued the delete has to render it like everyone else.
         return _ok(response.model_dump(mode="json", by_alias=True))
+
+    @sio.event(namespace=NAMESPACE)
+    @_acked
+    async def mark_read(sid: str, payload: Any) -> dict[str, Any]:
+        """Move the caller's read marker; tell their other sessions if it moved.
+
+        A write, so it gets the write checks — expiry and the denylist, failing
+        open — even though what it writes is only ever the caller's own.
+        """
+        event = _parse(MarkReadPayload, payload)
+        principal = await principal_of(sid)
+        await check_revoked(principal)
+
+        async with context.sessions() as session:
+            advanced = await read_state.mark_read(
+                session,
+                workspace_id=principal.workspace_id,
+                user_id=principal.user_id,
+                channel_id=event.channel_id,
+                message_id=event.message_id,
+            )
+            if advanced is None:
+                raise ProblemException.not_found("No such channel.")
+            await session.commit()
+
+        if advanced:
+            await realtime.publish_read_receipt(
+                sio,
+                workspace_id=principal.workspace_id,
+                user_id=principal.user_id,
+                channel_id=event.channel_id,
+                message_id=event.message_id,
+                # This tab already knows; the broadcast is for the others.
+                skip_sid=sid,
+            )
+        return _ok()
 
     @sio.event(namespace=NAMESPACE)
     async def typing(sid: str, payload: Any) -> None:

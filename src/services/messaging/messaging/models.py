@@ -117,8 +117,28 @@ class ChannelMember(Base):
     )
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     role: Mapped[str] = mapped_column(String, nullable=False, server_default=MEMBER)
-    last_read_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     joined_at: Mapped[datetime] = mapped_column(
+        Timestamp, nullable=False, server_default=func.now()
+    )
+
+
+class ChannelRead(Base):
+    """How far one person has read in one channel.
+
+    Keyed on the channel and the person, not on membership: anyone who can see
+    a channel can read it, so anyone who can see it has a place they read up
+    to. See `0003_channel_reads` for why there is no `version` and no foreign key
+    on `last_read_id`.
+    """
+
+    __tablename__ = "channel_reads"
+
+    channel_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("channels.id"), primary_key=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    last_read_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
         Timestamp, nullable=False, server_default=func.now()
     )
 
