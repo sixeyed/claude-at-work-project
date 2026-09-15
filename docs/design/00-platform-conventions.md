@@ -286,6 +286,10 @@ Real-time backplane (R2)** so that any pod can serve any client.
   Within a namespace, membership groups are Socket.IO **rooms** named `<entity>:<id>` —
   e.g. `channel:{channelId}`, `doc:{documentId}`, `presence:{documentId}`. A connection
   joins the rooms it is authorized for on connect or on an explicit join event.
+  **Added 2026-09-15:** a room for one person's own connections carries the workspace
+  too — `user:{workspaceId}:{userId}` — because one person can hold connections in two
+  workspaces and a connection must never carry another workspace's traffic (§5.4).
+  Messaging joins every connection to it on connect, for `read_receipt_updated`.
 - **Event naming:** client→server events are verbs (`send_message`); server→client
   events are past-tense facts (`message_received`). Both documented per service.
 - **Backplane:** construct the server with a Redis client manager —

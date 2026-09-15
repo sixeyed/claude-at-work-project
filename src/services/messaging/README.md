@@ -19,15 +19,20 @@ edit and delete.
 
 **Real-time.** The Socket.IO `/messaging` namespace: an authenticated handshake,
 `join_channel` / `leave_channel`, inbound `send_message` / `edit_message` /
-`delete_message` / `typing`, and outbound `message_received` / `message_edited` /
-`message_deleted` / `user_typing`.
+`delete_message` / `mark_read` / `typing`, and outbound `message_received` /
+`message_edited` / `message_deleted` / `read_receipt_updated` / `user_typing`.
+
+**Read state.** `POST /api/v1/channels/{id}/read` and the `mark_read` event move
+a forward-only marker in `channel_reads` (`read_state.py`); every `Channel` the
+API returns carries `lastReadId` and `unreadCount`. Gated on visibility, like
+reading, and receipts go only to the reader's own sessions. See spec §3.1.7.
 
 **Search.** `GET /api/v1/search/messages?q=` — newest-first matches in channels
 the caller can see. Every message write enqueues a `jobs:index` job after its
 broadcast (`indexing.py`); the Worker writes the `messages` Elasticsearch index;
 `search.py` queries it. See spec §3.1.6.
 
-Not built: threads, reactions and read receipts — see spec §3.1.5, which
+Not built: threads and reactions — see spec §3.1.5, which
 lists every endpoint the design doc names and this service does not implement,
 with the reason for each.
 

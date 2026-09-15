@@ -36,6 +36,7 @@ from messaging.realtime import RealtimeContext, build_server
 from messaging.realtime_writes import register_write_handlers
 from messaging.routers import channels as channel_routes
 from messaging.routers import messages as message_routes
+from messaging.routers import read_state as read_state_routes
 from messaging.routers import search as search_routes
 from messaging.settings import Settings
 from shared import (
@@ -125,6 +126,7 @@ def create_app(settings: Settings, *, key_source: KeySource | None = None) -> Fa
     # single message is addressable on its own.
     app.include_router(message_routes.channel_router)
     app.include_router(message_routes.router)
+    app.include_router(read_state_routes.router)
     app.include_router(search_routes.router)
 
     return app

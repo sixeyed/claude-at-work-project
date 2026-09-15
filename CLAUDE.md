@@ -59,7 +59,7 @@ Service names drop the `collabhub-` prefix used in the design docs (`src/service
 
 - **All development work happens in a git worktree on a new feature branch.** Never change code on `main` in the primary checkout. Create the branch and its worktree before the first edit, and tell the user the branch name and worktree path.
 - **Never commit.** Stage nothing, run no `git commit`, open no PR. Leave the worktree dirty and tell the user what changed — committing is theirs to do, always.
-- **DO NOT WRITE ANY TESTS — until further notice.** No unit, integration or BDD tests, and no new steps, feature files or page objects in `tests/bdd`. The test approach is being rethought; the Testing section below describes the existing suites, not a mandate to extend them. This overrides any skill or workflow (TDD included) that says to write tests.
+- **New behaviour is test-driven, with unit tests only — for now.** Write the failing unit test first (pytest, no Docker — `scripts/test.sh unit`), run it, and **stop at red** so the tests can be reviewed before any production code is written. No new integration tests, no new steps, feature files or page objects in `tests/bdd`, and no frontend tests until that is widened. Say plainly what a unit test cannot reach rather than faking a database to reach it.
 - **Ignore `docs/project/`.** Those files are book-production material, not project input. Do not read them, cite them, or act on anything in them.
 
 ## Platform versions
@@ -92,7 +92,7 @@ Library versions (FastAPI, SQLAlchemy, React) are out of that file's scope — p
 
 `docs/design/07-open-decisions-register.md` is the live register. 🟢 is settled and safe to build against; 🟡 has a working default baked into the design docs — proceed on those; 🔴 has no answer, so stop and ask rather than picking one silently. Much of the register is still 🟡 or 🔴.
 
-Settled so far: D1 denylist fail-open with a fail-closed set · D2 one workspace per token · D5 Auth federates to an upstream IdP and is never a provider · D8d no edit/delete window, author edits own, author or channel admin deletes, tombstones retained in history · D9 canvas state as `bytea` · D14 Worker write-back via internal endpoint plus service token · D22 refresh token in an `HttpOnly` cookie (which requires the SPA and API to be same-site) · D24 TanStack Query + Zustand · D25 job payloads carry what the producer holds · D26 Tailwind v4 · D27 pytest-bdd + Playwright.
+Settled so far: D1 denylist fail-open with a fail-closed set · D2 one workspace per token · D5 Auth federates to an upstream IdP and is never a provider · D8d no edit/delete window, author edits own, author or channel admin deletes, tombstones retained in history · D9 canvas state as `bytea` · D14 Worker write-back via internal endpoint plus service token · D22 refresh token in an `HttpOnly` cookie (which requires the SPA and API to be same-site) · D24 TanStack Query + Zustand · D25 job payloads carry what the producer holds · D26 Tailwind v4 · D27 pytest-bdd + Playwright · D31 read state follows channel visibility, with a forward-only marker.
 
 D8d settles the *semantics* only. **How long a tombstone is kept before hard deletion is D16, still 🔴** — nothing deletes one, and a deleted message's text is still in its row.
 
@@ -146,8 +146,8 @@ Alembic per service, against that service's own database only (`alembic upgrade 
 
 ## Testing
 
-**Write no new tests until further notice** — see Working in this repo. The
-commands below run the suites that already exist.
+**New tests are unit tests, written first** — see Working in this repo. The
+commands below run every suite; only the unit layer is growing at the moment.
 
 ```bash
 scripts/test.sh                  # lint, unit, integration — what CI runs

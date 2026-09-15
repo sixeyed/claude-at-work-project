@@ -82,6 +82,16 @@ def room(channel_id: uuid.UUID | str) -> str:
     return f"channel:{channel_id}"
 
 
+def reader_room(workspace_id: uuid.UUID | str, user_id: uuid.UUID | str) -> str:
+    """One person's own connections, in one workspace — where read receipts go.
+
+    The workspace is in the name because one person can have a tab open in each
+    of two workspaces, and a connection must never carry another workspace's
+    traffic (Conventions §5.4). Every connection joins this room on connect.
+    """
+    return f"user:{workspace_id}:{user_id}"
+
+
 @dataclass(frozen=True)
 class RealtimeContext:
     """Everything the socket server needs, taken from the app that owns it.
@@ -191,6 +201,10 @@ def build_server(context: RealtimeContext) -> socketio.AsyncServer:
         # `/`, and a session saved there is invisible to a `/messaging` handler
         # — which looks exactly like "the principal vanished".
         await server.save_session(sid, {"principal": principal}, namespace=NAMESPACE)
+        # Read receipts from this person's other sessions arrive here.
+        await server.enter_room(
+            sid, reader_room(principal.workspace_id, principal.user_id), namespace=NAMESPACE
+        )
         _log.info("socket connected", extra={"userId": str(principal.user_id)})
 
     @server.event(namespace=NAMESPACE)
@@ -301,6 +315,36 @@ async def publish_message_deleted(
     point of the event.
     """
     await _publish(sio, "message_deleted", message)
+
+
+async def publish_read_receipt(
+    sio: socketio.AsyncServer | None,
+    *,
+    workspace_id: uuid.UUID,
+    user_id: uuid.UUID,
+    channel_id: uuid.UUID,
+    message_id: uuid.UUID,
+    skip_sid: str | None = None,
+) -> None:
+    """Tell the reader's other sessions how far they have read.
+
+    **To the reader's own room, never the channel's.** Everyone in `#general`
+    learning how far Ada has read is a feature nobody asked for and a privacy
+    decision nobody made.
+
+    `skip_sid` is the connection the read arrived on, when it arrived over the
+    socket — that tab already knows. A REST read skips nobody.
+    """
+    if sio is None:
+        return
+
+    await sio.emit(
+        "read_receipt_updated",
+        {"channelId": str(channel_id), "userId": str(user_id), "messageId": str(message_id)},
+        room=reader_room(workspace_id, user_id),
+        namespace=NAMESPACE,
+        skip_sid=skip_sid,
+    )
 
 
 def server(request: Request) -> socketio.AsyncServer | None:

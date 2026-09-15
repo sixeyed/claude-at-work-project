@@ -41,7 +41,7 @@ export interface paths {
         };
         /**
          * Get Channel
-         * @description One channel, if the caller may know it exists.
+         * @description One channel, if the caller may know it exists — with their read state.
          */
         get: operations["get_channel_api_v1_channels__channel_id__get"];
         put?: never;
@@ -162,6 +162,33 @@ export interface paths {
          *     both call the same domain function, so the rules cannot drift between them.
          */
         post: operations["send_message_api_v1_channels__channel_id__messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/channels/{channel_id}/read": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Mark Read
+         * @description Mark a channel read up to and including one message.
+         *
+         *     **204 either way** — whether the marker moved or was already further on.
+         *     The client sent the newest message it has shown, and "you had already read
+         *     that" is not an error it could act on.
+         *
+         *     The receipt goes to the caller's *other* sessions only, and only when the
+         *     marker moved. Nobody else is told how far anyone has read.
+         */
+        post: operations["mark_read_api_v1_channels__channel_id__read_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -353,6 +380,11 @@ export interface components {
          *     now because the alternative is changing this shape again one slice later —
          *     `version` is what an edit sends back for optimistic concurrency, and
          *     `myRole` is what decides whether the UI offers the admin controls.
+         *
+         *     `lastReadId` and `unreadCount` are required and have no default, on purpose:
+         *     a default drops a field from the OpenAPI `required` list, and the generated
+         *     TypeScript would make every sidebar render null-check a count the server
+         *     always sends. A channel just created reports `null` and `0`.
          */
         ChannelResponse: {
             /** Archivedat */
@@ -374,12 +406,16 @@ export interface components {
             id: string;
             /** Kind */
             kind: string;
+            /** Lastreadid */
+            lastReadId: string | null;
             /** Myrole */
             myRole?: string | null;
             /** Name */
             name: string;
             /** Topic */
             topic: string | null;
+            /** Unreadcount */
+            unreadCount: number;
             /**
              * Updatedat
              * Format: date-time
@@ -435,6 +471,21 @@ export interface components {
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /**
+         * MarkReadRequest
+         * @description Mark a channel read up to and including one message.
+         *
+         *     The message must be in the channel named by the path. Marking an older
+         *     message than the one already marked is accepted and changes nothing — two
+         *     tabs racing each other is the normal case, not a conflict.
+         */
+        MarkReadRequest: {
+            /**
+             * Messageid
+             * Format: uuid
+             */
+            messageId: string;
         };
         /**
          * MessageListResponse
@@ -886,6 +937,39 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["MessageResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_read_api_v1_channels__channel_id__read_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                channel_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MarkReadRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

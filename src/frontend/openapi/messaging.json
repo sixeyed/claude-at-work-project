@@ -107,7 +107,7 @@
         "type": "object"
       },
       "ChannelResponse": {
-        "description": "A channel as the API reports it.\n\nNo `workspaceId`: a channel is always in the workspace named by the caller's\n`wsp` claim, and echoing it back invites a client to start sending it.\n\n`version` and `myRole` are unused by the create-and-list surface. They ship\nnow because the alternative is changing this shape again one slice later \u2014\n`version` is what an edit sends back for optimistic concurrency, and\n`myRole` is what decides whether the UI offers the admin controls.",
+        "description": "A channel as the API reports it.\n\nNo `workspaceId`: a channel is always in the workspace named by the caller's\n`wsp` claim, and echoing it back invites a client to start sending it.\n\n`version` and `myRole` are unused by the create-and-list surface. They ship\nnow because the alternative is changing this shape again one slice later \u2014\n`version` is what an edit sends back for optimistic concurrency, and\n`myRole` is what decides whether the UI offers the admin controls.\n\n`lastReadId` and `unreadCount` are required and have no default, on purpose:\na default drops a field from the OpenAPI `required` list, and the generated\nTypeScript would make every sidebar render null-check a count the server\nalways sends. A channel just created reports `null` and `0`.",
         "properties": {
           "archivedAt": {
             "anyOf": [
@@ -140,6 +140,18 @@
             "title": "Kind",
             "type": "string"
           },
+          "lastReadId": {
+            "anyOf": [
+              {
+                "format": "uuid",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lastreadid"
+          },
           "myRole": {
             "anyOf": [
               {
@@ -166,6 +178,10 @@
             ],
             "title": "Topic"
           },
+          "unreadCount": {
+            "title": "Unreadcount",
+            "type": "integer"
+          },
           "updatedAt": {
             "format": "date-time",
             "title": "Updatedat",
@@ -185,7 +201,9 @@
           "createdAt",
           "updatedAt",
           "archivedAt",
-          "version"
+          "version",
+          "lastReadId",
+          "unreadCount"
         ],
         "title": "ChannelResponse",
         "type": "object"
@@ -253,6 +271,21 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "MarkReadRequest": {
+        "description": "Mark a channel read up to and including one message.\n\nThe message must be in the channel named by the path. Marking an older\nmessage than the one already marked is accepted and changes nothing \u2014 two\ntabs racing each other is the normal case, not a conflict.",
+        "properties": {
+          "messageId": {
+            "format": "uuid",
+            "title": "Messageid",
+            "type": "string"
+          }
+        },
+        "required": [
+          "messageId"
+        ],
+        "title": "MarkReadRequest",
         "type": "object"
       },
       "MessageListResponse": {
@@ -621,7 +654,7 @@
         ]
       },
       "get": {
-        "description": "One channel, if the caller may know it exists.",
+        "description": "One channel, if the caller may know it exists \u2014 with their read state.",
         "operationId": "get_channel_api_v1_channels__channel_id__get",
         "parameters": [
           {
@@ -1007,6 +1040,53 @@
         "summary": "Send Message",
         "tags": [
           "messages"
+        ]
+      }
+    },
+    "/api/v1/channels/{channel_id}/read": {
+      "post": {
+        "description": "Mark a channel read up to and including one message.\n\n**204 either way** \u2014 whether the marker moved or was already further on.\nThe client sent the newest message it has shown, and \"you had already read\nthat\" is not an error it could act on.\n\nThe receipt goes to the caller's *other* sessions only, and only when the\nmarker moved. Nobody else is told how far anyone has read.",
+        "operationId": "mark_read_api_v1_channels__channel_id__read_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "channel_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Channel Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MarkReadRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Mark Read",
+        "tags": [
+          "read-state"
         ]
       }
     },

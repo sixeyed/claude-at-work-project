@@ -58,6 +58,11 @@ class ChannelResponse(CamelModel):
     now because the alternative is changing this shape again one slice later —
     `version` is what an edit sends back for optimistic concurrency, and
     `myRole` is what decides whether the UI offers the admin controls.
+
+    `lastReadId` and `unreadCount` are required and have no default, on purpose:
+    a default drops a field from the OpenAPI `required` list, and the generated
+    TypeScript would make every sidebar render null-check a count the server
+    always sends. A channel just created reports `null` and `0`.
     """
 
     id: uuid.UUID
@@ -69,6 +74,8 @@ class ChannelResponse(CamelModel):
     updated_at: datetime
     archived_at: datetime | None
     version: int
+    last_read_id: uuid.UUID | None
+    unread_count: int
     my_role: str | None = None
 
 
@@ -226,3 +233,14 @@ class EditMessageRequest(CamelRequest):
 
     body: str = Field(max_length=MAX_BODY_FIELD_LENGTH)
     version: int
+
+
+class MarkReadRequest(CamelRequest):
+    """Mark a channel read up to and including one message.
+
+    The message must be in the channel named by the path. Marking an older
+    message than the one already marked is accepted and changes nothing — two
+    tabs racing each other is the normal case, not a conflict.
+    """
+
+    message_id: uuid.UUID
