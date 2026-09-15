@@ -422,9 +422,14 @@ storage backend directly. See `docs/platform/versions.md` for pinned versions.
     typed from the generated OpenAPI types, and replace the Socket.IO client with an
     in-memory fake, so TanStack Query and `openapi-fetch` run for real.
   - **Integration** (pytest + testcontainers-python): one service at its public boundary —
-    REST, Socket.IO, a stream consumer — in-process, against Postgres/Redis/Garage/ES/Dex
-    that testcontainers starts. It stops at the service boundary; tokens are minted locally
-    rather than fetched from Auth.
+    REST, Socket.IO, a stream consumer — in-process, against Postgres/Redis/ES/Dex that
+    testcontainers starts (Garage once object storage lands). It stops at the service
+    boundary; tokens are minted locally rather than fetched from Auth. **One container per
+    store per test session** (register D34), mirroring production's separation on it: a
+    database per service on one Postgres, and a database index per Redis role — R1 `/0`,
+    R2 `/1`, R3 `/2`. Pub/Sub is server-wide in Redis, so index separation catches a key in
+    the wrong role but not a backplane message. Elasticsearch starts only for the tests that
+    ask for it.
   - **End-to-end** — Gherkin scenarios in `tests/bdd` driving a real browser through the whole
     stack with pytest-bdd and Playwright (register D27), for **key user journeys only**. It is
     what proves CORS, the SPA's baked-in environment variables, a migration running on

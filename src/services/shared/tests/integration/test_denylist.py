@@ -12,31 +12,31 @@ import redis.asyncio as aioredis
 from shared import Denylist, TokenState
 
 
-async def test_an_untouched_token_is_active(redis_client: aioredis.Redis) -> None:
-    denylist = Denylist(redis_client)
+async def test_an_untouched_token_is_active(redis_cache: aioredis.Redis) -> None:
+    denylist = Denylist(redis_cache)
 
     assert await denylist.state("never-seen") is TokenState.ACTIVE
 
 
-async def test_a_revoked_token_reports_revoked(redis_client: aioredis.Redis) -> None:
-    denylist = Denylist(redis_client)
+async def test_a_revoked_token_reports_revoked(redis_cache: aioredis.Redis) -> None:
+    denylist = Denylist(redis_cache)
 
     await denylist.revoke("jti-1", ttl_seconds=60)
 
     assert await denylist.state("jti-1") is TokenState.REVOKED
 
 
-async def test_revocation_expires_with_the_token(redis_client: aioredis.Redis) -> None:
+async def test_revocation_expires_with_the_token(redis_cache: aioredis.Redis) -> None:
     """The entry only has to outlive the token it revokes, or R1 grows forever."""
-    denylist = Denylist(redis_client)
+    denylist = Denylist(redis_cache)
 
     await denylist.revoke("jti-1", ttl_seconds=42)
 
-    assert 0 < await redis_client.ttl("auth:revoked:jti-1") <= 42
+    assert 0 < await redis_cache.ttl("auth:revoked:jti-1") <= 42
 
 
-async def test_revoking_an_already_expired_token_is_a_no_op(redis_client: aioredis.Redis) -> None:
-    denylist = Denylist(redis_client)
+async def test_revoking_an_already_expired_token_is_a_no_op(redis_cache: aioredis.Redis) -> None:
+    denylist = Denylist(redis_cache)
 
     await denylist.revoke("jti-1", ttl_seconds=0)
 

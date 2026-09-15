@@ -246,3 +246,52 @@ def test_docker_host_comes_back_after_a_unit_test_that_patches_it(repo):
     )
 
     run(repo).assert_outcomes(passed=2)
+
+
+# --- shared containers (plan B, register D34) -------------------------------
+
+
+def test_the_shared_fixtures_come_from_testkit_without_a_conftest(repo):
+    """One fixture definition, from the plugin, is what makes one container per run.
+
+    Breaks if a service has to import the fixtures into its conftest — each
+    import would be a separate definition, and a session fixture would start a
+    container per service.
+    """
+    write(repo, f"{DEMO}/unit/test_a.py", PASSING)
+
+    result = run(repo, "--fixtures")
+
+    for name in ("postgres_server", "redis_server", "elasticsearch_url", "signing_key", "tokens"):
+        definitions = [line for line in result.stdout.lines if line.startswith(f"{name} ")]
+        assert len(definitions) == 1, (name, result.stdout.str())
+
+
+def test_a_unit_test_that_depends_on_a_container_stops_the_run(repo):
+    """Breaks if a unit test can reach a container fixture, even through another fixture.
+
+    Refused at collection rather than left to fail on Docker: `DOCKER_HOST` is
+    not the only way testcontainers finds a daemon, and a Unix-socket Docker
+    passes the socket guard.
+    """
+    write(
+        repo,
+        f"{DEMO}/unit/test_a.py",
+        """
+        import pytest
+
+        @pytest.fixture
+        def cache(redis_server):
+            return redis_server
+
+        def test_it(cache):
+            pass
+        """,
+    )
+
+    result = run(repo)
+
+    assert result.ret == pytest.ExitCode.USAGE_ERROR
+    result.stderr.fnmatch_lines(
+        ["*test_a.py is a unit test but depends on a container fixture: redis_server*"]
+    )

@@ -333,7 +333,7 @@ async def test_an_expired_principal_cannot_write(realtime_url, tokens):
     await ada.disconnect()
 
 
-async def test_a_revoked_token_cannot_write(realtime_url, tokens, redis_client):
+async def test_a_revoked_token_cannot_write(realtime_url, tokens, redis_cache):
     from shared import Denylist
 
     channel = await make_channel(realtime_url, tokens.header())
@@ -343,7 +343,7 @@ async def test_a_revoked_token_cannot_write(realtime_url, tokens, redis_client):
     import jwt
 
     jti = jwt.decode(token, options={"verify_signature": False}, audience="collabhub")["jti"]
-    await Denylist(redis_client).revoke(jti, ttl_seconds=900)
+    await Denylist(redis_cache).revoke(jti, ttl_seconds=900)
 
     ack = await ada.call(
         "send_message", {"channelId": channel["id"], "body": "still here"}, timeout=WAIT

@@ -180,6 +180,15 @@ database", and a full run starts one container instead of two. **One Redis, a da
 role** (R1 `/0`, R2 `/1`, R3 `/2`). Today all three roles share `/0`, so a key that crosses roles
 passes unnoticed.
 
+> **Built 2026-09-15 as register D34** ([ADR](../../adr/260915-integration-tests-share-one-container-per-store.md),
+> [plan](05-test-pyramid-integration-framework-implementation-plan.md)). The container fixtures
+> are registered once from the plugin (`pytest_plugins`), because a fixture imported into each
+> conftest is a definition — and a container — per service. A unit test depending on one stops
+> the run. Pub/Sub is server-wide, so the Redis index separates keys, not backplane messages.
+> **Garage is deferred** to the slice that introduces `ObjectStore`: nothing uses object storage
+> yet. Messaging's search tests seed the index with the Worker's own mapping and handlers through
+> `testkit.search`.
+
 **testcontainers-python starts every dependency.** It uses the library's module where one exists
 (`testcontainers.community.postgres`, `.redis` and `.elasticsearch`, not the deprecated
 top-level paths Messaging imports today). Otherwise it uses `DockerContainer`. An integration test

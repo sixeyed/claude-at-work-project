@@ -23,6 +23,16 @@ from pathlib import Path
 import pytest
 from pytest_socket import disable_socket, enable_socket
 
+#: Loaded through this plugin rather than imported into conftests, so each
+#: fixture has exactly one definition — and a session fixture one container —
+#: however many services' tests request it (register D34). Nothing here imports
+#: them: a module imported before pytest registers it escapes assert rewriting.
+pytest_plugins = ["testkit.containers", "testkit.tokens"]
+
+#: The fixtures in `testkit.containers` that start a container. A unit test
+#: depending on any of them, directly or through another fixture, stops the run.
+CONTAINER_FIXTURES = frozenset({"postgres_server", "redis_server", "elasticsearch_url"})
+
 UNIT = "unit"
 INTEGRATION = "integration"
 LAYERS = (UNIT, INTEGRATION)
@@ -71,6 +81,15 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
                 raise pytest.UsageError(
                     f"{item.path.relative_to(config.rootpath)} is marked {other} but lives"
                     f" under tests/{layer}/ — move the file rather than marking it."
+                )
+        if layer == UNIT:
+            # `fixturenames` is the closure, so a container reached through
+            # another fixture is caught too.
+            containers = sorted(CONTAINER_FIXTURES.intersection(item.fixturenames))
+            if containers:
+                raise pytest.UsageError(
+                    f"{item.path.relative_to(config.rootpath)} is a unit test but depends on a"
+                    f" container fixture: {', '.join(containers)} — move it to tests/integration/."
                 )
         item.add_marker(layer)
 

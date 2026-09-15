@@ -245,6 +245,78 @@ and page objects with `data-testid` selectors, which the SPA work must add.
 
 ---
 
+## Notes from the integration layer (2026-09-15)
+
+The integration handoff ran on `feature/test-pyramid-integration`. Its two plans are
+[05-…-framework](05-test-pyramid-integration-framework-implementation-plan.md) and
+[05-…-backfill](05-test-pyramid-integration-backfill-implementation-plan.md).
+
+### The integration replacement table is not on `main` until that branch merges
+
+- It is the `## BDD replacements` section of the **backfill** plan. Every row in workstream 2's
+  table was confirmed against the real test body and the scenario's steps.
+- The unit half is plan 04's `## BDD replacements`, already on `main`.
+- **Pull `main` and check the backfill plan exists before you delete anything.** No integration
+  row counts until it does.
+
+### Scenario steps no service test can see
+
+Several demoted scenarios bundle an API behaviour, which integration confirms, with something
+only the SPA does. For each one, delete the scenario only when the Vitest half is also confirmed
+in plan 04's table:
+
+| Scenario | Integration confirms | The SPA half, which integration cannot see |
+|---|---|---|
+| A public channel name cannot be reused, whatever its case | 409 for every case; the list holds the channel once (`test_a_rejected_duplicate_leaves_one_channel`) | "Ada is told that channel name is already taken" |
+| A channel admin renames a channel | 200, new name, bumped version; the next list read | "Ada is looking at the general-chat channel" |
+| Scrolling up loads older messages | the cursor walk: every message exactly once, newest first | the scroll that fetches the next page |
+| A channel admin deletes another user's message | 200 with `deletedAt` | "Ada sees a deleted message" — the tombstone rendering |
+| A non-admin cannot delete someone else's message | 403, message unchanged | **"Grace has no way to delete"** — the control is hidden, which is a UI assertion |
+| Grace does not receive messages for a channel she is not looking at | a socket in another room receives nothing; leaving a room stops broadcasts | which room the SPA joins when a channel opens |
+| A typing indicator appears for Grace and clears when Ada stops | `user_typing` reaches the room and not the sender | **"clears when Ada stops" has no server behaviour at all**: there is no stop event, and clearing is the SPA's timeout (`TypingIndicator.test.tsx`, `useTyping.test.ts`) |
+
+### For a search journey (workstream 3)
+
+- **The Worker had a bug that would have made one flaky, and it is fixed on the integration
+  branch.**
+  - Before the fix, a Worker that lost its stream never consumed again. That happens when R3 is
+    flushed, the stream key is deleted, or `redis-streams` is recreated without its volume while
+    the Worker runs: the next `XADD` recreates the stream without the consumer group, and every
+    read failed with `NOGROUP`.
+  - The consumer now creates its group again after a Redis error (doc 05 §5.1, step 6).
+  - If your harness ever resets R3 between scenarios, you need that fix on `main`.
+- **The Elasticsearch index is not truncated between scenarios**, and nothing in the harness
+  clears it.
+  - Old documents are harmless to *results*: search filters candidates to the caller's visible
+    channel ids, and the truncated channels come back with new ids.
+  - They do cost time and space on a long-lived test stack volume.
+- **The index lags the database** by however long the Worker takes, plus Elasticsearch's
+  one-second refresh.
+  - A step that sends a message and then searches for it must poll with a bound, the way
+    `stack_ready` does.
+  - A single immediate search will be flaky.
+
+### Running the integration layer beside the test stack
+
+- `scripts/test.sh integration` starts its containers through testcontainers, on random host
+  ports. The one exception is Dex, on 15556.
+- None of those clash with the test stack's 5183, 8011, 8012, 5566 or 5442, so both can run at
+  once.
+- Both start an Elasticsearch with a 512 MB heap. On a laptop that is a reason to keep
+  `--scale elasticsearch=0` on the stack until a search journey needs it.
+
+### Documents and records
+
+- **CLAUDE.md "Testing"** gained a paragraph on the integration fixtures, after the three layer
+  bullets and before the commands block.
+- **Conventions §11** gained sentences in the **Integration** bullet.
+- Put your `scripts/test.sh e2e` text beside both, not over them.
+- **D34 is used**, for integration test infrastructure. D35 is still yours.
+- **Collected counts once both branches are on `main`:** unit 209, integration 315, bdd 43
+  (unchanged).
+
+---
+
 ## Done when
 
 - `scripts/test.sh e2e` brings the test stack up, runs the suite, tears it down, and returns
