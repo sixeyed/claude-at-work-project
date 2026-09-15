@@ -174,8 +174,42 @@ Worker's surface. The failure mode is unchanged — delay, not loss. See the
 [ADR](../adr/260727-worker-never-reads-service-databases.md).
 
 ### 5.3 Scaling (KEDA)
-`ScaledObject` with the Redis Streams scaler on `pendingEntriesCount` per stream; scale 0→N
-on depth, scale to zero when idle (except a floor for latency-sensitive `jobs:notify`).
+🟢 **Decided 2026-09-14 (register D17)** — two pools, split on latency. See the
+[ADR](../adr/260914-worker-pools-split-on-latency.md).
+
+| Pool | Streams | Replicas |
+|------|---------|----------|
+| `notify` | `jobs:notify` | 1 → N. The floor holds the < 5 s p95 target (§8). **Off until a `jobs:notify` handler exists** |
+| `batch` | `jobs:index` today; `jobs:thumbnail`, `jobs:export`, `jobs:retention` as their handlers ship | 0 → N |
+
+**Pools list only streams with handlers — updated 2026-09-15.** The Worker exits at startup
+on a stream it cannot handle (§5.1), so a pool naming an unbuilt stream crash-loops. Under KEDA
+it is worse: the crashing pod never creates its consumer group, KEDA reads `XLEN` as lag, and it
+keeps adding pods that crash the same way. The chart gives each pool an `enabled` flag, ships
+`notify` disabled and `batch` on `jobs:index` alone, and fails the render for an enabled pool
+with no streams.
+
+Each pool is its own Deployment with `WORKER_STREAMS` set to its streams, and its own
+`ScaledObject` with one Redis Streams trigger per stream on **`lagCount`** for consumer group
+`worker`. **Corrected 2026-09-14 — this section said `pendingEntriesCount`**, which counts
+entries a consumer has read and not acked. With zero pods nothing is read, so the count never
+leaves 0 and a pool at zero never wakes. Lag is what the group has not yet read; it is the only
+Redis Streams metric KEDA can scale from zero on, and needs Redis 7+.
+
+The split is on latency, not the CPU/IO axis this doc first suggested, because one Deployment
+cannot both scale to zero and hold a notify floor. Splitting `batch` by CPU/IO later needs no
+code change — only another pool.
+
+**Consumer groups and scale-from-zero — updated 2026-09-15.** The Worker creates each
+stream's group at startup, from ID `0` with `MKSTREAM` (§5.1), which closes the sequencing gap
+this section recorded on 2026-09-14. Checked against KEDA v2.20.1's scaler: a missing stream
+reads as lag `0` with no error, so an idle `batch` stays at zero. Once a producer has written to
+a stream whose group does not exist yet, KEDA reads `XLEN` as the lag — again no error — scales
+the pool up, and the pod it starts creates the group from `0`, so the lag becomes real and
+drains. That holds only for a pod that starts, which is why pools list only handled streams. The
+`fallback` covers Redis being unreachable or the trigger's auth failing, never a missing group.
+`XDEL` after `XACK` (§5.1) removes entries at or before the group's last-delivered ID, which
+does not make Redis report the lag as unavailable.
 
 ---
 
@@ -185,7 +219,7 @@ Common vars (Conventions §8). Plus:
 | Var | Notes |
 |-----|-------|
 | `ELASTICSEARCH_URL` | ES endpoint. |
-| `WORKER_STREAMS` | Which streams this deployment consumes (allows specialised worker pools). Default `jobs:index` — only streams with handlers. |
+| `WORKER_STREAMS` | Which streams this deployment consumes — only streams with handlers, or the Worker refuses to start. Default `jobs:index`, the only one built. The chart sets it per pool (§5.3, register D17). |
 | `WORKER_MAX_ATTEMPTS` | Default 5 — the most times one job runs. |
 | `WORKER_DEAD_LETTER_MAXLEN` | Default 10 000. Approximate cap on each `*:dead` stream. |
 | `WORKER_VISIBILITY_TIMEOUT_SECONDS` | Reclaim threshold. |
@@ -214,9 +248,9 @@ histograms, ES bulk latency.
 - ~~**Whether the Worker reads service databases**~~ — 🟢 **Decided 2026-07-27 (register
   D25).** It does not. Fat job payloads plus internal endpoints. See §5.2 and the
   [ADR](../adr/260727-worker-never-reads-service-databases.md).
-- **Specialised worker pools** (separate deployments per stream for independent scaling) vs.
-  one deployment consuming all streams. Recommend splitting CPU-heavy (thumbnail/export) from
-  IO-heavy (index/notify).
+- ~~**Specialised worker pools**~~ — 🟢 **Decided 2026-09-14 (register D17).** Two pools,
+  `notify` and `batch`, split on latency, with `notify` off until its handler ships. See §5.3 and the
+  [ADR](../adr/260914-worker-pools-split-on-latency.md).
 - Notification channels in scope for v1 (in-app only vs. push + email).
 - Whether canvas search (`canvas` index) ships in v1 — depends on Canvas producing a text
   projection.
@@ -228,3 +262,7 @@ histograms, ES bulk latency.
   to resolve a recipient's notification address from Auth, and every `retention.sweep` scope
   needs its owning service's sweep endpoint. They are specified in each service's §3 but
   unbuilt, so those handlers cannot ship before them.
+- ~~**Consumer-group creation before the first producer**~~ — closed 2026-09-15. The Worker
+  creates each stream's group from ID `0` at startup (§5.1), so KEDA's scale-up on `XLEN` starts
+  a pod that creates the group and drains the stream (§5.3). Only a pool that lists a stream
+  without a handler defeats it, and the chart's pools list none.

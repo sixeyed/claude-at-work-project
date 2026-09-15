@@ -153,6 +153,11 @@ def build_server(context: RealtimeContext) -> socketio.AsyncServer:
         # an allow-list containing nothing and refuses every browser handshake
         # with a 400. `None` is its spelling of "same origin only".
         cors_allowed_origins=context.settings.cors_allowed_origins or None,
+        # WebSocket only (register D30). A long-polling session needs every
+        # request to reach the same pod, and nothing in front of this service
+        # promises that — so the server refuses polling rather than trusting
+        # each client not to try it.
+        transports=["websocket"],
     )
 
     async def principal_for(sid: str):

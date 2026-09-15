@@ -25,11 +25,12 @@ class Settings(BaseSettings):
     object_store_secret_key: str = ""
     object_store_bucket: str = "collabhub-assets"
 
-    # Which streams this deployment consumes, so CPU-heavy and IO-heavy pools can
-    # be split later without a code change (register D17, still open). Only
-    # streams with handlers belong here: the Worker refuses to start on one it
-    # cannot handle, rather than dead-lettering every job on it. `jobs:index` is
-    # the only one built.
+    # Which streams this deployment consumes. Register D17 is decided: the chart
+    # runs KEDA-scaled pools, each setting this to its own subset
+    # (docs/design/05-worker-service.md §5.3). Only streams with handlers belong
+    # here: the Worker refuses to start on one it cannot handle, rather than
+    # dead-lettering every job on it. `jobs:index` is the only one built, so it
+    # is also the default local/Compose runs.
     worker_streams: str = "jobs:index"
     worker_max_attempts: int = 5
     worker_visibility_timeout_seconds: int = 60

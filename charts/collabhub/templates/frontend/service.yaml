@@ -9,9 +9,6 @@ metadata:
     {{- include "collabhub.labels" $ctx | nindent 4 }}
 spec:
   type: {{ $component.service.type }}
-  {{- with $component.service.sessionAffinity }}
-  sessionAffinity: {{ . }}
-  {{- end }}
   ports:
     - port: {{ $component.port }}
       targetPort: http

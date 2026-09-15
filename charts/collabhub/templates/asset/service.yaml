@@ -12,9 +12,6 @@ spec:
   # Carries /api/v1/internal/assets/{id}/variants, which the Worker calls with a
   # service token. That path must never be routed from the public ingress
   # (Conventions §5.5) — this Service is cluster-internal.
-  {{- with $component.service.sessionAffinity }}
-  sessionAffinity: {{ . }}
-  {{- end }}
   ports:
     - port: {{ $component.port }}
       targetPort: http

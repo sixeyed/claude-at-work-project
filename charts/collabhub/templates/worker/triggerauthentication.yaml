@@ -1,0 +1,19 @@
+{{- $component := .Values.components.worker }}
+{{- if and $component.enabled $component.autoscaling.enabled }}
+{{- $ctx := dict "root" $ "name" "worker" }}
+# KEDA's credential for R3. The address comes from the Worker's own env
+# (REDIS_STREAMS_ADDRESS) and the password from the Worker's own secret, so
+# KEDA holds nothing the Worker does not — one credential to rotate, not two.
+apiVersion: keda.sh/v1alpha1
+kind: TriggerAuthentication
+metadata:
+  name: {{ include "collabhub.componentFullname" $ctx }}
+  labels:
+    {{- include "collabhub.labels" $ctx | nindent 4 }}
+spec:
+  secretTargetRef:
+    - parameter: password
+      # The first entry is the one KEDA reads REDIS_STREAMS_PASSWORD from.
+      name: {{ required "components.worker.envFromSecrets must have at least one entry — its first is the secret holding REDIS_STREAMS_PASSWORD for KEDA's TriggerAuthentication." (first $component.envFromSecrets) }}
+      key: REDIS_STREAMS_PASSWORD
+{{- end }}

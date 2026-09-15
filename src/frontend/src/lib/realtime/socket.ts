@@ -25,7 +25,9 @@ const MESSAGING_URL: string = import.meta.env.VITE_MESSAGING_URL ?? 'http://loca
 export function connect(accessToken: string): Socket {
   return io(`${MESSAGING_URL}/messaging`, {
     auth: { token: accessToken },
-    transports: ['websocket', 'polling'],
+    // WebSocket only (register D30): the server refuses long-polling, so
+    // offering it would only turn a blocked WebSocket into a confusing 400.
+    transports: ['websocket'],
   })
 }
 

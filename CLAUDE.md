@@ -29,7 +29,7 @@ each service's test directory is called `tests`, so `from tests.conftest import 
 binds to whichever one is found first — pass helpers as fixtures instead. The
 root suite avoids the clash by being importable as `bdd.*` (`pythonpath = ["tests"]`).
 
-`charts/collabhub` has **dedicated templates per component** under `templates/<component>/`, not one set of templates ranging over a values map. They start near-identical and are expected to diverge — the Worker needs a KEDA `ScaledObject`, the real-time services need session affinity, the frontend has no ConfigMap.
+`charts/collabhub` has **dedicated templates per component** under `templates/<component>/`, not one set of templates ranging over a values map. They start near-identical and are expected to diverge — the Worker runs as KEDA-scaled pools, every component has its own NetworkPolicy, the frontend has no ConfigMap.
 
 The chart deploys CollabHub's own workloads only. Postgres, Redis, Elasticsearch and Garage are expected to exist already; bundling them would make `helm uninstall` a data-loss command. There is no Ingress in the chart — routing is per-environment, and `/api/v1/internal/` must never be reachable from the public one.
 
