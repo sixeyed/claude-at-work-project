@@ -164,24 +164,25 @@ prove the behaviour — see Working in this repo.
 - **End-to-end** — `tests/bdd`, key user journeys only. A field rule belongs lower down.
 
 ```bash
-scripts/test.sh                  # lint, unit, integration — what CI runs
+scripts/test.sh                  # lint, unit, integration — the everyday run
 scripts/test.sh unit             # fast, no network or Docker; prints coverage
 scripts/test.sh integration -- src/services/messaging   # starts its own containers
+scripts/test.sh e2e              # tests/bdd: brings the test stack up, runs, tears down
+scripts/test.sh e2e -- --headed -k channels
+scripts/test.sh all              # all four layers — what CI runs
 ```
 
-The `tests/bdd` suite is different from both: it drives a real browser and needs
-a stack already running, which it will not start for you.
+The `tests/bdd` suite is different from both: it drives a real browser against a
+whole Compose stack, which `scripts/test.sh e2e` starts with `up --build --wait`
+and takes down afterwards, pass or fail. `KEEP_STACK=1` leaves it up, so you can
+rerun `uv run pytest tests/bdd -m bdd` without the rebuild.
 
 **It truncates the messaging tables before every scenario**, so it runs against a
 throwaway stack, never the one you develop on. Both run at once — the test stack
 is `docker-compose.test.yml`, a project-name override that republishes only the
 five ports reached from the host (SPA 5183, Auth 8011, Messaging 8012, Dex 5566,
-Postgres 5442):
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
-uv run pytest tests/bdd -m bdd
-```
+Postgres 5442). The script scales Elasticsearch and the Worker to zero there
+until a search journey needs them.
 
 The harness addresses only those ports, so it cannot reach the development
 stack; it fails with an instruction instead. Run it against the built frontend

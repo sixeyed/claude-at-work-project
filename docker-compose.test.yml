@@ -1,8 +1,9 @@
 # A second, throwaway stack for the acceptance suite (`tests/bdd`), which runs
 # **alongside** the development stack rather than replacing it. Layered on
-# docker-compose.yml, never used alone:
+# docker-compose.yml, never used alone. `scripts/test.sh e2e` brings it up,
+# runs the suite and takes it down again; by hand, that is:
 #
-#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build --wait
 #   uv run pytest tests/bdd -m bdd
 #   docker compose -f docker-compose.yml -f docker-compose.test.yml down
 #

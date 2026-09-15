@@ -58,9 +58,11 @@ GRACE = "grace@collabhub.dev"
 #: correct, and useless for a scenario about two people.
 SHARED_WORKSPACE = os.environ.get("AUTH_DEMO_WORKSPACE_NAME", "CollabHub Demo")
 
-#: Child tables first — `messages` and `channel_members` both reference
-#: `channels`.
-MESSAGING_TABLES = "messages, channel_members, channels"
+#: Child tables first — `messages`, `channel_reads` and `channel_members` all
+#: reference `channels`. `CASCADE` would clear `channel_reads` unlisted, but
+#: naming every table means the next one without a foreign key is not silently
+#: missed. Messaging's integration conftest lists the same set.
+MESSAGING_TABLES = "messages, channel_reads, channel_members, channels"
 
 #: Scenarios whose slice has not been built yet.
 #:
@@ -93,7 +95,11 @@ def pytest_bdd_apply_tag(tag: str, function: Callable[..., object]) -> object:
     )(function)
 
 
-_UP = "    docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build\n"
+_UP = (
+    "    KEEP_STACK=1 scripts/test.sh e2e\n\n"
+    "which brings it up, runs this suite and leaves the stack running. By hand:\n\n"
+    "    docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build --wait\n"
+)
 
 _STACK_HINT = (
     "The CollabHub *test* stack is not answering at {url}.\n\n"

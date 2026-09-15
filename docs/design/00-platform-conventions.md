@@ -431,7 +431,9 @@ storage backend directly. See `docs/platform/versions.md` for pinned versions.
   anywhere else.
 - The acceptance suite runs against a **separate, throwaway Compose stack**
   (`docker-compose.test.yml`), because it truncates tables between scenarios. It runs
-  alongside the development stack rather than replacing it.
+  alongside the development stack rather than replacing it. `scripts/test.sh e2e` brings
+  that stack up, runs the suite and tears the stack down; it is part of `scripts/test.sh all`,
+  which CI runs, and not of the default run.
 
 ---
 

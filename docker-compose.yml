@@ -273,6 +273,17 @@ services:
         VITE_ASSET_URL: ${VITE_ASSET_URL}
     ports:
       - "${FRONTEND_PORT}:8080"
+    healthcheck:
+      # Nginx serving static files has no /health endpoint, so this probes `/` —
+      # the same path the chart's liveness and readiness probes use. Without it
+      # `up --wait` treats "running" as ready, and `scripts/test.sh e2e` would
+      # race the browser against a server still starting. 127.0.0.1, not
+      # localhost: Nginx listens on IPv4 only, and busybox wget may try ::1.
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
 
 volumes:
   postgres-data:

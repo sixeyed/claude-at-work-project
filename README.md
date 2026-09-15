@@ -126,9 +126,12 @@ needs no Docker; `integration` starts real Postgres, Redis and Dex containers (C
 ```bash
 scripts/test.sh unit                 # fast, no Docker
 scripts/test.sh lint unit -- -x      # stop at the first failure
+scripts/test.sh e2e                  # the browser journeys, on a stack it starts and stops
+scripts/test.sh all                  # every layer, e2e included — what CI runs
 ```
 
-The `bdd` suite is not part of it — it needs a whole Compose stack already running (see
+The no-argument run is `lint unit integration`. The `e2e` layer is slower — it builds and
+starts a whole Compose stack — so it runs when named, or as part of `all` (see
 [Acceptance tests](#acceptance-tests)).
 
 Bring up the full stack — Postgres, the three Redis instances, Dex, Garage, Elasticsearch,
@@ -161,14 +164,28 @@ so it runs against a throwaway stack, never the one you demo on.
 `docker-compose.test.yml` is an override that gives that stack its own Compose
 project name — and with it its own volumes — and moves the five ports anyone
 reaches from the host. **It runs alongside your development stack**, so you can
-leave that up and keep working:
+leave that up and keep working.
+
+`scripts/test.sh e2e` does the whole round trip: it brings the test stack up and
+waits until it is healthy, installs Chromium for Playwright if it is missing, runs
+the suite, and takes the stack down again whether the scenarios passed or not. It
+exits with pytest's status. It needs Docker and a `.env` (`cp .env.example .env`).
 
 ```bash
-uv run playwright install chromium        # once
+scripts/test.sh e2e                           # up, run, down
+scripts/test.sh e2e -- --headed -k channels   # watch it drive the browser
+KEEP_STACK=1 scripts/test.sh e2e              # leave the stack up afterwards
+```
 
-docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
+`KEEP_STACK=1` is for iterating on steps: with the stack left up, rerun just the
+suite with `uv run pytest tests/bdd -m bdd`, which skips the build. What the script
+does, by hand:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build --wait \
+    --scale elasticsearch=0 --scale worker=0
+uv run playwright install chromium
 uv run pytest tests/bdd -m bdd
-uv run pytest tests/bdd -m bdd --headed   # watch it drive the browser
 docker compose -f docker-compose.yml -f docker-compose.test.yml down
 ```
 
@@ -182,9 +199,13 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml down
 
 Nothing else is published on the test stack — Canvas, Asset, Worker,
 Elasticsearch, Garage and the OTel collector still run, they are just reached
-over the Compose network by name. Both stacks running does mean two of
-everything, Elasticsearch included; `--scale elasticsearch=0 --scale worker=0`
-on the test stack trims it, since no scenario touches either yet.
+over the Compose network by name. Both stacks running would mean two of
+everything, Elasticsearch included, so the script runs the test stack with
+`--scale elasticsearch=0 --scale worker=0` — no scenario touches either yet. The
+first search journey removes that.
+
+`--wait` only means something for containers with a healthcheck, which is why the
+frontend has one: it probes `/`, the same path the Helm chart's probes use.
 
 Addressing only test-stack ports is also the safety interlock. The suite
 truncates over 5442, so run against a machine with just the development stack up

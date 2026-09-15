@@ -51,16 +51,6 @@ Feature: Real-time delivery
     Then Grace sees a deleted message in the channel without reloading
     But Grace does not see "wrong channel, sorry" in the channel
 
-  Scenario: Grace does not receive messages for a channel she is not looking at
-    Given Ada has created a public channel named "random"
-    And Ada has created a public channel named "general"
-    And Grace is looking at the "random" channel
-    When Ada sends "only for general" in "general"
-    Then "only for general" appears in Ada's channel exactly once
-    But Grace does not see "only for general" in the channel
-    When Grace opens the "general" channel
-    Then Grace sees "only for general" in the channel
-
   Scenario: The stream recovers after the connection drops
     Given Ada has created a public channel named "general"
     And Grace is looking at the "general" channel

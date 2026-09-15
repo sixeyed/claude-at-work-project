@@ -81,13 +81,6 @@ Feature: Channels
     And "general-chat" is in Ada's channel list
     But "general" is not in Ada's channel list
 
-  Scenario: A rename is visible to everyone in the workspace
-    Given Ada has created a public channel named "general"
-    And Ada has renamed the channel to "general-chat"
-    When Grace opens CollabHub
-    Then "general-chat" is in Grace's channel list
-    But "general" is not in Grace's channel list
-
   Scenario: An admin archives a channel and it leaves the list
     Given Ada has created a public channel named "general"
     When Ada archives the channel

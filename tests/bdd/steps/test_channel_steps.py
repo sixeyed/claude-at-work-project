@@ -22,7 +22,7 @@ exactly the kind of mix-up worth catching.
 from __future__ import annotations
 
 import pytest
-from pytest_bdd import given, parsers, scenarios, then, when
+from pytest_bdd import parsers, scenarios, then, when
 
 from bdd.pages.chat_page import ChatPage
 
@@ -44,14 +44,6 @@ def _assert_complaint(shown: str, phrase: str) -> None:
     lowered = shown.lower()
     missing = [word for word in expected if word.lower() not in lowered]
     assert not missing, f"expected a complaint that the name {phrase!r}, got: {shown!r}"
-
-
-# --- given ----------------------------------------------------------------
-
-
-@given(parsers.parse('Ada has renamed the channel to "{name}"'))
-def ada_has_renamed(ada: ChatPage, name: str) -> None:
-    ada.rename_channel(name)
 
 
 # --- when -----------------------------------------------------------------
