@@ -135,6 +135,15 @@ Built 2026-09-14 as `worker/consumer.py`, one `StreamConsumer` per stream in
    dead-lettered on first delivery. Logs carry job ids, types and exception class names —
    never payloads.
 
+6. On a Redis error the loop backs off for two seconds and, on the retry, **ensures the group
+   again** before reading. If R3 loses the stream under a running Worker — flushed, or the key
+   deleted — a producer's next `XADD` recreates it without the `worker` group, and every read
+   fails with `NOGROUP`; a consumer that only created its group at startup would log that
+   forever and consume nothing. Found and fixed 2026-09-15 by the integration backfill
+   (`test_consumer.py::test_the_consumer_recovers_when_its_stream_and_group_are_lost`). Jobs
+   that were pending when the stream was lost are gone with it — a reindex (D29) is what
+   recovers search from that.
+
 The Worker **refuses to start** if `WORKER_STREAMS` names a stream with no handlers. The
 `messages` index is ensured (retrying until Elasticsearch answers) before consumers start. On
 SIGTERM each consumer finishes the entry in hand and exits; anything unfinished stays pending

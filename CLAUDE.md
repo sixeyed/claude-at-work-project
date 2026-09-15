@@ -163,6 +163,19 @@ prove the behaviour — see Working in this repo.
   behaviour is proven here.
 - **End-to-end** — `tests/bdd`, key user journeys only. A field rule belongs lower down.
 
+**Integration fixtures come from `testkit`, registered by its plugin — never import
+them into a conftest** (D34). One container per store per session:
+`postgres_server` (a service creates its own database on it with
+`testkit.databases.service_database`), `redis_server` with `redis_cache` and
+`redis_streams` (one Redis, an index per role: R1 `/0`, R2 `/1`, R3 `/2` — Pub/Sub
+is server-wide, so that separates keys, not backplane messages), and
+`elasticsearch_url` / `elasticsearch`, started only when a test asks. `tokens` mints
+user and service tokens; `testkit.apps` has `asgi_client` and `serve`,
+`testkit.db` has `truncate`, `testkit.search` seeds the `messages` index with the
+Worker's own code. A unit test that depends on a container fixture stops the run.
+The Worker's `tests/integration/conftest.py` has `run_consumer` and `jobs`. No Garage
+fixture until something uses object storage.
+
 ```bash
 scripts/test.sh                  # lint, unit, integration — what CI runs
 scripts/test.sh unit             # pytest then Vitest, no network or Docker; prints coverage

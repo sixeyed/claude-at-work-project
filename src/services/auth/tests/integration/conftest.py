@@ -1,8 +1,9 @@
-"""Real Postgres, Redis and Dex for the Auth service's integration tests.
+"""Postgres, Redis and Dex for the Auth service's integration tests.
 
-One container of each per test session (Conventions §11 — testcontainers, not
-mocks). Every test gets a clean database: rather than re-running migrations,
-which is slow, the tables are truncated between tests.
+The Postgres and Redis servers are the session's shared ones, started by
+`testkit.containers` (register D34): Auth gets a database of its own, `auth`,
+and R1's index on Redis — the only role it uses. Every test gets clean tables:
+they are truncated, which is much faster than re-running migrations.
 
 **Dex is real too.** Sign-in is the one thing this service exists to do, and a
 stubbed identity provider would test our idea of OIDC rather than OIDC. The
@@ -14,32 +15,34 @@ import them by name.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator, Iterator
 
 import httpx
 import pytest
-import redis.asyncio as aioredis
-from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from testcontainers.community.postgres import PostgresContainer
-from testcontainers.community.redis import RedisContainer
 
 from auth.main import create_app
 from auth.migrations import upgrade_to_head
 from auth.settings import Settings
+from testkit.apps import asgi_client
 from testkit.auth import AUTH_ISSUER, build_settings
+from testkit.containers import RedisRole, RedisServer
+from testkit.databases import PostgresServer, service_database
+from testkit.db import truncate
 from testkit.dex import start_dex
 
-TABLES = "refresh_tokens, external_identities, workspace_members, workspaces, users"
+TABLES = ("refresh_tokens", "external_identities", "workspace_members", "workspaces", "users")
 
 
 @pytest.fixture(scope="session")
-def postgres_dsn() -> Iterator[str]:
-    with PostgresContainer("postgres:18", driver="asyncpg") as container:
-        dsn = container.get_connection_url()
-        asyncio.run(upgrade_to_head(dsn))
-        yield dsn
+def postgres_dsn(postgres_server: PostgresServer) -> str:
+    return service_database(postgres_server, "auth", upgrade_to_head)
+
+
+@pytest.fixture(scope="session")
+def redis_url(redis_server: RedisServer) -> str:
+    """R1 — the cache and denylist. Auth uses no other Redis role."""
+    return redis_server.url(RedisRole.CACHE)
 
 
 @pytest.fixture(scope="session")
@@ -49,19 +52,10 @@ def dex_issuer(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
         yield issuer
 
 
-@pytest.fixture(scope="session")
-def redis_url() -> Iterator[str]:
-    with RedisContainer("redis:8") as container:
-        host = container.get_container_host_ip()
-        port = container.get_exposed_port(container.port)
-        yield f"redis://{host}:{port}/0"
-
-
 @pytest.fixture
 async def engine(postgres_dsn: str) -> AsyncIterator:
     engine = create_async_engine(postgres_dsn)
-    async with engine.begin() as connection:
-        await connection.execute(text(f"TRUNCATE {TABLES} RESTART IDENTITY CASCADE"))
+    await truncate(engine, TABLES)
     yield engine
     await engine.dispose()
 
@@ -80,15 +74,5 @@ async def app_settings(postgres_dsn: str, redis_url: str, dex_issuer: str) -> Se
 @pytest.fixture
 async def client(app_settings: Settings, engine) -> AsyncIterator[httpx.AsyncClient]:
     """The Auth app on an ASGI transport, against the real containers."""
-    app = create_app(app_settings)
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+    async with asgi_client(create_app(app_settings)) as c:
         yield c
-
-
-@pytest.fixture
-async def redis_client(redis_url: str) -> AsyncIterator[aioredis.Redis]:
-    client = aioredis.from_url(redis_url, decode_responses=True)
-    await client.flushdb()
-    yield client
-    await client.aclose()

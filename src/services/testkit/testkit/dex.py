@@ -22,8 +22,9 @@ from pathlib import Path
 import httpx
 from testcontainers.core.container import DockerContainer
 
-# Kept in step with docs/platform/versions.md.
-DEX_IMAGE = "ghcr.io/dexidp/dex:v2.45.1"
+from testkit.images import DEX
+
+DEX_IMAGE = DEX
 DEX_PORT = 15556
 
 DEX_CLIENT_ID = "collabhub-auth"
@@ -33,6 +34,7 @@ DEX_CLIENT_SECRET = "test-client-secret"
 # setup, because bcrypt at cost 10 is deliberately slow and this is not what is
 # being tested.
 DEX_PASSWORD = "collabhub"
+# nosemgrep: generic.secrets.security.detected-bcrypt-hash.detected-bcrypt-hash — the hash of DEX_PASSWORD above, a test-only credential
 DEX_PASSWORD_HASH = "$2b$10$AjNda/ZYuDZgz2nQA9lAPOb3Y.uGW4xYCWXG8wTfnyb9KjviceU/S"
 
 ADA = "ada@collabhub.dev"

@@ -149,6 +149,11 @@ class StreamConsumer:
                     next_reclaim = loop.time() + reclaim_every
                 await self._read_new(stop)
             except RedisError as exc:
+                # Ensure the group again on the retry. If R3 lost the stream —
+                # flushed, or the key deleted — a producer's next XADD recreates
+                # it without the group, and every read fails with NOGROUP until
+                # something creates it. BUSYGROUP makes this free otherwise.
+                group_ready = False
                 _log.warning(
                     "redis error on %s (%s); retrying in %ss",
                     self._stream,
