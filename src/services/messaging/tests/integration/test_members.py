@@ -15,10 +15,6 @@ from __future__ import annotations
 
 import uuid
 
-import pytest
-
-pytestmark = pytest.mark.integration
-
 
 async def create(client, headers, name, **body):
     response = await client.post("/api/v1/channels", json={"name": name, **body}, headers=headers)

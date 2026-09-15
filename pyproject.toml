@@ -36,6 +36,7 @@ collabhub-messaging = { workspace = true }
 collabhub-canvas = { workspace = true }
 collabhub-asset = { workspace = true }
 collabhub-worker = { workspace = true }
+collabhub-testkit = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -47,27 +48,31 @@ dev = [
     "pytest-bdd>=8.1",
     "pytest-playwright>=0.7",
     "asyncpg>=0.30",
+    "pytest-cov>=7.1",
+    # The test harness and its pytest plugin. A dev dependency, not one of the
+    # root's `dependencies`: it is a workspace member, but nothing ships it.
+    "collabhub-testkit",
 ]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 # Makes the Gherkin suite importable as `bdd.*`. Every service also has a
-# `tests` directory, so a root-level `tests` package would make `import tests`
-# ambiguous and break Auth's `from tests import dexflow`; rooting at `tests/`
-# and naming the package `bdd` collides with nothing.
+# `tests` directory, and together they form one namespace package with no
+# `__init__.py`, which is why `from tests…` is banned (ruff TID251): it would
+# silently bind to whichever service's `tests` sorts first. Rooting at
+# `tests/` and naming this package `bdd` still avoids colliding with any of
+# them.
 pythonpath = ["tests"]
 # `tests` is the Gherkin suite at the repo root; without it here the .feature
 # files are simply not collected.
 testpaths = ["src/services", "tests"]
-# Integration tests start real Postgres/Redis containers (Conventions §11), so
-# they need Docker and take seconds rather than milliseconds. Run the fast ones
-# alone with `uv run pytest -m "not integration"`.
+# `unit` and `integration` are not declared here: testkit's plugin registers
+# them and sets them from the directory a test lives in (register D32).
 #
 # `bdd` is the full-stack Gherkin suite: it drives a real browser against a
 # `docker compose up` stack, so unlike `integration` it cannot start what it
 # needs and will tell you to bring the stack up instead.
 markers = [
-    "integration: needs Docker; starts real backing services",
     "bdd: needs the Compose stack already running; drives a real browser",
     # pytest-bdd turns every Gherkin tag into a marker of the same name, so a
     # tag used in a .feature file has to be declared here too.
@@ -82,7 +87,20 @@ markers = [
     # delivered and dropped its own tag, and a marker no scenario carries is a
     # `-m` selector that silently matches nothing.
 ]
-# Every service has a tests/test_health.py. The default "prepend" import mode
+# Every service has a tests/unit/test_health.py. The default "prepend" import mode
 # derives module names from the file path relative to the rootdir and they
 # collide; importlib mode keeps them distinct without needing __init__.py files.
-addopts = "--import-mode=importlib"
+# `-p pytester` because testkit's own tests need the fixture, and pytest refuses
+# `pytest_plugins` in any conftest below the rootdir.
+addopts = "--import-mode=importlib -p pytester"
+
+# Reported on the unit layer, not gated (register D32): a floor is set once the
+# backfill has measured one. The service packages only — not their tests, not
+# testkit, not Alembic revisions.
+[tool.coverage.run]
+source_pkgs = ["shared", "contracts", "auth", "messaging", "canvas", "asset", "worker"]
+branch = true
+omit = ["*/alembic/*"]
+
+[tool.coverage.report]
+skip_empty = true

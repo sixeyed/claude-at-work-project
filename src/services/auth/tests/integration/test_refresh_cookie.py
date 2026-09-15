@@ -14,14 +14,12 @@ from http.cookies import SimpleCookie
 from typing import Any
 
 import httpx
-import pytest
-from tests.conftest import ADA, DEMO_WORKSPACE, DEX_PASSWORD
-from tests.dexflow import session_cookie
 
 from auth.cookies import COOKIE_NAME, COOKIE_PATH
-from tests import dexflow
-
-pytestmark = pytest.mark.integration
+from testkit import dexflow
+from testkit.auth import DEMO_WORKSPACE
+from testkit.dex import ADA, DEX_PASSWORD
+from testkit.dexflow import session_cookie
 
 
 async def sign_in(client: httpx.AsyncClient, email: str = ADA) -> dict[str, Any]:

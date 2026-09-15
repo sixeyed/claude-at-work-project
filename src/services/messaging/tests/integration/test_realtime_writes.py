@@ -21,8 +21,6 @@ import pytest
 import socketio
 from sqlalchemy import text
 
-pytestmark = pytest.mark.integration
-
 WAIT = 5
 
 

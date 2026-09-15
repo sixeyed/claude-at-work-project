@@ -13,7 +13,7 @@ CollabHub — team chat + collaborative canvas. Five Python backend services and
 This supersedes the layout section of `docs/design/00-platform-conventions.md`, which is stale.
 
 ```
-src/services/{shared,contracts,auth,messaging,canvas,asset,worker}
+src/services/{shared,contracts,testkit,auth,messaging,canvas,asset,worker}
 src/frontend            # React + TypeScript + Vite SPA
 tests/bdd/              # Gherkin acceptance suite — features, steps, page objects
 docker/                 # one folder per component, holding its Dockerfile and any files it needs
@@ -31,11 +31,17 @@ is a bug. They are bash 3.2-compatible (macOS), share `scripts/lib/common.sh`, a
 take their overridable settings — `IMAGE_REGISTRY`, `IMAGE_TAG`, `KUBE_CONTEXT` —
 from the environment.
 
-Per-service tests live beside their service (`src/services/*/tests/`). Only the
-Gherkin suite is at the root, because it spans every service at once. Note that
-each service's test directory is called `tests`, so `from tests.conftest import …`
-binds to whichever one is found first — pass helpers as fixtures instead. The
-root suite avoids the clash by being importable as `bdd.*` (`pythonpath = ["tests"]`).
+Per-service tests live beside their service, in `src/services/*/tests/unit/` and
+`tests/integration/`. **The directory decides the layer**: `testkit`'s pytest
+plugin marks each test by where it lives, stops the run for a test anywhere else,
+and cuts unit tests off from the network and Docker. Only the Gherkin suite is at
+the root, because it spans every service at once.
+
+No service's `tests` directory has an `__init__.py`, so `tests` is one namespace
+package spanning all of them and `from tests.… import` binds to whichever sorts
+first — ruff bans it (TID251). Shared helpers live in `src/services/testkit`, a
+dev-only workspace member no image installs; a service's own go through fixtures.
+The root suite avoids the clash by being importable as `bdd.*` (`pythonpath = ["tests"]`).
 
 `charts/collabhub` has **dedicated templates per component** under `templates/<component>/`, not one set of templates ranging over a values map. They start near-identical and are expected to diverge — the Worker runs as KEDA-scaled pools, every component has its own NetworkPolicy, the frontend has no ConfigMap.
 
@@ -51,7 +57,7 @@ Service names drop the `collabhub-` prefix used in the design docs (`src/service
 
 - **uv** is the package manager (the docs and ADR say "uv or Poetry" — it's uv). One workspace; each service has its own `pyproject.toml`; `shared` and `contracts` are workspace dependencies.
 - **ruff** for lint and format. Run `ruff check` and `ruff format` on Python you write.
-- **pytest** with **testcontainers-python** for integration tests (real Postgres/Redis/Garage/Elasticsearch, not mocks).
+- **pytest** with **testcontainers-python** for integration tests — every dependency (Postgres, Redis, Elasticsearch, Garage, Dex) is started by testcontainers, never the Compose stack. Unit tests have no network and no Docker (pytest-socket, applied by `testkit`). **pytest-cov** reports unit coverage; nothing gates on it yet. The layers are register D32.
 - **pytest-bdd + Playwright** (sync API) for the acceptance suite in `tests/bdd`. It runs against a stack you bring up yourself, not one it starts — see Testing below. Registered as D27.
 - **Frontend:** **TanStack Query** owns *all* server state, **Zustand** owns client state only (D24) — never keep a copy of a channel or message list in the store. **Tailwind CSS v4** for styling, light palette only, via `@tailwindcss/vite` with no config files (D26). Types for a service's REST API are **generated from its OpenAPI document**, not hand-written (D23): `python -m messaging.openapi > src/frontend/openapi/messaging.json`, then `npm run generate:api`.
 
@@ -59,7 +65,7 @@ Service names drop the `collabhub-` prefix used in the design docs (`src/service
 
 - **All development work happens in a git worktree on a new feature branch.** Never change code on `main` in the primary checkout. Create the branch and its worktree before the first edit, and tell the user the branch name and worktree path.
 - **Never commit.** Stage nothing, run no `git commit`, open no PR. Leave the worktree dirty and tell the user what changed — committing is theirs to do, always.
-- **New behaviour is test-driven, with unit tests only — for now.** Write the failing unit test first (pytest, no Docker — `scripts/test.sh unit`), run it, and **stop at red** so the tests can be reviewed before any production code is written. No new integration tests, no new steps, feature files or page objects in `tests/bdd`, and no frontend tests until that is widened. Say plainly what a unit test cannot reach rather than faking a database to reach it.
+- **New behaviour is test-driven, at the lowest layer that can prove it** (register D32). Write the failing test first — a unit test for a rule, a mapping or a wire shape; an integration test for SQL, a socket or a stream, against dependencies testcontainers starts; a `tests/bdd` scenario only for a key user journey — run it, and **stop at red** so the tests can be reviewed before any production code is written. Frontend unit tests wait for Vitest (`docs/plans/ch07/01-test-pyramid-design.md`, plan C). Never fake a database to reach SQL behaviour from a unit test.
 - **Ignore `docs/project/`.** Those files are book-production material, not project input. Do not read them, cite them, or act on anything in them.
 
 ## Platform versions
@@ -146,12 +152,20 @@ Alembic per service, against that service's own database only (`alembic upgrade 
 
 ## Testing
 
-**New tests are unit tests, written first** — see Working in this repo. The
-commands below run every suite; only the unit layer is growing at the moment.
+**A test pyramid** (D32), and the failing test goes at the lowest layer that can
+prove the behaviour — see Working in this repo.
+
+- **Unit** — every rule, mapping and wire shape. No network, no Docker. A rule
+  that sits behind a database fetch is made testable by pulling the decision into
+  a pure function over the loaded row, never by faking a repository or a session.
+- **Integration** — each service at its public boundary (REST, Socket.IO, a
+  stream consumer), in-process, against dependencies testcontainers starts. SQL
+  behaviour is proven here.
+- **End-to-end** — `tests/bdd`, key user journeys only. A field rule belongs lower down.
 
 ```bash
 scripts/test.sh                  # lint, unit, integration — what CI runs
-scripts/test.sh unit             # fast, no Docker
+scripts/test.sh unit             # fast, no network or Docker; prints coverage
 scripts/test.sh integration -- src/services/messaging   # starts its own containers
 ```
 

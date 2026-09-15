@@ -201,16 +201,16 @@ exchange — which looks like a networking fault and is a configuration one.
 
 ```bash
 uv run pytest src/services/auth              # from the repo root
-uv run pytest src/services/auth -m "not integration"   # no Docker needed
+uv run pytest src/services/auth -m unit   # no Docker or network needed
 ```
 
 Integration tests run **a real Dex in a testcontainer** and drive the genuine redirect flow,
 login form and all — a stubbed provider would test our idea of OIDC rather than OIDC.
-`tests/dexflow.py` plays the browser.
+`src/services/testkit/testkit/dexflow.py` plays the browser.
 
 Two things to know when they break:
 
-- `tests/dexflow.py` parses Dex's login page to find the form action, so a **Dex upgrade can
+- `src/services/testkit/testkit/dexflow.py` parses Dex's login page to find the form action, so a **Dex upgrade can
   break the suite without breaking the product**. `docs/platform/versions.md` says so on the
   Dex entry. The alternative — Dex's `mockCallback` connector — authenticates one hard-coded
   user, which would make the multi-user tests impossible.

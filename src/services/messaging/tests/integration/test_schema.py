@@ -7,10 +7,7 @@ then fails on a real deployment.
 
 from __future__ import annotations
 
-import pytest
 from sqlalchemy import text
-
-pytestmark = pytest.mark.integration
 
 
 async def _rows(engine, sql: str, **params) -> list[tuple]:

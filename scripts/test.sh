@@ -81,14 +81,15 @@ layer_lint() {
 
 layer_unit() {
     log "unit tests"
-    uv run pytest -m "not integration and not bdd" ${pytest_args[@]+"${pytest_args[@]}"}
+    uv run pytest -m unit --cov --cov-report=term:skip-covered --cov-report=xml \
+        ${pytest_args[@]+"${pytest_args[@]}"}
 }
 
 layer_integration() {
     require_cmd docker
     docker info >/dev/null 2>&1 || die "integration tests need Docker, and the daemon is not reachable"
     log "integration tests"
-    uv run pytest -m "integration and not bdd" ${pytest_args[@]+"${pytest_args[@]}"}
+    uv run pytest -m integration ${pytest_args[@]+"${pytest_args[@]}"}
 }
 
 log "syncing the Python workspace"

@@ -13,7 +13,7 @@ Two of these scenarios turn on an *absence*, which is the kind of assertion
 worth being explicit about. "Grace is not offered the channel controls" checks
 that the admin controls are not rendered — not that clicking one fails. The
 server refuses a non-admin write with a 403 either way; that is covered in
-`src/services/messaging/tests/test_channels.py`, because a control the SPA
+`src/services/messaging/tests/integration/test_channels.py`, because a control the SPA
 deliberately does not draw is not something a browser can drive.
 """
 

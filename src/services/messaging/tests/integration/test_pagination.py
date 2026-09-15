@@ -12,10 +12,6 @@ last one is short — the boundary where an off-by-one in `fetch_limit` shows up
 
 from __future__ import annotations
 
-import pytest
-
-pytestmark = pytest.mark.integration
-
 TOTAL = 120
 
 

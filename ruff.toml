@@ -33,6 +33,7 @@ select = [
     "EXE",  # flake8-executable
     "C90",  # mccabe complexity, see [lint.mccabe] below
     "ERA",  # eradicate — commented-out code
+    "TID251", # banned imports — see [lint.flake8-tidy-imports.banned-api]
 ]
 # Deliberately NOT selected, with the violation count each would add today:
 #   ANN (683) and D (598) — annotating and docstringing every symbol is a
@@ -53,12 +54,22 @@ ignore = [
 [lint.mccabe]
 max-complexity = 10
 
+[lint.flake8-tidy-imports.banned-api]
+# No service's `tests` directory has an `__init__.py`, so `tests` is one
+# namespace package spanning all of them, and `from tests.conftest import X`
+# binds to whichever service sorts first. Shared helpers live in `testkit`; a
+# service's own go through fixtures.
+"tests".msg = "`tests` spans every service's test directory — import shared helpers from `testkit`, or take a fixture"
+
 [lint.per-file-ignores]
 "**/migrations/**" = ["I", "N", "UP"]  # Alembic-generated revisions
 # `assert` IS the point of a test, and test fixtures hold fake credentials for
 # Dex and the Worker's service token. S101/S105/S106 fire on both by design.
 "**/tests/**" = ["T20", "S101", "S105", "S106"]
 "tests/**" = ["T20", "S101", "S105", "S106"]
+# The harness holds the same fixture credentials the tests do — Dex's password
+# and client secret, the Worker's service secret — moved here from Auth's conftest.
+"src/services/testkit/**" = ["T20", "S101", "S105", "S106"]
 # The Claude Code hooks are developer tooling that runs on a laptop, not code
 # that ships: printing findings is their interface, and resolving `git` through
 # PATH (S607) is what you want there.
@@ -69,7 +80,7 @@ max-complexity = 10
 "**/scripts/**" = ["T20"]
 
 [lint.isort]
-known-first-party = ["shared", "contracts", "auth", "messaging", "canvas", "asset", "worker"]
+known-first-party = ["shared", "contracts", "testkit", "auth", "messaging", "canvas", "asset", "worker"]
 
 [format]
 quote-style = "double"
