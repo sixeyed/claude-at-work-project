@@ -70,21 +70,24 @@ plain `Deployment` with `replicaCount` replicas and renders no KEDA objects at
 all — but then no pool scales with load, including to zero, so that path is
 an escape hatch for a KEDA-less cluster rather than encouraged either way.
 
-`lagCount` only means anything relative to a consumer group's read position,
-and **the Worker does not create its consumer groups yet.** That is a silent
-gap today, not an erroring one: checked against KEDA v2.20.1's
-`redis_streams_scaler.go` (the `lagFactor` path), a missing stream returns lag
-`0` with no error, and a missing group on an existing stream returns `XLEN` as
-the lag, also with no error. `fallback.replicas: 1` never engages for either
-case — its real job is covering Redis being unreachable or the trigger's auth
-failing. The actual risk is sequencing: if a producer starts writing to a
-stream before the Worker creates that stream's consumer group, KEDA reads the
-growing `XLEN` as lag and scales the pool to its max, and nothing drains it
-because no consumer is reading — a `batch` pool pinned at 10 replicas, not
-held gracefully at one. Whoever adds consumer-group creation to the Worker
-must create each stream's group (`XGROUP CREATE <stream> worker 0 MKSTREAM`,
-from ID `0`) before, or in the same slice as, the first producer for that
-stream — never after.
+`lagCount` only means anything relative to a consumer group's read position.
+Checked against KEDA v2.20.1's `redis_streams_scaler.go` (the `lagFactor`
+path), a missing stream returns lag `0` with no error, and a missing group on
+an existing stream returns `XLEN` as the lag, also with no error, so
+`fallback.replicas: 1` never engages for either — its job is covering Redis
+being unreachable or the trigger's auth failing.
+
+**Updated 2026-09-15**, when message search merged. The Worker now creates each
+stream's group from ID `0` at startup, and exits on any stream it has no
+handler for. The sequencing risk recorded here on 2026-09-14 — a producer
+shipping before the group exists, pinning a pool at its max — is closed for
+any pool whose pods start: KEDA's `XLEN` reading scales the pool up, and the
+first pod creates the group, so the lag becomes real and drains. It survives in
+a new form: a pool naming a stream without a handler crash-loops before it can
+create a group, and KEDA keeps adding pods. So a pool lists only streams the
+Worker handles. The chart ships `notify` disabled until `jobs:notify` has a
+handler, runs `batch` on `jobs:index` alone, and fails the render for an
+enabled pool with no streams.
 
 Two pools sharing one image means two rollouts on every deploy instead of one,
 and two sets of pod logs/metrics to correlate instead of one — a small

@@ -87,6 +87,7 @@ def build_settings(postgres_dsn: str, redis_url: str, **overrides: Any) -> Setti
         "redis_cache_url": redis_url,
         "redis_realtime_url": redis_url,
         "redis_streams_url": redis_url,
+        "elasticsearch_url": "http://elasticsearch.invalid:9200",
         "auth_issuer": AUTH_ISSUER,
         "auth_audience": AUDIENCE,
         "auth_jwks_url": "https://auth.test/.well-known/jwks.json",

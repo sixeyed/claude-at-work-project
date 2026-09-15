@@ -14,6 +14,11 @@ The process serves two things on one port: FastAPI, and the Socket.IO
 `FastAPI` — every integration test drives that over `httpx.ASGITransport`, and
 `python -m messaging.openapi` builds a document from it with nothing running —
 and `build_asgi_app` wraps it for the server that actually listens.
+
+Two clients arrived with message search, and neither connects until it is
+used: a `JobQueue` on R3 for the `jobs:index` producer, and a query-only
+Elasticsearch client for `GET /search/messages`. Elasticsearch is deliberately
+absent from the readiness checks — see `settings.py`.
 """
 
 from __future__ import annotations
@@ -23,6 +28,7 @@ from contextlib import asynccontextmanager
 
 import redis.asyncio as aioredis
 import socketio
+from elasticsearch import AsyncElasticsearch
 from fastapi import FastAPI
 
 from messaging.db import build_engine, build_sessions
@@ -30,9 +36,11 @@ from messaging.realtime import RealtimeContext, build_server
 from messaging.realtime_writes import register_write_handlers
 from messaging.routers import channels as channel_routes
 from messaging.routers import messages as message_routes
+from messaging.routers import search as search_routes
 from messaging.settings import Settings
 from shared import (
     Denylist,
+    JobQueue,
     JwksClient,
     KeySource,
     SecurityConfig,
@@ -55,6 +63,13 @@ def create_app(settings: Settings, *, key_source: KeySource | None = None) -> Fa
     engine = build_engine(settings.postgres_dsn)
     sessions = build_sessions(engine)
     redis_client = aioredis.from_url(settings.redis_cache_url, decode_responses=True)
+    # R3, for the index producer. Short timeouts: see `shared/jobs.py`.
+    jobs = JobQueue.from_url(settings.redis_streams_url)
+    # Query-only. Fails fast so a search against a sick cluster returns 503
+    # promptly rather than holding a request for the client's default retries.
+    search_client = AsyncElasticsearch(
+        settings.elasticsearch_url, request_timeout=5, max_retries=1, retry_on_timeout=False
+    )
 
     keys = key_source or JwksClient(settings.auth_jwks_url)
 
@@ -67,6 +82,8 @@ def create_app(settings: Settings, *, key_source: KeySource | None = None) -> Fa
             await keys.aclose()
         await engine.dispose()
         await redis_client.aclose()
+        await jobs.aclose()
+        await search_client.close()
 
     app = FastAPI(title="CollabHub Messaging", version="0.1.0", lifespan=lifespan)
 
@@ -77,6 +94,8 @@ def create_app(settings: Settings, *, key_source: KeySource | None = None) -> Fa
     # makes the publishers in the routers inert under `ASGITransport`, so the
     # tests exercise the real router code without a socket server behind it.
     app.state.realtime = None
+    app.state.jobs = jobs
+    app.state.search = search_client
 
     install_cors(app, origins=settings.cors_allowed_origins)
     install_problem_handlers(app)
@@ -106,6 +125,7 @@ def create_app(settings: Settings, *, key_source: KeySource | None = None) -> Fa
     # single message is addressable on its own.
     app.include_router(message_routes.channel_router)
     app.include_router(message_routes.router)
+    app.include_router(search_routes.router)
 
     return app
 
@@ -129,6 +149,7 @@ def build_asgi_app(settings: Settings, *, key_source: KeySource | None = None):
         settings=settings,
         sessions=app.state.sessions,
         security=app.state.security,
+        jobs=app.state.jobs,
     )
     sio = build_server(context)
     register_write_handlers(sio, context)

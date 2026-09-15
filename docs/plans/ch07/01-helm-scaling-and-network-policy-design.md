@@ -31,7 +31,7 @@ Each needs an ADR (`adr-writer` skill) and a register update, made in this slice
 | ID | Was | Now |
 |---|---|---|
 | **D17** | 🟡 one deployment, CPU/IO split suggested | **Two Worker pools split on latency:** `notify` (floor 1) and `batch` (scales from 0) |
-| **D29** | new | **Socket.IO is WebSocket-only.** No long-polling fallback, so no session affinity anywhere |
+| **D30** | new | **Socket.IO is WebSocket-only.** No long-polling fallback, so no session affinity anywhere |
 
 NetworkPolicy strictness (deny all, allow listed, ingress *and* egress) is a chart design
 choice rather than a register entry.
@@ -124,6 +124,12 @@ producer for their stream, from ID `0` — `XGROUP CREATE <stream> worker 0 MKST
 lag KEDA measures matches the entries already sitting in the stream rather than skipping past
 them. Creating the groups is Worker code and out of scope here.
 
+**Updated 2026-09-15**, after message search merged (PR #3): the Worker now creates its groups
+from ID `0` at startup, which closes this gap for any pool whose pods start, and it exits on a
+stream with no handler. Pools therefore list only handled streams: the chart ships `notify` with
+`enabled: false` and `batch` on `jobs:index` alone, and fails the render for an enabled pool with
+no streams.
+
 ### Upgrade note
 
 The single `collabhub-worker` Deployment is replaced by two with different names and
@@ -132,7 +138,7 @@ is briefly absent during the rollout. Acceptable — producers never block on th
 
 ## 2. Real-time — WebSocket-only
 
-- **SPA** — `socket.ts` uses `transports: ['websocket']`, with a comment pointing at D29.
+- **SPA** — `socket.ts` uses `transports: ['websocket']`, with a comment pointing at D30.
 - **Messaging** — `build_server` passes `transports=['websocket']` to `socketio.AsyncServer`,
   so a polling handshake is refused by the server rather than merely not attempted by this
   client.
@@ -159,12 +165,15 @@ Ingress is to the component's app port only.
 |---|---|---|
 | frontend | ingress controller | — |
 | auth | ingress controller, messaging, canvas, asset, worker | DNS, Postgres, R1, OIDC provider, OTel |
-| messaging | ingress controller, worker | DNS, Postgres, R1, R2, R3, auth, OTel |
+| messaging | ingress controller, worker | DNS, Postgres, R1, R2, R3, Elasticsearch, auth, OTel |
 | canvas | ingress controller, worker | DNS, Postgres, R1, R2, auth, OTel |
 | asset | ingress controller, worker | DNS, Postgres, R1, R3, object store, auth, OTel |
 | worker | — | DNS, R3, Elasticsearch, object store, auth, messaging, canvas, asset, OTel |
 
 In-release peers are selected by the chart's own labels (`instance` + `component`).
+
+**Updated 2026-09-15:** Messaging gained Elasticsearch egress when message search merged
+(PR #3, `GET /search/messages`); until then it was listed as deliberately not covered.
 
 ### External peers
 
@@ -211,14 +220,13 @@ and one outside it are configured the same way.
 | Kubelet probes | Originate on the node, which common CNIs admit regardless |
 | KEDA operator → R3 | KEDA's pods, not this release's |
 | Browser → Garage presigned uploads | Never passes through a CollabHub pod |
-| Messaging → Elasticsearch | `/search/messages` is not built (D8c) — add with it |
 | Worker → notification providers | Channels undecided (D18 🔴) |
 | Hiding `/api/v1/internal/` from the ingress controller | L7; NetworkPolicy is L3/L4. Remains an ingress routing rule (Conventions §5.5) |
 
 ## 4. Record the decisions
 
-- `docs/design/07-open-decisions-register.md` — D17 → 🟢; add D29 🟢.
-- ADRs via `adr-writer`: Worker pools split on latency (D17); WebSocket-only Socket.IO (D29).
+- `docs/design/07-open-decisions-register.md` — D17 → 🟢; add D30 🟢.
+- ADRs via `adr-writer`: Worker pools split on latency (D17); WebSocket-only Socket.IO (D30).
 - `docs/design/05-worker-service.md` §5.3 — `lagCount`, the two pools; §9 D17 bullet struck through.
 - `docs/design/00-platform-conventions.md` §6 — transport bullet becomes WebSocket-only.
 - `docs/design/02-messaging-service.md` §3.2 — server refuses polling.

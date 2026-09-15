@@ -1,12 +1,18 @@
 {{- $component := .Values.components.worker }}
 {{- if $component.enabled }}
 {{- range $poolName, $pool := $component.pools }}
+{{- if $pool.enabled }}
+{{- if not $pool.streams }}
+{{- fail (printf "components.worker.pools.%s is enabled but lists no streams. List the streams it consumes, or set enabled: false." $poolName) }}
+{{- end }}
 {{- $ctx := dict "root" $ "name" "worker" "pool" $poolName }}
 ---
-# One Deployment per pool (register D17). Pools share image, ConfigMap and
-# secret, and differ only in WORKER_STREAMS. With autoscaling enabled KEDA owns
-# replicas through scaledobject.yaml, so spec.replicas is omitted — otherwise
-# every `helm upgrade` would reset what the HPA had set.
+# One Deployment per enabled pool (register D17). Pools share image, ConfigMap
+# and secret, and differ only in WORKER_STREAMS — which must name only streams
+# the Worker has handlers for, or it exits at startup (doc 05 §5.3). With
+# autoscaling enabled KEDA owns replicas through scaledobject.yaml, so
+# spec.replicas is omitted — otherwise every `helm upgrade` would reset what the
+# HPA had set.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -65,5 +71,6 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml ($component.resources | default $.Values.defaults.resources) | nindent 12 }}
+{{- end }}
 {{- end }}
 {{- end }}

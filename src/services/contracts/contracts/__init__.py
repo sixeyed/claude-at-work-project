@@ -1,11 +1,25 @@
 """Pydantic DTOs and job payload models shared across CollabHub service boundaries.
 
-Deliberately empty in the scaffold. The DTOs (`Message`, `Asset`, the job
-envelope from Conventions §7, and the rest) arrive with the services that use
-them, so that no model here exists without a producer and a consumer.
+Nothing lives here without a producer and a consumer. `indexing` is the first:
+Messaging produces message index jobs, the Worker consumes them, and Messaging
+reads the index the Worker writes. The job envelope itself is generic and lives
+in `collabhub-shared`.
 
-JSON is camelCase on the wire; models declare `alias_generator=to_camel` when
-they land.
+JSON is camelCase on the wire; models declare `alias_generator=to_camel`.
 """
 
-__all__: list[str] = []
+from contracts.indexing import (
+    JOBS_INDEX,
+    MESSAGE_DELETE,
+    MESSAGE_UPSERT,
+    MESSAGES_ALIAS,
+    MessageIndexPayload,
+)
+
+__all__ = [
+    "JOBS_INDEX",
+    "MESSAGES_ALIAS",
+    "MESSAGE_DELETE",
+    "MESSAGE_UPSERT",
+    "MessageIndexPayload",
+]

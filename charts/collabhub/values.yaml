@@ -89,7 +89,7 @@ components:
       MESSAGING_MAX_BODY_CHARS: "8000"
       MESSAGING_MAX_ATTACHMENTS: "10"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-    # Supplies POSTGRES_DSN and all three REDIS_*_URL values.
+    # Supplies POSTGRES_DSN, all three REDIS_*_URL values and ELASTICSEARCH_URL.
     envFromSecrets:
       - collabhub-messaging
 
@@ -150,7 +150,7 @@ components:
 
   worker:
     enabled: true
-    # Only used with autoscaling disabled, when every pool runs this many. With
+    # Only used with autoscaling disabled, when every enabled pool runs this many. With
     # it enabled KEDA owns replicas and the Deployments omit the field.
     replicaCount: 1
     port: 8000
@@ -171,6 +171,7 @@ components:
       WORKER_MAX_ATTEMPTS: "5"
       WORKER_VISIBILITY_TIMEOUT_SECONDS: "60"
       WORKER_BATCH_SIZE: "16"
+      WORKER_DEAD_LETTER_MAXLEN: "10000"
       OBJECT_STORE_BUCKET: collabhub-assets
       ASSET_INTERNAL_URL: http://collabhub-asset:8000/api/v1/internal
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
@@ -193,21 +194,28 @@ components:
       cooldownPeriod: 300
       consumerGroup: worker # doc 05 §5.1
       lagCount: "5"
-    # One Deployment and one ScaledObject per pool (register D17). Split on
-    # latency: notify keeps a floor for its < 5 s p95 target, batch scales from
-    # zero. A pool's streams become its WORKER_STREAMS.
+    # One Deployment and one ScaledObject per enabled pool (register D17). Split
+    # on latency: notify keeps a floor for its < 5 s p95 target, batch scales
+    # from zero. A pool's streams become its WORKER_STREAMS.
+    #
+    # List only streams the Worker has handlers for. It exits at startup on any
+    # other, and under KEDA a crashing pod never creates its consumer group, so
+    # KEDA keeps adding pods (doc 05 §5.3). jobs:index is the only one built:
+    # add jobs:thumbnail, jobs:export and jobs:retention to batch, and enable
+    # notify, as their handlers ship. An enabled pool with no streams fails the
+    # render.
     pools:
       notify:
+        # Off until a jobs:notify handler exists.
+        enabled: false
         streams:
           - jobs:notify
         minReplicas: 1
         maxReplicas: 5
       batch:
+        enabled: true
         streams:
           - jobs:index
-          - jobs:thumbnail
-          - jobs:export
-          - jobs:retention
         minReplicas: 0
         maxReplicas: 10
 

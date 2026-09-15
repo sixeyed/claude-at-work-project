@@ -26,14 +26,19 @@ class Settings(BaseSettings):
     object_store_bucket: str = "collabhub-assets"
 
     # Which streams this deployment consumes. Register D17 is decided: the chart
-    # runs two KEDA-scaled pools, `notify` and `batch`, each setting this to its
-    # own subset (docs/design/05-worker-service.md §5.3). The default below —
-    # every stream — is what local/Compose runs, where there is only ever one
-    # Worker process.
-    worker_streams: str = "jobs:index,jobs:thumbnail,jobs:notify,jobs:export,jobs:retention"
+    # runs KEDA-scaled pools, each setting this to its own subset
+    # (docs/design/05-worker-service.md §5.3). Only streams with handlers belong
+    # here: the Worker refuses to start on one it cannot handle, rather than
+    # dead-lettering every job on it. `jobs:index` is the only one built, so it
+    # is also the default local/Compose runs.
+    worker_streams: str = "jobs:index"
     worker_max_attempts: int = 5
     worker_visibility_timeout_seconds: int = 60
     worker_batch_size: int = 16
+    # Dead-letter entries hold job payloads, which for index jobs means message
+    # bodies (doc 05 §8) — so the dead stream is capped deliberately, not left
+    # to grow.
+    worker_dead_letter_maxlen: int = 10_000
 
     # Auth is a runtime dependency: the Worker exchanges these for a service
     # token to call Asset's internal endpoint (Conventions §5.5).

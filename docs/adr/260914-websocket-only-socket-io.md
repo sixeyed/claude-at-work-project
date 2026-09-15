@@ -5,7 +5,7 @@
 
 ## Context
 
-Register entry **D29** — never previously given an ID — surfaced while shaping
+Register entry **D30** — never previously given an ID — surfaced while shaping
 the Helm chart's scaling and network-policy work (`docs/plans/ch07/01-helm-scaling-and-network-policy-design.md`).
 The chart's Messaging and Canvas Services carried `sessionAffinity: ClientIP`,
 justified in both `values.yaml` and their `service.yaml` templates by the same

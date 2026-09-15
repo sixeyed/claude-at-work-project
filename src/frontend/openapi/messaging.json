@@ -1012,7 +1012,7 @@
     },
     "/api/v1/messages/{message_id}": {
       "delete": {
-        "description": "Tombstone a message. The author, or an admin of its channel.\n\n**200 with the tombstoned message, not 204.** A delete here does not remove\na row from the list \u2014 it stays with `body: \"\"` and `deletedAt` set, and the\nclient has to render it. With 204 the client would have to refetch a page it\nis already holding to learn what to draw; with the row in hand it replaces\none entry in its cache. The same argument as returning the created row from\na `POST`, and a deliberate deviation from \"DELETE returns 204\" rather than a\nsurprise in the OpenAPI document.\n\nDeleting twice returns the same tombstone, unchanged.",
+        "description": "Tombstone a message. The author, or an admin of its channel.\n\n**200 with the tombstoned message, not 204.** A delete here does not remove\na row from the list \u2014 it stays with `body: \"\"` and `deletedAt` set, and the\nclient has to render it. With 204 the client would have to refetch a page it\nis already holding to learn what to draw; with the row in hand it replaces\none entry in its cache. The same argument as returning the created row from\na `POST`, and a deliberate deviation from \"DELETE returns 204\" rather than a\nsurprise in the OpenAPI document.\n\nDeleting twice returns the same tombstone, unchanged \u2014 and enqueues no\nsecond index job, because nothing about the document changed.",
         "operationId": "delete_message_api_v1_messages__message_id__delete",
         "parameters": [
           {
@@ -1145,6 +1145,78 @@
         "summary": "Edit Message",
         "tags": [
           "messages"
+        ]
+      }
+    },
+    "/api/v1/search/messages": {
+      "get": {
+        "description": "Messages matching every word of `q`, newest first, in channels the caller can see.\n\n**A short page is not the last page** \u2014 hydration can drop a hit whose row\nwas deleted after it was indexed. Only `nextCursor: null` means the end.",
+        "operationId": "search_messages_api_v1_search_messages_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "q",
+            "required": true,
+            "schema": {
+              "maxLength": 200,
+              "title": "Q",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 50,
+              "maximum": 200,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Search Messages",
+        "tags": [
+          "search"
         ]
       }
     },

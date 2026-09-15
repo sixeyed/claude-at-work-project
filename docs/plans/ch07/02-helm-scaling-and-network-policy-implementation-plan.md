@@ -25,7 +25,7 @@
 
 ---
 
-### Task 1: Socket.IO is WebSocket-only; the chart loses session affinity (D29)
+### Task 1: Socket.IO is WebSocket-only; the chart loses session affinity (D30)
 
 **Files:**
 - Modify: `src/services/messaging/messaging/realtime.py:143-154`
@@ -34,7 +34,7 @@
 - Modify: `charts/collabhub/values.yaml` (every `sessionAffinity` line, Messaging's comment above it)
 - Modify: `docs/design/00-platform-conventions.md:276-277`
 - Modify: `docs/design/02-messaging-service.md` §3.2 opening paragraph
-- Modify: `docs/design/07-open-decisions-register.md` (settled list, new D29 row)
+- Modify: `docs/design/07-open-decisions-register.md` (settled list, new D30 row)
 - Create: `docs/adr/260914-websocket-only-socket-io.md` (via `adr-writer`)
 
 **Interfaces:**
@@ -47,7 +47,7 @@ In `build_server`, add `transports` after `cors_allowed_origins`:
 
 ```python
         cors_allowed_origins=context.settings.cors_allowed_origins or None,
-        # WebSocket only (register D29). A long-polling session needs every
+        # WebSocket only (register D30). A long-polling session needs every
         # request to reach the same pod, and nothing in front of this service
         # promises that — so the server refuses polling rather than trusting
         # each client not to try it.
@@ -62,7 +62,7 @@ In `socket.ts`:
 ```ts
   return io(`${MESSAGING_URL}/messaging`, {
     auth: { token: accessToken },
-    // WebSocket only (register D29): the server refuses long-polling, so
+    // WebSocket only (register D30): the server refuses long-polling, so
     // offering it would only turn a blocked WebSocket into a confusing 400.
     transports: ['websocket'],
   })
@@ -116,7 +116,7 @@ Replace lines 276-277:
 with:
 
 ```markdown
-- **Transport:** WebSocket only — **decided 2026-09-14 (register D29).** Servers pass
+- **Transport:** WebSocket only — **decided 2026-09-14 (register D30).** Servers pass
   `transports=["websocket"]` and clients `transports: ['websocket']`; there is no HTTP
   long-polling fallback. A polling session needs every request on one pod, which neither a
   Service's `sessionAffinity` (bypassed by ingress-nginx) nor the R2 backplane provides, so
@@ -130,7 +130,7 @@ After the paragraph ending "`send_message` returns the created `Message` via the
 
 ```markdown
 
-**WebSocket only — added 2026-09-14 (register D29).** `build_server` passes
+**WebSocket only — added 2026-09-14 (register D30).** `build_server` passes
 `transports=["websocket"]`, so a long-polling handshake is refused rather than served, and
 the chart sets no session affinity. See Conventions §6.
 ```
@@ -140,14 +140,14 @@ the chart sets no session affinity. See Conventions §6.
 After the `**Settled 2026-08-16:**` paragraph in *Resolve First*, add:
 
 ```markdown
-**Settled 2026-09-14:** D29 — Socket.IO is WebSocket-only, which is what lets the
+**Settled 2026-09-14:** D30 — Socket.IO is WebSocket-only, which is what lets the
 Helm chart carry no session affinity.
 ```
 
 Append a row to the *Frontend SPA* table, after D28:
 
 ```markdown
-| D29 | Socket.IO transport: WebSocket with long-polling fallback vs. WebSocket only (raised 2026-09-14; never had an ID) | 🟢 **Decided (2026-09-14):** WebSocket only, refused by the server as well as not offered by the client | Long-polling needs every request of a session on one pod. `sessionAffinity: ClientIP` is bypassed by ingress-nginx, and would see only the controller's IP if it were not, so the chart carries no affinity at all. Cost: networks that block WebSockets cannot connect. See [ADR 260914](../adr/260914-websocket-only-socket-io.md) | Cross-cutting (Messaging, Canvas, Frontend, chart) |
+| D30 | Socket.IO transport: WebSocket with long-polling fallback vs. WebSocket only (raised 2026-09-14; never had an ID) | 🟢 **Decided (2026-09-14):** WebSocket only, refused by the server as well as not offered by the client | Long-polling needs every request of a session on one pod. `sessionAffinity: ClientIP` is bypassed by ingress-nginx, and would see only the controller's IP if it were not, so the chart carries no affinity at all. Cost: networks that block WebSockets cannot connect. See [ADR 260914](../adr/260914-websocket-only-socket-io.md) | Cross-cutting (Messaging, Canvas, Frontend, chart) |
 ```
 
 - [ ] **Step 8: ADR**
@@ -537,7 +537,7 @@ Change Task 1's settled line to:
 
 ```markdown
 **Settled 2026-09-14:** D17 — the Worker runs as two KEDA-scaled pools split on
-latency — and D29 — Socket.IO is WebSocket-only, which is what lets the Helm chart
+latency — and D30 — Socket.IO is WebSocket-only, which is what lets the Helm chart
 carry no session affinity.
 ```
 
@@ -833,8 +833,9 @@ Create `templates/messaging/networkpolicy.yaml`:
 {{- $ctx := dict "root" $ "name" "messaging" }}
 # Messaging — reached by the browser through the ingress (REST and the
 # /messaging WebSocket) and by the Worker for its internal sweep endpoint.
-# Reaches Postgres, all three Redis instances, and Auth for JWKS.
-# No Elasticsearch yet: /search/messages is not built (register D8c).
+# Reaches Postgres, all three Redis instances (R3 to enqueue jobs:index),
+# Elasticsearch read-only for GET /search/messages (register D8c), and Auth
+# for JWKS.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -857,6 +858,7 @@ spec:
     {{- include "collabhub.egressToPeer" (dict "root" $ "name" "messaging" "peer" "redisCache") | nindent 4 }}
     {{- include "collabhub.egressToPeer" (dict "root" $ "name" "messaging" "peer" "redisRealtime") | nindent 4 }}
     {{- include "collabhub.egressToPeer" (dict "root" $ "name" "messaging" "peer" "redisStreams") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "messaging" "peer" "elasticsearch") | nindent 4 }}
     {{- include "collabhub.egressToComponent" (dict "root" $ "target" "auth") | nindent 4 }}
     {{- include "collabhub.egressToPeer" (dict "root" $ "name" "messaging" "peer" "otelCollector") | nindent 4 }}
 {{- end }}
