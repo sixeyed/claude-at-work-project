@@ -1,0 +1,123 @@
+{{- $ctx := dict "root" $ "name" "dex" }}
+# Dex — the upstream identity provider (register D5). Auth federates to it; it is
+# never an OpenID Provider itself.
+#
+# The issuer is the public origin, served under /dex by the Ingress, because it
+# is what lands in `iss` and where the browser is sent. Auth's back-channel calls
+# go to http://dex:5556/dex instead — see OIDC_PROVIDERS in app-secrets.yaml.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: dex
+  labels:
+    {{- include "collabhub-local.labels" $ctx | nindent 4 }}
+type: Opaque
+stringData:
+  DEX_PASSWORD_HASH: {{ .Values.dex.passwordHash | quote }}
+  # THIRD COPY — keep in step with docker/dex/config.yaml and config.test.yaml.
+  # Dex reads its issuer and redirect URIs only from this file, never from the
+  # environment, so every place it runs needs its own. Only those URLs differ.
+  # A Secret rather than a ConfigMap because the client secret is in it.
+  config.yaml: |
+    issuer: {{ .Values.origin }}/dex
+
+    storage:
+      type: memory
+
+    web:
+      http: 0.0.0.0:5556
+
+    telemetry:
+      http: 0.0.0.0:5558
+
+    oauth2:
+      responseTypes: ["code"]
+      skipApprovalScreen: true
+
+    staticClients:
+      - id: collabhub-auth
+        name: CollabHub
+        secret: {{ .Values.dex.clientSecret }}
+        redirectURIs:
+          - {{ .Values.origin }}/api/v1/auth/callback/dex
+
+    enablePasswordDB: true
+
+    staticPasswords:
+      - email: ada@collabhub.dev
+        username: ada
+        userID: 6f9619ff-8b86-d011-b42d-00c04fc964ff
+        hashFromEnv: DEX_PASSWORD_HASH
+      - email: grace@collabhub.dev
+        username: grace
+        userID: 7a9619ff-8b86-d011-b42d-00c04fc964ff
+        hashFromEnv: DEX_PASSWORD_HASH
+      - email: alan@collabhub.dev
+        username: alan
+        userID: 8b9619ff-8b86-d011-b42d-00c04fc964ff
+        hashFromEnv: DEX_PASSWORD_HASH
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dex
+  labels:
+    {{- include "collabhub-local.labels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "collabhub-local.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: http
+      port: 5556
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dex
+  labels:
+    {{- include "collabhub-local.labels" $ctx | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "collabhub-local.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # In-memory storage, so the config is re-read only on a restart.
+        checksum/config: {{ list .Values.origin .Values.dex | toJson | sha256sum }}
+      labels:
+        {{- include "collabhub-local.selectorLabels" $ctx | nindent 8 }}
+    spec:
+      containers:
+        - name: dex
+          image: {{ .Values.dex.image }}
+          command: ["dex", "serve", "/etc/dex/config.yaml"]
+          env:
+            - name: DEX_PASSWORD_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: dex
+                  key: DEX_PASSWORD_HASH
+          ports:
+            - name: http
+              containerPort: 5556
+            - name: telemetry
+              containerPort: 5558
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: telemetry
+            periodSeconds: 5
+          volumeMounts:
+            - name: config
+              mountPath: /etc/dex
+              readOnly: true
+      volumes:
+        - name: config
+          secret:
+            secretName: dex
+            items:
+              - key: config.yaml
+                path: config.yaml

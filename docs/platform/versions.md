@@ -183,6 +183,8 @@ this file so the same release is never announced twice.
   notes: >
     N-2 support policy; supported minors are 1.36, 1.35, 1.34. v1.37 expected 2026-08-26.
     Managed clusters (AKS/EKS/GKE) lag upstream — align to the platform's offered versions.
+    The local k3d cluster pins its k3s image to this track in scripts/k3d/cluster.yaml
+    (rancher/k3s:v1.36.4-k3s1) — move it when pinned_track moves.
 
 - id: keda
   name: KEDA
@@ -200,6 +202,8 @@ this file so the same release is never announced twice.
     keda.sh/v1alpha1 API. The redis-streams trigger's lagCount is the only metric that
     scales from zero and needs Redis 7+ (pinned track is 8). Check KEDA's Kubernetes
     compatibility table before a cluster upgrade. sixeyed runs 2.20.1 as of 2026-09-14.
+    The local k3d cluster gets it from `scripts/deploy.sh infra`, pinned by KEDA_VERSION
+    in scripts/lib/common.sh — move that with current_stable.
 
 - id: otel-collector
   name: OpenTelemetry Collector

@@ -1,0 +1,78 @@
+{{- /*
+Three separate instances — R1 cache and denylist, R2 Socket.IO backplane, R3 job
+streams (Conventions §7). Separate Deployments, not three databases on one
+server, for the same reason docker-compose.yml runs three containers: it is what
+stops them being conflated in code.
+*/}}
+{{- range .Values.redis.instances }}
+{{- $ctx := dict "root" $ "name" .name }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "collabhub-local.labels" $ctx | nindent 4 }}
+spec:
+  selector:
+    {{- include "collabhub-local.selectorLabels" $ctx | nindent 4 }}
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+{{- if .persistent }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .name }}-data
+  labels:
+    {{- include "collabhub-local.labels" $ctx | nindent 4 }}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: {{ $.Values.redis.storage }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .name }}
+  labels:
+    {{- include "collabhub-local.labels" $ctx | nindent 4 }}
+spec:
+  replicas: 1
+  # A ReadWriteOnce volume cannot be mounted by the old and new pod at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "collabhub-local.selectorLabels" $ctx | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "collabhub-local.selectorLabels" $ctx | nindent 8 }}
+    spec:
+      containers:
+        - name: redis
+          image: {{ $.Values.redis.image }}
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+          {{- if .persistent }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
+      {{- if .persistent }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ .name }}-data
+      {{- end }}
+{{- end }}

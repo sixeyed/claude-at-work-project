@@ -1,0 +1,63 @@
+{{- $app := .Values.appRelease }}
+{{- $ctx := dict "root" $ "name" "ingress" }}
+# One origin for the SPA, every public API and Dex. Register D22 needs the SPA
+# and the API same-site — the refresh cookie is SameSite=Strict — and same-origin
+# also means no CORS at all.
+#
+# The routes are an allow-list of public prefixes. Nothing matches
+# /api/v1/internal/ (Conventions §5.5) or /health, so those fall through to the
+# SPA's index.html and never reach a service.
+#
+# Canvas and Asset have no public API yet. When Canvas gets real-time it will
+# want /socket.io too, which Messaging already holds — that is a decision for
+# then, not a route to guess at now.
+#
+# Traefik balances across pods itself, ignoring anything a Service says about
+# affinity. That is fine because Socket.IO is WebSocket-only (register D30): a
+# connection is one long-lived request, so it stays on the pod it reached.
+#
+# charts/collabhub's NetworkPolicies admit traffic from this Ingress only via
+# the ingressController peer in values-k3d.yaml, which names Traefik.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: collabhub
+  labels:
+    {{- include "collabhub-local.labels" $ctx | nindent 4 }}
+spec:
+  ingressClassName: traefik
+  rules:
+    - http:
+        paths:
+          {{- range list "/api/v1/auth" "/api/v1/users" "/api/v1/workspaces" "/.well-known" }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $app }}-auth
+                port:
+                  name: http
+          {{- end }}
+          {{- range list "/api/v1/channels" "/api/v1/messages" "/api/v1/search" "/socket.io" }}
+          - path: {{ . }}
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $app }}-messaging
+                port:
+                  name: http
+          {{- end }}
+          - path: /dex
+            pathType: Prefix
+            backend:
+              service:
+                name: dex
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ $app }}-frontend
+                port:
+                  name: http

@@ -20,6 +20,14 @@ fullnameOverride: ""
 imagePullPolicy: IfNotPresent
 terminationGracePeriodSeconds: 30
 
+# Release-wide image settings. A component's own image.tag still wins when set,
+# but normally only these move — scripts/deploy.sh sets both.
+image:
+  # Prefixed to every repository when set: localhost:5500 → localhost:5500/collabhub/auth.
+  registry: ""
+  # Empty means the chart's appVersion, keeping image and chart in step.
+  tag: ""
+
 # Applied to every component unless it overrides the same key.
 defaults:
   podSecurityContext:
@@ -63,7 +71,11 @@ components:
       AUTH_ACCESS_TOKEN_MINUTES: "15"
       AUTH_REFRESH_TOKEN_DAYS: "30"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-    # Supplies POSTGRES_DSN, REDIS_CACHE_URL, AUTH_SIGNING_KEY.
+      # templates/auth/migrate-job.yaml migrates once per release instead of
+      # every replica migrating as it starts (docker/auth/entrypoint.sh).
+      RUN_MIGRATIONS: "false"
+    # Supplies POSTGRES_DSN, REDIS_CACHE_URL, AUTH_SIGNING_KEY, OIDC_PROVIDERS
+    # and AUTH_SERVICE_CLIENTS.
     envFromSecrets:
       - collabhub-auth
 
@@ -89,6 +101,8 @@ components:
       MESSAGING_MAX_BODY_CHARS: "8000"
       MESSAGING_MAX_ATTACHMENTS: "10"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      # See templates/messaging/migrate-job.yaml.
+      RUN_MIGRATIONS: "false"
     # Supplies POSTGRES_DSN, all three REDIS_*_URL values and ELASTICSEARCH_URL.
     envFromSecrets:
       - collabhub-messaging
@@ -181,6 +195,11 @@ components:
       # two settings, one instance — or KEDA scales on a different Redis than
       # the Worker reads. The TriggerAuthentication sets no `enableTLS`, so a
       # TLS-only R3 is not supported yet.
+      #
+      # Use a name KEDA can resolve. Its operator does the lookup, from its own
+      # namespace (usually `keda`), so a bare in-cluster Service name like the
+      # placeholder below only works if Redis is in KEDA's namespace — give the
+      # full `<service>.<namespace>.svc.cluster.local:6379` form instead.
       REDIS_STREAMS_ADDRESS: redis-streams:6379
     # Supplies REDIS_STREAMS_URL, REDIS_STREAMS_PASSWORD (read by KEDA),
     # ELASTICSEARCH_URL, OBJECT_STORE_*_KEY, SERVICE_TOKEN_URL and

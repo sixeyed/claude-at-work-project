@@ -27,7 +27,7 @@ spec:
         {{- toYaml ($component.podSecurityContext | default $.Values.defaults.podSecurityContext) | nindent 8 }}
       containers:
         - name: canvas
-          image: "{{ $component.image.repository }}:{{ $component.image.tag | default $.Chart.AppVersion }}"
+          image: {{ include "collabhub.image" (dict "root" $ "component" $component) | quote }}
           imagePullPolicy: {{ $.Values.imagePullPolicy }}
           securityContext:
             {{- toYaml ($component.containerSecurityContext | default $.Values.defaults.containerSecurityContext) | nindent 12 }}
