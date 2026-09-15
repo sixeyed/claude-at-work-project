@@ -266,6 +266,124 @@ Give each item its own plan slice and its own review.
 
 ---
 
+## Notes from the unit layer (merged to `main` 2026-09-15)
+
+The unit handoff landed first, as `feature/test-pyramid-unit`. Its plan and evidence are in
+[04-test-pyramid-unit-framework-and-backfill-implementation-plan.md](04-test-pyramid-unit-framework-and-backfill-implementation-plan.md).
+If your branch started before that merge, merge `main` into it. What it changes for you:
+
+### Your baseline numbers moved
+
+- **Integration tests are 278, not 287**, and Messaging has 145, not 154. Nine parametrize rows
+  duplicated unit tests, and each route now keeps one example per rule:
+  - `test_channels.py::test_invalid_names_are_rejected_with_a_reason_per_rule` went from 9 rows
+    to 5.
+  - `test_channels.py::test_valid_names_are_accepted` keeps `team-42` only.
+  - `test_messages.py::test_an_empty_message_is_rejected` keeps `"   "` only.
+
+  The "287 or more" check in *Before you start* now reads 278.
+- **Unit tests are 196 in pytest and 97 in Vitest.** `scripts/test.sh unit` runs pytest, then
+  `npm test` in `src/frontend`, so it needs `npm`.
+
+### Code you will test was refactored for unit tests
+
+The extractions took pure decisions out of async shells. The unit tests prove the decisions, and
+**nothing proves the shells against real stores**.
+
+**`worker/consumer.py`**
+- `triage(fields, *, deliveries, max_attempts, handlers) -> Run | DeadLetter` holds the three
+  checks that come before any handler runs: malformed envelope, then max attempts, then unknown
+  type. `_process` calls it.
+- Unit-tested in `worker/tests/unit/test_consumer_triage.py`. Don't re-prove that order.
+- **Untested anywhere:**
+  - what `_process` does around the handler's `await`: `PermanentJobError` goes to dead-letter
+    with `permanent:<reason>`, any other exception stays pending
+  - `_complete`'s `XACK` + `XDEL`
+  - `_dead_letter`'s entry fields
+  - `_reclaim` and `_delivery_counts`
+  - `run`'s Redis-error backoff
+
+  That is workstream 2, item 1, unchanged.
+
+**`worker/handlers/messages.py`**
+- `index_request(envelope, *, deleted) -> dict` builds the `es.index` keyword arguments, and
+  raises `PermanentJobError("invalid payload")` for a payload that fails the contract. `_write`
+  calls it.
+- Unit-tested in `worker/tests/unit/test_message_handlers.py`: the document, the tombstone with no
+  `body`, the external version from the payload, and the envelope's camelCase round trip.
+- **Untested:**
+  - the real `es.index`
+  - a `ConflictError` (409) being treated as success, which is the late-older-version case in
+    item 2
+  - `BadRequestError` becoming permanent
+
+**`messaging/search.py`**
+- `validate_query(raw)` and `candidate_query(workspace_id, channel_ids, query, page) -> dict`
+  are extracted. The router calls `validate_query`, and `_candidate_ids` calls `candidate_query`.
+- Unit-tested in `messaging/tests/unit/test_search_query.py`:
+  - the workspace, channel and `deleted: false` filters
+  - `operator: and`
+  - the sort
+  - `size = limit + 1`
+  - `search_after`
+  - the `maxLength: 200` on `q`, read from the OpenAPI document
+- **Untested:**
+  - `_candidate_ids`' error mapping, where `index_not_found_exception` gives an empty result and
+    any other `ApiError`/`TransportError` raises `SearchUnavailableError`
+  - `_hydrate`
+  - `channels.visible_ids`
+  - the route end to end
+
+  That is workstream 2, item 4.
+
+**`messaging/messages.py`**
+- `check_editable` and `check_deletable` are extracted, and `edit` and `delete` call them.
+- `delete` still asks `channels.is_admin` only for a non-author.
+- The existing route tests in `test_messages.py` pass unchanged, and they are what prove the
+  routes still apply the rules.
+
+**`messaging/indexing.py`** is unchanged, but its producer contract is now unit-tested in
+`messaging/tests/unit/test_indexing.py`:
+- the stream
+- the job type
+- every payload field
+- a delete carrying `body: ""`
+- a failed enqueue swallowed and logged without the body
+
+Workstream 2, item 3 covers the real R3 stream, so don't re-assert the payload shape there.
+
+### `testkit` now has `fakes.py`
+
+- It holds `RecordingServer` and `RecordingJobQueue`, and it is the unit layer's module.
+- Don't put integration helpers in it.
+- Unit tests import nothing else from `testkit`.
+- `factories.py` was **not** created. Messaging's `a_message` row factory is a fixture in
+  `messaging/tests/unit/conftest.py`, because a `testkit` factory would make `testkit` depend on
+  `collabhub-messaging`. An integration conftest that wants rows should seed through the API or
+  its own fixture.
+
+### Documents you'll merge text with
+
+- **CLAUDE.md "Testing"** gained the Vitest commands and a paragraph on the SPA helpers. The
+  "Working in this repo" line about waiting for Vitest was replaced.
+- **Conventions §11**, under the **Unit** bullet, gained one sentence on Vitest.
+- **The register was not touched.** D33 is unused, so D34 is still yours.
+
+### The edit hook works in worktrees now
+
+`.claude/hooks/lint.sh` used to lint from the checkout the session loaded it from. For a worktree
+file that blocked every `.ts`/`.tsx` edit with "File ignored because outside of base path". It now
+resolves the repo per file. Python files were never affected.
+
+### BDD replacements
+
+- The unit replacements for every demoted scenario are in the `## BDD replacements` section of
+  the `04-…` plan.
+- Your confirmation table in workstream 2, item 6 is the other half.
+- End-to-end deletes a scenario only when both halves are on `main`.
+
+---
+
 ## Done when
 
 - The framework "done when" above holds.

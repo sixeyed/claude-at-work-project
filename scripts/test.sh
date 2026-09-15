@@ -8,7 +8,8 @@
 #   scripts/test.sh e2e -- --headed -k channels
 #
 #   lint         ruff, the CollabHub convention checks, eslint, tsc, helm lint
-#   unit         pytest, nothing that needs Docker
+#   unit         pytest, then Vitest for the SPA — no Docker, no network
+#                (arguments after -- go to pytest only)
 #   integration  pytest against real containers — needs Docker
 #   e2e          the Gherkin journeys in tests/bdd, in a real browser, against
 #                the throwaway test stack it brings up and takes down — needs
@@ -86,9 +87,14 @@ layer_lint() {
 }
 
 layer_unit() {
-    log "unit tests"
+    require_cmd npm
+    log "unit tests: pytest"
     uv run pytest -m unit --cov --cov-report=term:skip-covered --cov-report=xml \
         ${pytest_args[@]+"${pytest_args[@]}"}
+
+    log "unit tests: vitest"
+    ensure_node_modules
+    (cd src/frontend && npm run --silent test)
 }
 
 layer_integration() {

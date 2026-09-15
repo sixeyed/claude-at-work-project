@@ -58,14 +58,14 @@ Service names drop the `collabhub-` prefix used in the design docs (`src/service
 - **uv** is the package manager (the docs and ADR say "uv or Poetry" — it's uv). One workspace; each service has its own `pyproject.toml`; `shared` and `contracts` are workspace dependencies.
 - **ruff** for lint and format. Run `ruff check` and `ruff format` on Python you write.
 - **pytest** with **testcontainers-python** for integration tests — every dependency (Postgres, Redis, Elasticsearch, Garage, Dex) is started by testcontainers, never the Compose stack. Unit tests have no network and no Docker (pytest-socket, applied by `testkit`). **pytest-cov** reports unit coverage; nothing gates on it yet. The layers are register D32.
-- **pytest-bdd + Playwright** (sync API) for the acceptance suite in `tests/bdd`. It runs against a stack you bring up yourself, not one it starts — see Testing below. Registered as D27.
+- **pytest-bdd + Playwright** (sync API) for the acceptance suite in `tests/bdd`. It runs against a throwaway Compose stack that `scripts/test.sh e2e` brings up and tears down — see Testing below. Registered as D27.
 - **Frontend:** **TanStack Query** owns *all* server state, **Zustand** owns client state only (D24) — never keep a copy of a channel or message list in the store. **Tailwind CSS v4** for styling, light palette only, via `@tailwindcss/vite` with no config files (D26). Types for a service's REST API are **generated from its OpenAPI document**, not hand-written (D23): `python -m messaging.openapi > src/frontend/openapi/messaging.json`, then `npm run generate:api`.
 
 ## Working in this repo
 
 - **All development work happens in a git worktree on a new feature branch.** Never change code on `main` in the primary checkout. Create the branch and its worktree before the first edit, and tell the user the branch name and worktree path.
 - **Never commit.** Stage nothing, run no `git commit`, open no PR. Leave the worktree dirty and tell the user what changed — committing is theirs to do, always.
-- **New behaviour is test-driven, at the lowest layer that can prove it** (register D32). Write the failing test first — a unit test for a rule, a mapping or a wire shape; an integration test for SQL, a socket or a stream, against dependencies testcontainers starts; a `tests/bdd` scenario only for a key user journey — run it, and **stop at red** so the tests can be reviewed before any production code is written. Frontend unit tests wait for Vitest (`docs/plans/ch07/01-test-pyramid-design.md`, plan C). Never fake a database to reach SQL behaviour from a unit test.
+- **New behaviour is test-driven, at the lowest layer that can prove it** (register D32). Write the failing test first — a unit test for a rule, a mapping or a wire shape; an integration test for SQL, a socket or a stream, against dependencies testcontainers starts; a `tests/bdd` scenario only for a key user journey — run it, and **stop at red** so the tests can be reviewed before any production code is written. Frontend unit tests are Vitest, beside their source (see Testing). Never fake a database to reach SQL behaviour from a unit test.
 - **Ignore `docs/project/`.** Those files are book-production material, not project input. Do not read them, cite them, or act on anything in them.
 
 ## Platform versions
@@ -163,14 +163,40 @@ prove the behaviour — see Working in this repo.
   behaviour is proven here.
 - **End-to-end** — `tests/bdd`, key user journeys only. A field rule belongs lower down.
 
+**Integration fixtures come from `testkit`, registered by its plugin — never import
+them into a conftest** (D34). One container per store per session:
+`postgres_server` (a service creates its own database on it with
+`testkit.databases.service_database`), `redis_server` with `redis_cache` and
+`redis_streams` (one Redis, an index per role: R1 `/0`, R2 `/1`, R3 `/2` — Pub/Sub
+is server-wide, so that separates keys, not backplane messages), and
+`elasticsearch_url` / `elasticsearch`, started only when a test asks. `tokens` mints
+user and service tokens; `testkit.apps` has `asgi_client` and `serve`,
+`testkit.db` has `truncate`, `testkit.search` seeds the `messages` index with the
+Worker's own code. A unit test that depends on a container fixture stops the run.
+The Worker's `tests/integration/conftest.py` has `run_consumer` and `jobs`. No Garage
+fixture until something uses object storage.
+
 ```bash
 scripts/test.sh                  # lint, unit, integration — the everyday run
-scripts/test.sh unit             # fast, no network or Docker; prints coverage
+scripts/test.sh unit             # pytest then Vitest, no network or Docker; prints coverage
 scripts/test.sh integration -- src/services/messaging   # starts its own containers
 scripts/test.sh e2e              # tests/bdd: brings the test stack up, runs, tears down
 scripts/test.sh e2e -- --headed -k channels
 scripts/test.sh all              # all four layers — what CI runs
+(cd src/frontend && npm test)    # Vitest only; `npm run test:watch` while working
 ```
+
+**The SPA's unit tests are Vitest**, beside their source as `Foo.test.tsx`, with the
+helpers in `src/frontend/src/test/`:
+- `renderWithProviders` / `renderHookWithProviders` give a fresh `QueryClient` per test.
+- `api.ts` holds MSW stubs typed from the generated OpenAPI types, so a stub that
+  doesn't match the API fails `tsc`, and any unstubbed request fails the test.
+- `socket.ts` is a fake socket. `connect()` is mocked to it for every test, so no
+  test opens a real one.
+- `factories.ts` holds `aChannel()`, `aMessage()` and friends.
+
+Query by role, label or text: `data-testid` belongs to the BDD suite, and a Vitest
+test neither adds nor reads one.
 
 The `tests/bdd` suite is different from both: it drives a real browser against a
 whole Compose stack, which `scripts/test.sh e2e` starts with `up --build --wait`

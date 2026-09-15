@@ -16,7 +16,8 @@
 # a second for TypeScript, rather than linting the tree on every edit.
 set -uo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# The checkout this hook was loaded from — only a fallback. See the loop below.
+HOOK_REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 # The hook payload arrives on stdin. Write reports the path it wrote in
 # tool_response; Edit only has it in tool_input; Bash lists everything the
@@ -68,6 +69,12 @@ ${1}"
 while IFS= read -r file; do
     # Skip deletes, renames away, and paths we could not read.
     [ -n "$file" ] && [ -f "$file" ] || continue
+
+    # Lint from the checkout the file is in, not the one this hook was loaded
+    # from. Work happens in git worktrees, but a session loads its hooks from
+    # the primary checkout, and that checkout's eslint reports every worktree
+    # file as "outside of base path" and blocks on it.
+    REPO="$(git -C "$(dirname "$file")" rev-parse --show-toplevel 2>/dev/null)" || REPO="$HOOK_REPO"
 
     case "$file" in
         *.py)

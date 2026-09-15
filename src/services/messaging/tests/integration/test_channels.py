@@ -142,15 +142,13 @@ async def test_private_channels_may_repeat_a_public_name(client, ada):
 @pytest.mark.parametrize(
     ("name", "expected"),
     [
+        # One example per rule: that the route maps each exception to its
+        # message. Every rule's edge cases are unit tests (test_channel_rules.py).
         ("", "A channel name is required."),
-        ("   ", "A channel name is required."),
         ("ab", "A channel name must be at least 3 characters."),
         ("a" * 81, "A channel name must be 80 characters or fewer."),
         ("1password", "A channel name must start with a letter."),
-        ("-general", "A channel name must start with a letter."),
         ("dev team", "A channel name can only use letters, numbers and hyphens."),
-        ("dev_team", "A channel name can only use letters, numbers and hyphens."),
-        ("général", "A channel name can only use letters, numbers and hyphens."),
     ],
 )
 async def test_invalid_names_are_rejected_with_a_reason_per_rule(client, ada, name, expected):
@@ -173,9 +171,9 @@ async def test_a_rejected_name_creates_nothing(client, ada):
     assert body["items"] == []
 
 
-@pytest.mark.parametrize("name", ["general", "team-42", "Design-Review", "a1b"])
-async def test_valid_names_are_accepted(client, ada, name):
-    assert (await create(client, ada, name)).status_code == 201
+async def test_valid_names_are_accepted(client, ada):
+    """One example; the accepted shapes are unit tests (test_channel_rules.py)."""
+    assert (await create(client, ada, "team-42")).status_code == 201
 
 
 async def test_a_name_is_trimmed_before_it_is_stored(client, ada):

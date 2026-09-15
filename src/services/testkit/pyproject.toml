@@ -7,10 +7,22 @@ dependencies = [
     # `dexflow` drives Auth's own routes and imports `auth.cookies` / `auth.pkce`,
     # and `testkit.auth` builds Auth's Settings.
     "collabhub-auth",
+    # `testkit.search` builds the `messages` index with the Worker's own mapping
+    # and writes documents through the Worker's handler, so Messaging's search
+    # tests never import `worker` themselves (register D34).
+    "collabhub-worker",
+    "collabhub-contracts",
+    "collabhub-shared",
     "pytest>=9.1",
     "pytest-socket>=0.8.1",
     "httpx>=0.28",
-    "testcontainers>=4.15",
+    "testcontainers[postgres,redis,elasticsearch]>=4.15",
+    "elasticsearch[async]>=9.1,<10",
+    "redis>=5.2",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.30",
+    "uvicorn>=0.32",
+    "pyjwt[crypto]>=2.9",
 ]
 
 # Loaded by every pytest run in the workspace, with no conftest import — which

@@ -46,10 +46,11 @@ async def search_messages(
     **A short page is not the last page** — hydration can drop a hit whose row
     was deleted after it was indexed. Only `nextCursor: null` means the end.
     """
-    query = q.strip()
-    if not query:
+    try:
+        query = search.validate_query(q)
+    except search.QueryRequiredError as exc:
         message = "Enter something to search for."
-        raise ProblemException.validation_error(message, errors={"q": [message]})
+        raise ProblemException.validation_error(message, errors={"q": [message]}) from exc
     if page.cursor is not None and len(page.cursor) != 1:
         raise ProblemException.validation_error("The cursor is not valid.")
 
