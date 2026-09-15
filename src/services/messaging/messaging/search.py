@@ -33,9 +33,20 @@ from messaging import channels
 from messaging.models import Message
 from shared import Page, PageRequest, encode_cursor
 
-__all__ = ["MAX_QUERY_CHARS", "SearchUnavailableError", "search_messages"]
+__all__ = [
+    "MAX_QUERY_CHARS",
+    "QueryRequiredError",
+    "SearchUnavailableError",
+    "candidate_query",
+    "search_messages",
+    "validate_query",
+]
 
 MAX_QUERY_CHARS = 200
+
+
+class QueryRequiredError(Exception):
+    """Empty, or nothing but whitespace. The router turns this into a 400 on `q`."""
 
 
 class SearchUnavailableError(Exception):
@@ -63,13 +74,30 @@ async def search_messages(
     return Page(items=await _hydrate(session, hit_ids, channel_ids), next_cursor=next_cursor)
 
 
-async def _candidate_ids(
-    es: AsyncElasticsearch,
+def validate_query(raw: str) -> str:
+    """Return the trimmed query, or raise `QueryRequiredError` if nothing is left.
+
+    The length cap is not here: it is `max_length` on the route's `q`, so
+    FastAPI refuses an over-long query before any of this runs.
+    """
+    query = raw.strip()
+    if not query:
+        raise QueryRequiredError
+    return query
+
+
+def candidate_query(
     workspace_id: uuid.UUID,
     channel_ids: list[uuid.UUID],
     query: str,
     page: PageRequest,
-) -> list[uuid.UUID]:
+) -> dict[str, Any]:
+    """The `es.search` arguments for one page of candidate ids.
+
+    A pure function so the filters — the whole of search's authorization, since
+    the index stores nothing about who may see what — are unit tested without
+    Elasticsearch (register D32).
+    """
     request: dict[str, Any] = {
         "index": MESSAGES_ALIAS,
         "query": {
@@ -91,6 +119,17 @@ async def _candidate_ids(
     }
     if page.cursor:
         request["search_after"] = list(page.cursor)
+    return request
+
+
+async def _candidate_ids(
+    es: AsyncElasticsearch,
+    workspace_id: uuid.UUID,
+    channel_ids: list[uuid.UUID],
+    query: str,
+    page: PageRequest,
+) -> list[uuid.UUID]:
+    request = candidate_query(workspace_id, channel_ids, query, page)
 
     try:
         result = await es.search(**request)

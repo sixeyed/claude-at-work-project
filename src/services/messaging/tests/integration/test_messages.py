@@ -92,11 +92,11 @@ async def test_an_unknown_message_is_a_404(client, ada):
     assert response.headers["content-type"] == PROBLEM
 
 
-@pytest.mark.parametrize("body", ["", "   ", "\n\t  \n"])
-async def test_an_empty_message_is_rejected(client, ada, body):
+async def test_an_empty_message_is_rejected(client, ada):
+    """The route's mapping, once — every empty shape is in test_message_body.py."""
     channel = await make_channel(client, ada)
 
-    response = await send(client, ada, channel["id"], body)
+    response = await send(client, ada, channel["id"], "   ")
 
     assert response.status_code == 400
     problem = response.json()

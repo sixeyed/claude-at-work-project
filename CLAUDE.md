@@ -65,7 +65,7 @@ Service names drop the `collabhub-` prefix used in the design docs (`src/service
 
 - **All development work happens in a git worktree on a new feature branch.** Never change code on `main` in the primary checkout. Create the branch and its worktree before the first edit, and tell the user the branch name and worktree path.
 - **Never commit.** Stage nothing, run no `git commit`, open no PR. Leave the worktree dirty and tell the user what changed — committing is theirs to do, always.
-- **New behaviour is test-driven, at the lowest layer that can prove it** (register D32). Write the failing test first — a unit test for a rule, a mapping or a wire shape; an integration test for SQL, a socket or a stream, against dependencies testcontainers starts; a `tests/bdd` scenario only for a key user journey — run it, and **stop at red** so the tests can be reviewed before any production code is written. Frontend unit tests wait for Vitest (`docs/plans/ch07/01-test-pyramid-design.md`, plan C). Never fake a database to reach SQL behaviour from a unit test.
+- **New behaviour is test-driven, at the lowest layer that can prove it** (register D32). Write the failing test first — a unit test for a rule, a mapping or a wire shape; an integration test for SQL, a socket or a stream, against dependencies testcontainers starts; a `tests/bdd` scenario only for a key user journey — run it, and **stop at red** so the tests can be reviewed before any production code is written. Frontend unit tests are Vitest, beside their source (see Testing). Never fake a database to reach SQL behaviour from a unit test.
 - **Ignore `docs/project/`.** Those files are book-production material, not project input. Do not read them, cite them, or act on anything in them.
 
 ## Platform versions
@@ -165,9 +165,22 @@ prove the behaviour — see Working in this repo.
 
 ```bash
 scripts/test.sh                  # lint, unit, integration — what CI runs
-scripts/test.sh unit             # fast, no network or Docker; prints coverage
+scripts/test.sh unit             # pytest then Vitest, no network or Docker; prints coverage
 scripts/test.sh integration -- src/services/messaging   # starts its own containers
+(cd src/frontend && npm test)    # Vitest only; `npm run test:watch` while working
 ```
+
+**The SPA's unit tests are Vitest**, beside their source as `Foo.test.tsx`, with the
+helpers in `src/frontend/src/test/`:
+- `renderWithProviders` / `renderHookWithProviders` give a fresh `QueryClient` per test.
+- `api.ts` holds MSW stubs typed from the generated OpenAPI types, so a stub that
+  doesn't match the API fails `tsc`, and any unstubbed request fails the test.
+- `socket.ts` is a fake socket. `connect()` is mocked to it for every test, so no
+  test opens a real one.
+- `factories.ts` holds `aChannel()`, `aMessage()` and friends.
+
+Query by role, label or text: `data-testid` belongs to the BDD suite, and a Vitest
+test neither adds nor reads one.
 
 The `tests/bdd` suite is different from both: it drives a real browser and needs
 a stack already running, which it will not start for you.

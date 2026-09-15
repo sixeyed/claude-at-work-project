@@ -41,4 +41,12 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Test helpers export functions beside components, and a test file is never
+    // hot-reloaded, so Fast Refresh's rule has nothing to protect here.
+    files: ["src/test/**", "**/*.test.{ts,tsx}"],
+    rules: {
+      "react-refresh/only-export-components": "off",
+    },
+  },
 );
