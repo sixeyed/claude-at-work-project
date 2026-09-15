@@ -20,12 +20,14 @@
  * disconnects, and recovery comes from this effect re-running with a fresh
  * token, which is the only thing that could change the answer.
  *
- * **Every connect re-joins *and* refetches.** python-socketio has no
- * connection-state recovery: re-entering a room replays nothing, so everything
- * broadcast while the client was away is simply gone. The refetch is the
- * recovery mechanism and the re-join only resumes the live stream from that
- * point — one line, and the difference between a reconnect that works and one
- * that works when the timing is lucky.
+ * **Every join refetches — after the server acknowledges it.** python-socketio
+ * has no connection-state recovery: re-entering a room replays nothing, so
+ * everything broadcast while the client was away is simply gone. The refetch is
+ * the recovery mechanism and the join only resumes the live stream from that
+ * point. The order matters: the server enters the room only once it has checked
+ * the channel is visible, so a refetch sent alongside the join can finish first
+ * and a message sent in between reaches neither. Refetching on the ack leaves
+ * no gap, and the same ack is what `joinedChannelId` reports.
  *
  * **An event for a channel with no cached history is dropped.**
  * `setQueryData` on an empty key stores whatever the updater returns, so a
@@ -43,6 +45,17 @@ import { messageKeys, upsertMessage } from '../../features/channels/useMessages'
 import { useChatStore } from '../../stores/chat'
 import { connect, type Socket } from './socket'
 
+interface JoinAck {
+  ok: boolean
+}
+
+/** Ask to join a channel's room, and call `onJoined` only if the server did. */
+function joinChannel(socket: Socket, channelId: string, onJoined: () => void): void {
+  socket.emit('join_channel', channelId, (ack?: JoinAck) => {
+    if (ack?.ok) onJoined()
+  })
+}
+
 export function useChannelSocket(
   accessToken: string,
   workspaceId: string | null,
@@ -50,6 +63,7 @@ export function useChannelSocket(
 ): Socket | null {
   const queryClient = useQueryClient()
   const setConnectionStatus = useChatStore((state) => state.setConnectionStatus)
+  const setJoinedChannel = useChatStore((state) => state.setJoinedChannel)
   const [socket, setSocket] = useState<Socket | null>(null)
 
   // The handlers below are registered once, on mount, and would otherwise close
@@ -69,20 +83,24 @@ export function useChannelSocket(
       const current = activeChannel.current
       if (!current) return
 
-      live.emit('join_channel', current)
-      // Whatever was said while this client was away went to a room it was not
-      // in. Re-joining does not replay it; refetching does.
-      void queryClient.invalidateQueries({ queryKey: messageKeys.list(workspaceId, current) })
+      joinChannel(live, current, () => {
+        if (activeChannel.current === current) setJoinedChannel(current)
+        // Whatever was said while this client was away went to a room it was
+        // not in. Re-joining does not replay it; refetching does.
+        void queryClient.invalidateQueries({ queryKey: messageKeys.list(workspaceId, current) })
+      })
     }
 
     function onDisconnect() {
       setConnectionStatus('disconnected')
+      setJoinedChannel(null)
     }
 
     function onConnectError() {
       // The server said no. Retrying says the same thing forever.
       live.disconnect()
       setConnectionStatus('disconnected')
+      setJoinedChannel(null)
     }
 
     function onMessage(message: Message) {
@@ -102,19 +120,28 @@ export function useChannelSocket(
       live.close()
       setSocket(null)
       setConnectionStatus('disconnected')
+      setJoinedChannel(null)
     }
-  }, [accessToken, workspaceId, queryClient, setConnectionStatus])
+  }, [accessToken, workspaceId, queryClient, setConnectionStatus, setJoinedChannel])
 
   // Joining and leaving follow the open channel, and are separate from the
   // connection's own lifecycle: navigating between channels must not reconnect.
   useEffect(() => {
     if (!socket || !channelId) return
 
-    if (socket.connected) socket.emit('join_channel', channelId)
+    if (socket.connected) {
+      joinChannel(socket, channelId, () => {
+        if (activeChannel.current === channelId) setJoinedChannel(channelId)
+        // The history loaded as the channel opened, while this join was in
+        // flight — a message sent in that window is in neither.
+        void queryClient.invalidateQueries({ queryKey: messageKeys.list(workspaceId, channelId) })
+      })
+    }
     return () => {
+      setJoinedChannel(null)
       if (socket.connected) socket.emit('leave_channel', channelId)
     }
-  }, [socket, channelId])
+  }, [socket, channelId, workspaceId, queryClient, setJoinedChannel])
 
   return socket
 }

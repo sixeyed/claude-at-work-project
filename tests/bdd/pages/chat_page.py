@@ -218,15 +218,21 @@ class ChatPage:
         self.page.wait_for_timeout(1_000)
         return self._message(text).count() == 0
 
-    def wait_for_connection(self, timeout: int = 30_000) -> None:
-        """Wait for the socket to be up.
+    def wait_for_channel_joined(self, timeout: int = 30_000) -> None:
+        """Wait until the server has put this connection in the open channel's room.
+
+        Not merely "the socket is up". The server enters a room only after it
+        has checked the channel is visible, and anything broadcast before that
+        never reaches this connection — so waiting on `connected` let a scenario
+        send into a room its reader had not entered yet, and fail now and then.
+        The SPA reports the join once the server acknowledges it.
 
         Generous, because a reconnect goes through Socket.IO's backoff, and a
         flaky assertion here would be blamed on the feature rather than on the
         wait.
         """
         expect(self.page.get_by_test_id("connection-status")).to_have_attribute(
-            "data-status", "connected", timeout=timeout
+            "data-joined-channel", self.current_channel_id(), timeout=timeout
         )
 
     def go_offline(self) -> None:

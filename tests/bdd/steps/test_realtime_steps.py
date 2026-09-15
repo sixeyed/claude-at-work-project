@@ -38,16 +38,16 @@ scenarios("../features/realtime.feature")
 
 @given(parsers.parse('Grace is looking at the "{name}" channel'))
 def grace_is_watching(grace: ChatPage, name: str) -> None:
-    """Grace opens the channel and waits until her socket is actually up.
+    """Grace opens the channel and waits until she is actually in its room.
 
     The wait is the point. Without it the scenario races its own arrangement:
     Ada sends, the broadcast goes to a room Grace has not joined yet, and the
     failure looks like "real-time does not work" rather than "the test was
-    early".
+    early". A connected socket is not enough — the join is acknowledged later.
     """
     grace.open()
     grace.open_channel(name)
-    grace.wait_for_connection()
+    grace.wait_for_channel_joined()
 
 
 # --- when -----------------------------------------------------------------
@@ -99,4 +99,6 @@ def appears_once_for_ada(ada: ChatPage, body: str) -> None:
 
 @then("Grace's connection is restored")
 def graces_connection_restored(grace: ChatPage) -> None:
-    grace.wait_for_connection()
+    # Restored means back in the room, which is also when the SPA refetches
+    # what was said while the connection was down.
+    grace.wait_for_channel_joined()

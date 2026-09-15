@@ -623,7 +623,10 @@ which defeats the point of the event.
 connection-state recovery, so everything broadcast while a client was away went
 to a room it was not in and is gone. **Every connect therefore both re-joins the
 active channel and refetches its history**; the refetch is the recovery and the
-re-join only resumes the live stream from that point.
+re-join only resumes the live stream from that point. The client refetches **once
+`join_channel` has acked `ok`**, not alongside the emit: the room is entered only
+after the visibility check, so the ack is the first moment broadcasts are
+guaranteed to arrive (corrected 2026-09-15; doc 06 §5.2).
 
 #### 3.2.4 The write path — added 2026-08-16
 

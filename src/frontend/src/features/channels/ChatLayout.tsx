@@ -37,6 +37,7 @@ export function ChatLayout({ current, children }: Props) {
   const navigate = useNavigate()
   const activeChannelId = useChatStore((state) => state.activeChannelId)
   const connectionStatus = useChatStore((state) => state.connectionStatus)
+  const joinedChannelId = useChatStore((state) => state.joinedChannelId)
 
   const socket = useChannelSocket(
     current.accessToken,
@@ -72,11 +73,14 @@ export function ChatLayout({ current, children }: Props) {
               >
                 Sign out
               </button>
-              {/* Read by the reconnect scenario, so recovery is asserted on an
-                  event rather than on a timeout. */}
+              {/* Read by the live-delivery scenarios, so they wait on an event
+                  rather than a timeout: `data-joined-channel` is set once the
+                  server acknowledges the open channel's join, which is when its
+                  broadcasts start arriving — `connected` alone is too early. */}
               <span
                 data-testid="connection-status"
                 data-status={connectionStatus}
+                data-joined-channel={joinedChannelId ?? undefined}
                 className="text-xs text-ink-muted"
               >
                 {STATUS_LABEL[connectionStatus]}

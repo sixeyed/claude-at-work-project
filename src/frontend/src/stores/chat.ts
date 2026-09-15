@@ -26,18 +26,28 @@ interface ChatState {
   /** Per-channel composer text, so switching channels does not lose it. */
   drafts: Record<string, string>
   connectionStatus: ConnectionStatus
+  /**
+   * The channel whose room the server has put this connection in — set when it
+   * acknowledges the join, not when the join is sent. A connected socket is not
+   * yet receiving a channel's broadcasts: the server enters the room only after
+   * checking the channel is visible.
+   */
+  joinedChannelId: string | null
   setActiveChannel: (channelId: string | null) => void
   setDraft: (channelId: string, text: string) => void
   clearDraft: (channelId: string) => void
   setConnectionStatus: (status: ConnectionStatus) => void
+  setJoinedChannel: (channelId: string | null) => void
 }
 
 export const useChatStore = create<ChatState>((set) => ({
   activeChannelId: null,
   drafts: {},
   connectionStatus: 'disconnected',
+  joinedChannelId: null,
   setActiveChannel: (channelId) => set({ activeChannelId: channelId }),
   setConnectionStatus: (status) => set({ connectionStatus: status }),
+  setJoinedChannel: (channelId) => set({ joinedChannelId: channelId }),
   setDraft: (channelId, text) =>
     set((state) => ({ drafts: { ...state.drafts, [channelId]: text } })),
   clearDraft: (channelId) =>

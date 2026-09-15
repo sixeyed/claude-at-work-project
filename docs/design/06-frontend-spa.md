@@ -165,6 +165,14 @@ leave implicit, each of which is a bug that only shows up in a running app:
   — the server has no connection-state recovery — so everything broadcast while
   the client was away is gone. Invalidating that channel's message query is the
   recovery; the re-join only resumes the live stream from that point.
+  **Corrected 2026-09-15: the refetch waits for the join's acknowledgement**, on a
+  reconnect and on entering a channel alike. The server enters the room only after
+  authorizing the join, so a refetch sent alongside it could finish first, and a
+  message sent in between reached neither the history nor the room — seen as an
+  intermittent failure in the live-delivery journeys. `join_channel` is emitted
+  with an ack; on `ok` the store's `joinedChannelId` is set (rendered as
+  `data-joined-channel`, which the acceptance suite waits on) and the channel is
+  refetched. A disconnect or leaving the channel clears it.
 - **`connect_error` disconnects; a transport drop does not.** A handshake the
   server refused will be refused identically on every retry, so Socket.IO's
   backoff would loop forever against a service that has already said no.
