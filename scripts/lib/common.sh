@@ -26,6 +26,9 @@ K3D_CLUSTER=collabhub
 # one origin, which is what register D22's SameSite=Strict cookie needs.
 K3D_ORIGIN=http://localhost:8080
 NAMESPACE=collabhub
+# The cluster add-on charts/collabhub's Worker pools scale with. Keep in step with
+# the KEDA entry in docs/platform/versions.md.
+KEDA_VERSION=2.20.2
 
 # `-` not `:-` so an explicitly empty registry stays empty.
 IMAGE_REGISTRY="${IMAGE_REGISTRY-localhost:5500}"

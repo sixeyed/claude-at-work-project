@@ -4,7 +4,7 @@
 #
 #   scripts/deploy.sh [up]     cluster, then infra, then app. Re-run to upgrade
 #   scripts/deploy.sh cluster  create the k3d cluster and its image registry
-#   scripts/deploy.sh infra    data stores, Dex, Secrets, Ingress (charts/collabhub-local)
+#   scripts/deploy.sh infra    KEDA, then data stores, Dex, Secrets, Ingress (charts/collabhub-local)
 #   scripts/deploy.sh app      CollabHub itself (charts/collabhub) at IMAGE_TAG
 #   scripts/deploy.sh status   releases, pods and jobs
 #   scripts/deploy.sh down     delete the cluster, its registry and all its data
@@ -48,6 +48,15 @@ cmd_cluster() {
 cmd_infra() {
     require_local_cluster infra
     require_cmd helm
+
+    # A cluster add-on rather than part of either chart: charts/collabhub refuses
+    # to render without the keda.sh/v1alpha1 API its Worker pools scale with.
+    log "installing KEDA $KEDA_VERSION"
+    helm --kube-context "$KUBE_CONTEXT" upgrade --install keda keda \
+        --repo https://kedacore.github.io/charts --version "$KEDA_VERSION" \
+        --namespace keda --create-namespace \
+        --wait --timeout 10m
+
     log "installing $LOCAL_RELEASE — data stores, Dex, Secrets and Ingress"
     helm_ns upgrade --install "$LOCAL_RELEASE" "$REPO_ROOT/charts/collabhub-local" \
         --create-namespace \

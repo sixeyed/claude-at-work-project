@@ -12,9 +12,12 @@
 # want /socket.io too, which Messaging already holds — that is a decision for
 # then, not a route to guess at now.
 #
-# Traefik balances across pods itself and ignores a Service's sessionAffinity.
-# The SPA opens Socket.IO as a websocket first, which stays on one pod, so that
-# only matters if a client ever falls back to long-polling.
+# Traefik balances across pods itself, ignoring anything a Service says about
+# affinity. That is fine because Socket.IO is WebSocket-only (register D30): a
+# connection is one long-lived request, so it stays on the pod it reached.
+#
+# charts/collabhub's NetworkPolicies admit traffic from this Ingress only via
+# the ingressController peer in values-k3d.yaml, which names Traefik.
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

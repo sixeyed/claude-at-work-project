@@ -9,10 +9,6 @@ metadata:
     {{- include "collabhub.labels" $ctx | nindent 4 }}
 spec:
   type: {{ $component.service.type }}
-  # Same long-polling constraint as Messaging.
-  {{- with $component.service.sessionAffinity }}
-  sessionAffinity: {{ . }}
-  {{- end }}
   ports:
     - port: {{ $component.port }}
       targetPort: http

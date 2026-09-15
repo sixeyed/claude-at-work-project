@@ -64,8 +64,18 @@ layer_lint() {
     (cd src/frontend && npm run --silent lint && npm run --silent typecheck)
 
     log "lint: helm"
-    helm lint --quiet charts/collabhub
-    helm lint --quiet charts/collabhub --values charts/collabhub/values-k3d.yaml
+    # values.yaml leaves the NetworkPolicy peers to each environment and fails the
+    # render without them, and `helm lint` cannot be told the KEDA API exists. So
+    # the defaults lint with both of those off, the k3d values lint with
+    # autoscaling off, and the k3d values render once more with the KEDA API
+    # declared, so the ScaledObjects are checked too.
+    helm lint --quiet charts/collabhub \
+        --set networkPolicy.enabled=false \
+        --set components.worker.autoscaling.enabled=false
+    helm lint --quiet charts/collabhub --values charts/collabhub/values-k3d.yaml \
+        --set components.worker.autoscaling.enabled=false
+    helm template collabhub charts/collabhub --values charts/collabhub/values-k3d.yaml \
+        --api-versions keda.sh/v1alpha1 >/dev/null
     helm lint --quiet charts/collabhub-local "${LOCAL_CHART_FILES[@]}"
 }
 

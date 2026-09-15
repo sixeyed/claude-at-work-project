@@ -36,7 +36,7 @@ arrives in the job payload or through the owning service's internal endpoint (§
 - `Pillow` for image work.
 - The shared S3-compatible `ObjectStore` (boto3) for Garage, reused from `collabhub-shared`
   — not built yet; `shared` currently carries Problem Details, UUID v7, token verification,
-  the denylist, cursor pagination and CORS.
+  the denylist, cursor pagination, CORS, and the job envelope and queue (`shared/jobs.py`).
 - `httpx` for internal calls to owning services. **No SQLAlchemy and no database driver** —
   🟢 **Decided 2026-07-27 (register D25):** the Worker connects to no service database. See §5.2.
 - Exposes only `/health/live` and `/health/ready` (Conventions §10) via a minimal
@@ -51,7 +51,7 @@ by `type`.
 
 | Stream | `type` | Payload | Handler action |
 |--------|--------|---------|----------------|
-| `jobs:index` | `message.upsert` / `message.delete` | `{ messageId, channelId, workspaceId, authorId, body, createdAt, version, op }` | Build the ES document from the payload alone and upsert/delete in `messages`. |
+| `jobs:index` | `message.upsert` / `message.delete` | `{ messageId, channelId, workspaceId, authorId, body, createdAt, version }` (`contracts.MessageIndexPayload`; delete sends `body: ""`) | External-versioned `index` into `messages`. `message.delete` writes a **tombstone** — identifiers, `deleted: true`, no `body` — rather than deleting the document. A version conflict (409) is success. **Built 2026-09-14.** |
 | `jobs:index` | `document.index` | `{ documentId, workspaceId, name, textProjection, version }` | Index canvas text projection (if canvas search enabled). |
 | `jobs:index` | `asset.index` | `{ assetId, workspaceId, fileName, contentType, ownerId, createdAt, version }` | Index file metadata for file search. |
 | `jobs:thumbnail` | `thumbnail.generate` | `{ assetId, objectKey, variants[] }` | Fetch from Garage, generate variants (Pillow), store back, report variants to Asset svc. |
@@ -67,6 +67,13 @@ applied — without it, two rapid edits can be indexed out of order. `messages.v
 for exactly this (Messaging doc §4) and is bumped on every edit and delete. See the
 [ADR](../adr/260727-worker-never-reads-service-databases.md).
 
+🟢 **Decided 2026-09-14 — tombstones, not deletes.** Elasticsearch remembers a deleted
+document's version only for `index.gc_deletes` (60 s by default); after that, a stale upsert
+reclaimed late would recreate the document and its text. A tombstone document keeps the
+version forever and still removes the body. The same 409 that rejects a stale upsert makes a
+duplicate delivery harmless, so handlers need no `jobId` bookkeeping. See the
+[ADR](../adr/260914-message-search-index-is-a-candidate-list.md).
+
 The Worker emits no events of its own except results delivered back through owning services
 (e.g. Asset `POST /assets/{id}/variants`) or notifications.
 
@@ -78,26 +85,60 @@ Worker owns mappings + aliases. Read-side queries (from Messaging/SPA) hit the a
 
 | Alias | Doc shape (key fields) | Source |
 |-------|------------------------|--------|
-| `messages` | `messageId, channelId, workspaceId, authorId, body, createdAt` | `jobs:index` |
+| `messages` | `messageId, channelId, workspaceId, authorId, body, createdAt, deleted` | `jobs:index` — built |
 | `files` | `assetId, workspaceId, fileName, contentType, ownerId, createdAt` | `jobs:index` |
 | `canvas` | `documentId, workspaceId, name, textProjection, updatedAt` | `jobs:index` (if enabled) |
 
 - Use index-per-alias with date or version suffix to allow zero-downtime reindex
   (`messages-v1` ← alias `messages`).
-- Analyzer: standard + edge-ngram field for autocomplete on names/file names.
-- Reindex is a maintenance job (manual trigger or a `jobs:index` `reindex` type).
+- Analyzer: standard + edge-ngram field for autocomplete on names/file names — not on message
+  `body`, which uses the standard analyzer.
+- Reindex is a maintenance job (manual trigger or a `jobs:index` `reindex` type). **Not built
+  — register D29 🔴.**
+
+**`messages-v1`, as built 2026-09-14** (`worker/index.py`). Created with its alias at Worker
+startup, before any consumer starts; "already exists" is success, so replicas cannot fail
+each other. `dynamic: strict`, so an unmapped field from a producer is rejected loudly.
+
+| Field | Type |
+|---|---|
+| `messageId`, `channelId`, `workspaceId`, `authorId` | `keyword` |
+| `body` | `text` (absent on a tombstone) |
+| `createdAt` | `date` |
+| `deleted` | `boolean` |
+
+Readers query the alias, never `messages-v1`. Messaging filters on `workspaceId`,
+`channelId` and `deleted: false` and sorts on `messageId` (doc 02 §3.1.6); no visibility or
+membership data is stored in the index.
 
 ---
 
 ## 5. Internal Design
 
 ### 5.1 Consumer loop (per stream)
-1. `XREADGROUP GROUP worker {consumer} COUNT n BLOCK m STREAMS jobs:x >`.
+Built 2026-09-14 as `worker/consumer.py`, one `StreamConsumer` per stream in
+`WORKER_STREAMS`.
+
+1. `XGROUP CREATE jobs:x worker 0 MKSTREAM` (`BUSYGROUP` is success), then
+   `XREADGROUP GROUP worker {consumer} COUNT n BLOCK m STREAMS jobs:x >`. The consumer name
+   is the hostname — the pod name.
 2. For each entry: parse envelope, dispatch by `type`, run handler **idempotently** (keyed on
-   `jobId`/natural key).
-3. On success `XACK`. On handler exception, do **not** ack; increment `attempt` on reclaim.
-4. Periodically `XAUTOCLAIM` stale pending entries (crashed consumers) past the visibility
-   timeout. After `maxAttempts` (5), `XADD` to `jobs:x:dead` and `XACK` the original.
+   `jobId`/natural key — for index jobs, the Elasticsearch external version).
+3. On success `XACK` **and `XDEL`**, so processed payloads — message bodies, for index jobs —
+   do not sit in R3. On handler exception, do **not** ack; the entry stays pending.
+4. Periodically `XAUTOCLAIM` pending entries idle past the visibility timeout. **Attempts are
+   Redis's delivery count** (from `XPENDING`), not the envelope's `attempt`, which cannot be
+   rewritten. A job runs at most `WORKER_MAX_ATTEMPTS` times; the next delivery is `XADD`ed to
+   `jobs:x:dead` (with `error`, `deliveries`, `sourceId`, capped by
+   `WORKER_DEAD_LETTER_MAXLEN`) and acked and deleted from the original stream.
+5. A malformed envelope, an unknown `type`, or a handler raising `PermanentJobError` is
+   dead-lettered on first delivery. Logs carry job ids, types and exception class names —
+   never payloads.
+
+The Worker **refuses to start** if `WORKER_STREAMS` names a stream with no handlers. The
+`messages` index is ensured (retrying until Elasticsearch answers) before consumers start. On
+SIGTERM each consumer finishes the entry in hand and exits; anything unfinished stays pending
+and is reclaimed.
 
 Each consumer runs as its own asyncio task; CPU-heavy handlers (thumbnail/export) offload the
 blocking work to a thread/process pool so they don't stall the event loop.
@@ -133,8 +174,42 @@ Worker's surface. The failure mode is unchanged — delay, not loss. See the
 [ADR](../adr/260727-worker-never-reads-service-databases.md).
 
 ### 5.3 Scaling (KEDA)
-`ScaledObject` with the Redis Streams scaler on `pendingEntriesCount` per stream; scale 0→N
-on depth, scale to zero when idle (except a floor for latency-sensitive `jobs:notify`).
+🟢 **Decided 2026-09-14 (register D17)** — two pools, split on latency. See the
+[ADR](../adr/260914-worker-pools-split-on-latency.md).
+
+| Pool | Streams | Replicas |
+|------|---------|----------|
+| `notify` | `jobs:notify` | 1 → N. The floor holds the < 5 s p95 target (§8). **Off until a `jobs:notify` handler exists** |
+| `batch` | `jobs:index` today; `jobs:thumbnail`, `jobs:export`, `jobs:retention` as their handlers ship | 0 → N |
+
+**Pools list only streams with handlers — updated 2026-09-15.** The Worker exits at startup
+on a stream it cannot handle (§5.1), so a pool naming an unbuilt stream crash-loops. Under KEDA
+it is worse: the crashing pod never creates its consumer group, KEDA reads `XLEN` as lag, and it
+keeps adding pods that crash the same way. The chart gives each pool an `enabled` flag, ships
+`notify` disabled and `batch` on `jobs:index` alone, and fails the render for an enabled pool
+with no streams.
+
+Each pool is its own Deployment with `WORKER_STREAMS` set to its streams, and its own
+`ScaledObject` with one Redis Streams trigger per stream on **`lagCount`** for consumer group
+`worker`. **Corrected 2026-09-14 — this section said `pendingEntriesCount`**, which counts
+entries a consumer has read and not acked. With zero pods nothing is read, so the count never
+leaves 0 and a pool at zero never wakes. Lag is what the group has not yet read; it is the only
+Redis Streams metric KEDA can scale from zero on, and needs Redis 7+.
+
+The split is on latency, not the CPU/IO axis this doc first suggested, because one Deployment
+cannot both scale to zero and hold a notify floor. Splitting `batch` by CPU/IO later needs no
+code change — only another pool.
+
+**Consumer groups and scale-from-zero — updated 2026-09-15.** The Worker creates each
+stream's group at startup, from ID `0` with `MKSTREAM` (§5.1), which closes the sequencing gap
+this section recorded on 2026-09-14. Checked against KEDA v2.20.1's scaler: a missing stream
+reads as lag `0` with no error, so an idle `batch` stays at zero. Once a producer has written to
+a stream whose group does not exist yet, KEDA reads `XLEN` as the lag — again no error — scales
+the pool up, and the pod it starts creates the group from `0`, so the lag becomes real and
+drains. That holds only for a pod that starts, which is why pools list only handled streams. The
+`fallback` covers Redis being unreachable or the trigger's auth failing, never a missing group.
+`XDEL` after `XACK` (§5.1) removes entries at or before the group's last-delivered ID, which
+does not make Redis report the lag as unavailable.
 
 ---
 
@@ -144,8 +219,9 @@ Common vars (Conventions §8). Plus:
 | Var | Notes |
 |-----|-------|
 | `ELASTICSEARCH_URL` | ES endpoint. |
-| `WORKER_STREAMS` | Which streams this deployment consumes (allows specialised worker pools). |
-| `WORKER_MAX_ATTEMPTS` | Default 5. |
+| `WORKER_STREAMS` | Which streams this deployment consumes — only streams with handlers, or the Worker refuses to start. Default `jobs:index`, the only one built. The chart sets it per pool (§5.3, register D17). |
+| `WORKER_MAX_ATTEMPTS` | Default 5 — the most times one job runs. |
+| `WORKER_DEAD_LETTER_MAXLEN` | Default 10 000. Approximate cap on each `*:dead` stream. |
 | `WORKER_VISIBILITY_TIMEOUT_SECONDS` | Reclaim threshold. |
 | `WORKER_BATCH_SIZE` | `COUNT` per read. |
 | `RETENTION_MESSAGE_DAYS` / `RETENTION_ASSET_PENDING_HOURS` / etc. | Retention policy knobs. |
@@ -163,16 +239,18 @@ histograms, ES bulk latency.
 - Back-pressure handled by stream depth + KEDA, never by dropping jobs.
 - Poison messages land in `*:dead` for inspection, never block the stream.
 - Index payloads now carry message bodies, so `jobs:index` and `jobs:index:dead` hold user
-  content. Set `MAXLEN` trimming deliberately rather than by default, and treat dead-letter
-  retention and access as handling user data (register D25).
+  content. **Trimming, decided 2026-09-14:** processed entries are `XDEL`ed after `XACK`, and
+  there is no producer-side `MAXLEN` on `jobs:index` — it would drop unread jobs during a
+  Worker outage. Dead-letter streams are capped by `WORKER_DEAD_LETTER_MAXLEN`. Treat
+  dead-letter access as handling user data (register D25). Delete jobs carry `body: ""`.
 
 ## 9. Open Decisions
 - ~~**Whether the Worker reads service databases**~~ — 🟢 **Decided 2026-07-27 (register
   D25).** It does not. Fat job payloads plus internal endpoints. See §5.2 and the
   [ADR](../adr/260727-worker-never-reads-service-databases.md).
-- **Specialised worker pools** (separate deployments per stream for independent scaling) vs.
-  one deployment consuming all streams. Recommend splitting CPU-heavy (thumbnail/export) from
-  IO-heavy (index/notify).
+- ~~**Specialised worker pools**~~ — 🟢 **Decided 2026-09-14 (register D17).** Two pools,
+  `notify` and `batch`, split on latency, with `notify` off until its handler ships. See §5.3 and the
+  [ADR](../adr/260914-worker-pools-split-on-latency.md).
 - Notification channels in scope for v1 (in-app only vs. push + email).
 - Whether canvas search (`canvas` index) ships in v1 — depends on Canvas producing a text
   projection.
@@ -184,3 +262,7 @@ histograms, ES bulk latency.
   to resolve a recipient's notification address from Auth, and every `retention.sweep` scope
   needs its owning service's sweep endpoint. They are specified in each service's §3 but
   unbuilt, so those handlers cannot ship before them.
+- ~~**Consumer-group creation before the first producer**~~ — closed 2026-09-15. The Worker
+  creates each stream's group from ID `0` at startup (§5.1), so KEDA's scale-up on `XLEN` starts
+  a pod that creates the group and drains the stream (§5.3). Only a pool that lists a stream
+  without a handler defeats it, and the chart's pools list none.

@@ -2,8 +2,8 @@
 #
 # Each component has its own templates under templates/<component>/, rather than
 # one set of templates ranging over this map. They start near-identical and are
-# meant to diverge: the Worker gets a KEDA ScaledObject, the real-time services
-# need session affinity, the frontend has no config at all.
+# meant to diverge: the Worker runs as KEDA-scaled pools, each component has its
+# own NetworkPolicy, the frontend has no config at all.
 #
 # Deliberately absent: PostgreSQL, Redis, Elasticsearch and Garage. This chart
 # deploys CollabHub's own workloads and expects the data stores to already
@@ -59,7 +59,6 @@ components:
     service:
       create: true
       type: ClusterIP
-      sessionAffinity: ""
     probes:
       live: /health/live
       ready: /health/ready
@@ -90,10 +89,6 @@ components:
     service:
       create: true
       type: ClusterIP
-      # Socket.IO falls back to HTTP long-polling, and a polling session's
-      # requests must all land on the same pod. The R2 backplane lets any pod
-      # serve any room; it does not rescue a split polling handshake.
-      sessionAffinity: ClientIP
     probes:
       live: /health/live
       ready: /health/ready
@@ -108,7 +103,7 @@ components:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
       # See templates/messaging/migrate-job.yaml.
       RUN_MIGRATIONS: "false"
-    # Supplies POSTGRES_DSN and all three REDIS_*_URL values.
+    # Supplies POSTGRES_DSN, all three REDIS_*_URL values and ELASTICSEARCH_URL.
     envFromSecrets:
       - collabhub-messaging
 
@@ -122,7 +117,6 @@ components:
     service:
       create: true
       type: ClusterIP
-      sessionAffinity: ClientIP
     probes:
       live: /health/live
       ready: /health/ready
@@ -150,7 +144,6 @@ components:
     service:
       create: true
       type: ClusterIP
-      sessionAffinity: ""
     probes:
       live: /health/live
       ready: /health/ready
@@ -171,8 +164,8 @@ components:
 
   worker:
     enabled: true
-    # Scaling is KEDA's job, driven by stream depth (design doc 05 §5.3). This is
-    # the floor until a ScaledObject exists.
+    # Only used with autoscaling disabled, when every enabled pool runs this many. With
+    # it enabled KEDA owns replicas and the Deployments omit the field.
     replicaCount: 1
     port: 8000
     image:
@@ -183,24 +176,62 @@ components:
       # only, and those are scraped from the pod (design doc 05 §2).
       create: false
       type: ClusterIP
-      sessionAffinity: ""
     probes:
       live: /health/live
       ready: /health/ready
     env:
       APP_ENV: production
       LOG_LEVEL: info
-      WORKER_STREAMS: jobs:index,jobs:thumbnail,jobs:notify,jobs:export,jobs:retention
       WORKER_MAX_ATTEMPTS: "5"
       WORKER_VISIBILITY_TIMEOUT_SECONDS: "60"
       WORKER_BATCH_SIZE: "16"
+      WORKER_DEAD_LETTER_MAXLEN: "10000"
       OBJECT_STORE_BUCKET: collabhub-assets
       ASSET_INTERNAL_URL: http://collabhub-asset:8000/api/v1/internal
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-    # Supplies REDIS_STREAMS_URL, ELASTICSEARCH_URL, OBJECT_STORE_*_KEY,
-    # SERVICE_TOKEN_URL and WORKER_SERVICE_CLIENT_SECRET.
+      # For KEDA, not the Worker process: the Redis Streams scaler takes
+      # host:port and cannot parse the REDIS_STREAMS_URL the Worker uses. Must
+      # name the same Redis as the collabhub-worker secret's REDIS_STREAMS_URL —
+      # two settings, one instance — or KEDA scales on a different Redis than
+      # the Worker reads. The TriggerAuthentication sets no `enableTLS`, so a
+      # TLS-only R3 is not supported yet.
+      REDIS_STREAMS_ADDRESS: redis-streams:6379
+    # Supplies REDIS_STREAMS_URL, REDIS_STREAMS_PASSWORD (read by KEDA),
+    # ELASTICSEARCH_URL, OBJECT_STORE_*_KEY, SERVICE_TOKEN_URL and
+    # WORKER_SERVICE_CLIENT_SECRET.
     envFromSecrets:
       - collabhub-worker
+    autoscaling:
+      # Requires KEDA (keda.sh/v1alpha1); the chart fails without it.
+      enabled: true
+      pollingInterval: 30
+      cooldownPeriod: 300
+      consumerGroup: worker # doc 05 §5.1
+      lagCount: "5"
+    # One Deployment and one ScaledObject per enabled pool (register D17). Split
+    # on latency: notify keeps a floor for its < 5 s p95 target, batch scales
+    # from zero. A pool's streams become its WORKER_STREAMS.
+    #
+    # List only streams the Worker has handlers for. It exits at startup on any
+    # other, and under KEDA a crashing pod never creates its consumer group, so
+    # KEDA keeps adding pods (doc 05 §5.3). jobs:index is the only one built:
+    # add jobs:thumbnail, jobs:export and jobs:retention to batch, and enable
+    # notify, as their handlers ship. An enabled pool with no streams fails the
+    # render.
+    pools:
+      notify:
+        # Off until a jobs:notify handler exists.
+        enabled: false
+        streams:
+          - jobs:notify
+        minReplicas: 1
+        maxReplicas: 5
+      batch:
+        enabled: true
+        streams:
+          - jobs:index
+        minReplicas: 0
+        maxReplicas: 10
 
   frontend:
     enabled: true
@@ -214,7 +245,6 @@ components:
     service:
       create: true
       type: ClusterIP
-      sessionAffinity: ""
     probes:
       # Static assets behind Nginx — no /health endpoints to probe.
       live: /
@@ -233,3 +263,87 @@ components:
       capabilities:
         drop:
           - ALL
+
+# NetworkPolicy — one per component, each declaring Ingress and Egress, so
+# anything a policy does not list is denied in both directions.
+#
+# Traffic inside the release is matched on this chart's labels. Everything
+# outside it is a peer below: a NetworkPolicyPeer list (selectors or ipBlock)
+# plus ports, because where Postgres, Redis and the rest live is per
+# environment. A peer an enabled component needs, left empty, fails the render.
+#
+# NetworkPolicy is L3/L4. It cannot keep /api/v1/internal/ away from the
+# ingress controller, which reaches the same port as the public routes — that
+# stays an ingress routing rule (Conventions §5.5). And it is only enforced by
+# a CNI that implements it; elsewhere these objects apply and block nothing.
+networkPolicy:
+  enabled: true
+  peers:
+    # Default assumes ingress-nginx in namespace ingress-nginx. Set this per
+    # environment for any other ingress controller or Gateway API implementation.
+    ingressController:
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: ingress-nginx
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: ingress-nginx
+    dns:
+      to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    postgres:
+      to: []
+      ports:
+        - port: 5432
+          protocol: TCP
+    # R1 — cache and token denylist.
+    redisCache:
+      to: []
+      ports:
+        - port: 6379
+          protocol: TCP
+    # R2 — Socket.IO backplane.
+    redisRealtime:
+      to: []
+      ports:
+        - port: 6379
+          protocol: TCP
+    # R3 — job streams.
+    redisStreams:
+      to: []
+      ports:
+        - port: 6379
+          protocol: TCP
+    elasticsearch:
+      to: []
+      ports:
+        - port: 9200
+          protocol: TCP
+    # Garage's S3 API, or whatever S3-compatible store replaces it.
+    objectStore:
+      to: []
+      ports:
+        - port: 3900
+          protocol: TCP
+    otelCollector:
+      to: []
+      ports:
+        - port: 4317
+          protocol: TCP
+    # Auth's upstream IdP (register D5) — discovery, token exchange and JWKS.
+    oidcProvider:
+      to: []
+      ports:
+        - port: 443
+          protocol: TCP

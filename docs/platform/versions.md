@@ -186,6 +186,25 @@ this file so the same release is never announced twice.
     The local k3d cluster pins its k3s image to this track in scripts/k3d/cluster.yaml
     (rancher/k3s:v1.36.4-k3s1) — move it when pinned_track moves.
 
+- id: keda
+  name: KEDA
+  category: orchestration
+  used_for: Autoscales the Worker pools on Redis Streams lag (doc 05 §5.3); a cluster add-on the Helm chart requires
+  pinned_track: "2"
+  current_stable: "2.20.2"
+  last_notified: "2.20.2"   # watermark: last version announced to #stack-updates; skill only alerts when upstream > this
+  released: "2026-07-31"
+  base_image_hint: n/a           # cluster add-on, installed once per cluster, not an app base image
+  check_url: https://github.com/kedacore/keda/releases
+  eol_url: https://keda.sh/docs/latest/operate/cluster/
+  notes: >
+    Installed per cluster, not by the CollabHub chart, which fails to render without the
+    keda.sh/v1alpha1 API. The redis-streams trigger's lagCount is the only metric that
+    scales from zero and needs Redis 7+ (pinned track is 8). Check KEDA's Kubernetes
+    compatibility table before a cluster upgrade. sixeyed runs 2.20.1 as of 2026-09-14.
+    The local k3d cluster gets it from `scripts/deploy.sh infra`, pinned by KEDA_VERSION
+    in scripts/lib/common.sh — move that with current_stable.
+
 - id: otel-collector
   name: OpenTelemetry Collector
   category: observability

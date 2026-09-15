@@ -1,0 +1,32 @@
+{{- $component := .Values.components.asset }}
+{{- if and $component.enabled .Values.networkPolicy.enabled }}
+{{- $ctx := dict "root" $ "name" "asset" }}
+# Asset — reached by the browser through the ingress and by the Worker for the
+# variants write-back and sweep. Reaches Postgres, R1 (DELETE is in the
+# fail-closed denylist set), R3 to enqueue thumbnails, the object store, and
+# Auth for JWKS. Browser uploads go to the object store directly, never here.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "collabhub.componentFullname" $ctx }}
+  labels:
+    {{- include "collabhub.labels" $ctx | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "collabhub.selectorLabels" $ctx | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- include "collabhub.ingressFromController" $ctx | nindent 4 }}
+    {{- include "collabhub.ingressFromComponents" (dict "root" $ "from" (list "worker")) | nindent 4 }}
+  egress:
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "asset" "peer" "dns") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "asset" "peer" "postgres") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "asset" "peer" "redisCache") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "asset" "peer" "redisStreams") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "asset" "peer" "objectStore") | nindent 4 }}
+    {{- include "collabhub.egressToComponent" (dict "root" $ "target" "auth") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "asset" "peer" "otelCollector") | nindent 4 }}
+{{- end }}

@@ -2,8 +2,9 @@
 # scripts/deploy.sh, which also sets image.registry and image.tag.
 #
 # The Secrets, data stores, Dex and the Ingress this expects come from
-# charts/collabhub-local. The browser reaches everything on one origin,
-# http://localhost:8080, so CORS_ALLOWED_ORIGINS stays unset.
+# charts/collabhub-local, and KEDA from `deploy.sh infra`. The browser reaches
+# everything on one origin, http://localhost:8080, so CORS_ALLOWED_ORIGINS stays
+# unset.
 
 # A build from a dirty worktree reuses its tag, so never trust a cached image.
 imagePullPolicy: Always
@@ -43,9 +44,73 @@ components:
       AUTH_ISSUER: http://localhost:8080
 
   worker:
+    # Autoscaling stays on: deploy.sh installs KEDA, so the pools' ScaledObjects
+    # run here as they would in a real cluster, and the batch pool sits at zero
+    # until jobs:index has lag.
     env:
       APP_ENV: local
       LOG_LEVEL: debug
 
   frontend:
     replicaCount: 1
+
+# The peers values.yaml leaves to each environment. k3s enforces NetworkPolicy
+# with its embedded kube-router controller, so these have to be right, not just
+# present. Everything but the ingress controller is a pod in this namespace from
+# charts/collabhub-local, matched on the name label that chart gives it. `dns`
+# keeps the values.yaml default, which is what k3s's CoreDNS carries.
+networkPolicy:
+  peers:
+    # k3s's bundled Traefik, not the ingress-nginx values.yaml assumes.
+    ingressController:
+      from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: traefik
+    postgres:
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+    redisCache:
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-cache
+    redisRealtime:
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-rt
+    redisStreams:
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis-streams
+    elasticsearch:
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: elasticsearch
+    objectStore:
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: garage
+    otelCollector:
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: otel-collector
+    # Dex, reached in-cluster on its own port rather than a real IdP's 443.
+    oidcProvider:
+      to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: dex
+      ports:
+        - port: 5556
+          protocol: TCP

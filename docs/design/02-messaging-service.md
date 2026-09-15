@@ -16,10 +16,11 @@ sub-second real-time delivery.
 
 **Owns:** channels and their membership/permissions, messages, threads, reactions,
 read receipts, typing indicators.
-**Produces:** index jobs to `jobs:index` (R3) for Elasticsearch (consumed by Worker) — **not
-built; see §5**.
-**Does NOT own:** search querying (read path goes to Elasticsearch directly or via a thin
-search endpoint — see §3), file attachments (Asset Service owns blobs; messages reference asset IDs).
+**Produces:** index jobs to `jobs:index` (R3) for Elasticsearch (consumed by Worker) — built
+2026-09-14, see §5.
+**Does NOT own:** the search index (the Worker owns its mapping and writes; this service only
+queries it through `GET /search/messages` — see §3.1.6), file attachments (Asset Service owns
+blobs; messages reference asset IDs).
 
 ---
 
@@ -55,7 +56,7 @@ search endpoint — see §3), file attachments (Asset Service owns blobs; messag
 | POST | `/messages/{id}/reactions` | channel member | Add reaction `{ "emoji": ":+1:" }`. |
 | DELETE | `/messages/{id}/reactions/{emoji}` | channel member | Remove own reaction. |
 | POST | `/channels/{id}/read` | channel member | Mark read up to `{ "messageId": "..." }`. |
-| GET | `/search/messages?q=` | member | Thin proxy to Elasticsearch (optional). |
+| GET | `/search/messages?q=` | any workspace member — see §3.1.6 | Thin proxy to Elasticsearch (D8c). Newest first, only channels the caller can see. |
 
 **Internal** (`/api/v1/internal/`, service token only — Conventions §5.5; never reachable
 from the public ingress, and never carrying `require_user`):
@@ -398,7 +399,6 @@ design doc — rather than a plan or a service README — knows which is which.
 | `GET /messages/{id}/thread` | threading is unbuilt; `thread_root_id` ships as a column and is always `null` | D8a 🟡 |
 | `POST` / `DELETE /messages/{id}/reactions*` | the `reactions` table is not created — an empty table claims a capability the service does not have | — |
 | `POST /channels/{id}/read` | `last_read_id` shipped with `channel_members` in `0001_channels`; nothing writes it | — |
-| `GET /search/messages` | there is no Elasticsearch path at all, and no `jobs:index` producer to feed one (§5) | D8c 🟡 |
 | `POST /internal/messages/sweep` | retention values are unset, and nothing hard-deletes a message | D16 🔴 |
 
 Two things the *columns* do ship for, ahead of their features, because adding a
@@ -406,11 +406,48 @@ column later rewrites a table and adding an index or a route later does not:
 `thread_root_id` and `attachments` on `messages`, and `last_read_id` on
 `channel_members`.
 
+#### 3.1.6 Search — added 2026-09-14
+
+`GET /api/v1/search/messages?q=&limit=&cursor=` with plain `require_user`; searching is a
+read, outside the fail-closed denylist set. **The index is a candidate list, not a source of
+truth** — see the [ADR](../adr/260914-message-search-index-is-a-candidate-list.md).
+
+- **`q`** is required, at most 200 characters, and must not be blank after trimming (400
+  `validation-error` against `errors.q`). Every word must match (`match` with `operator: and`);
+  no query syntax is exposed.
+- **Visibility is decided per request, never stored in the index.** `channels.visible_ids`
+  runs the same visibility query as every other read — public channels in the `wsp`
+  workspace plus private channels the caller is in, archived excluded — and the Elasticsearch
+  query is filtered to those ids, the claim's workspace and `deleted: false`. Removing someone
+  from a private channel or archiving one takes effect in search immediately. A caller who
+  can see no channels gets an empty page without Elasticsearch being asked. `terms` accepts up
+  to `index.max_terms_count` values (65 536 by default), far above any workspace's channel
+  count.
+- **Newest first.** Sorted on `messageId` descending — UUID v7 in fixed-length lowercase hex
+  sorts in time order — with `search_after` as the cursor: the same keyset shape as history.
+- **Results come from Postgres.** Elasticsearch returns ids only; they are loaded with
+  `deleted_at IS NULL` and the visible channel filter, and returned as ordinary `Message`
+  DTOs in Elasticsearch's order. Index lag therefore cannot show a deleted message's text.
+  (This `deleted_at` filter is not the history exception from Conventions §3: search returns
+  no tombstones.)
+- **A page can hold fewer than `limit` items** when hydration drops a hit. `nextCursor` comes
+  from the Elasticsearch hits, so nothing is skipped; only `nextCursor: null` means the end.
+- **Failures.** Elasticsearch unreachable or erroring → 503 `service-unavailable`,
+  `"Search is unavailable."`. The alias not existing yet (the Worker has never run) → an empty
+  page. Elasticsearch is **not** a readiness dependency of this service: an outage degrades
+  search and must not take chat out of rotation.
+- **Recall is only as good as the index.** Enqueue is fire-and-forget (§5), so a job lost to
+  an R3 outage is a message search never finds until a reindex path exists (register D29 🔴).
+
 ### 3.2 Socket.IO namespace — `/messaging`
 
 Real-time runs on the Socket.IO `/messaging` namespace (Conventions §6). Client→server
 events are verbs; server→client events are past-tense facts. `send_message` returns the
 created `Message` via the Socket.IO acknowledgement callback.
+
+**WebSocket only — added 2026-09-14 (register D30).** `build_server` passes
+`transports=["websocket"]`, so a long-polling handshake is refused rather than served, and
+the chart sets no session affinity. See Conventions §6.
 
 **Client → Server**
 
@@ -730,7 +767,8 @@ counts are derived (messages with `id > last_read_id`).
   Conventions §6).
 - **R3:** `jobs:index` — one job per created/edited/deleted message for ES sync. The payload
   carries the whole document (§5), so these entries contain user-authored message bodies —
-  see the retention and trimming note in Worker doc §8. **The producer is not built; see §5.**
+  see the retention and trimming note in Worker doc §8. The Worker `XDEL`s each entry once
+  it is processed.
 
 ---
 
@@ -740,7 +778,8 @@ Mirrors the architecture's sequence diagram:
 2. Persist to `messages` (PostgreSQL).
 3. Broadcast `message_received` to room `channel:{id}` via the R2 backplane.
 4. `XADD jobs:index` with the **full indexable document**, not just an identifier:
-   `{ messageId, channelId, workspaceId, authorId, body, createdAt, version, op: "upsert" }`.
+   `{ messageId, channelId, workspaceId, authorId, body, createdAt, version }` under job type
+   `message.upsert` (or `message.delete`). There is no `op` field — the job `type` says it.
    🟢 Register D25 — the Worker holds no database connection, and Messaging already has the
    message in hand here, so a read-back would add load to this exact path for nothing.
    `version` is the row's version, used as the Elasticsearch external version so two rapid
@@ -748,30 +787,29 @@ Mirrors the architecture's sequence diagram:
    [ADR](../adr/260727-worker-never-reads-service-databases.md).
 5. Worker consumes and indexes into Elasticsearch (Worker doc owns the mapping).
 
-Edits/deletes follow the same persist → broadcast → enqueue(`op: upsert|delete`) pattern.
+Edits/deletes follow the same persist → broadcast → enqueue pattern.
 
-**Step 4 is not built — noted 2026-08-16.** The step stays above as the eventual
-shape, in the same way §4 keeps `ix_messages_thread` in the DDL. Three reasons,
-and the third is the one that makes the omission safe rather than merely
-convenient:
+**Step 4 built 2026-09-14** (`messaging/indexing.py`), at all six write sites — send, edit and
+delete over REST and over the socket — immediately after the broadcast.
 
-- **Nothing consumes the stream.** The Worker is scaffold and search is out of
-  scope, so a producer would fill R3 with entries no reader ever trims — which
-  Worker doc §8 already warns about, for a stream that would contain
-  user-authored message bodies.
-- **A stream nobody reads is a claim the service does not honour.** Same
-  reasoning that leaves `reactions` uncreated and `ix_messages_thread` unbuilt.
-- **Adding it later is purely additive.** The `version` column it needs already
-  ships, and earns its place on optimistic-concurrency merit alone (Conventions
-  §3) — so this is one `XADD` in one place when the Worker exists, with no
-  schema change and no migration.
+- **Fire-and-forget** (Conventions §7). A failed `XADD` is logged with the message id and the
+  exception class and swallowed; the write has already succeeded. The queue's Redis client
+  uses ~1 s timeouts so an R3 outage cannot hang a request. The cost is recall: a lost job is
+  a change search misses until a reindex path exists (register D29 🔴).
+- **The job carries the committed response DTO**, so `message.delete` sends `body: ""` — R3
+  never holds text a user asked to remove.
+- **A repeat delete enqueues nothing.** It changes no version (§3.1.4), and
+  `messages.delete` reports `deleted_now` so the producer can tell.
+- **The workspace is the caller's `wsp` claim**; `messages` has no workspace column, and the
+  visibility check behind the write proved the channel is in it.
 
 ---
 
 ## 6. Configuration
 Common vars (Conventions §8): owns `POSTGRES_DSN`, uses `REDIS_CACHE_URL`,
 `REDIS_REALTIME_URL`, `REDIS_STREAMS_URL`. Plus `MESSAGING_MAX_BODY_CHARS` (default 8000),
-`MESSAGING_MAX_ATTACHMENTS` (default 10).
+`MESSAGING_MAX_ATTACHMENTS` (default 10), and `ELASTICSEARCH_URL` — read-only, for
+`GET /search/messages`, and deliberately not a readiness check (§3.1.6).
 
 ## 7. Cross-Cutting
 Auth, errors, pagination, observability, health per Conventions. Metrics:

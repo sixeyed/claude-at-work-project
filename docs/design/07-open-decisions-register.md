@@ -22,6 +22,14 @@ expressed). Both were forced by building the first messaging slice.
 **Settled 2026-08-16:** D8d — message edit and delete semantics. See its row
 under *Messaging* for the scope, which is narrower than the row's old title:
 **retention values are still D16, and still 🔴.**
+**Settled 2026-09-14:** message search is built — the Worker writes a `messages`
+index from `jobs:index`, and `GET /search/messages` treats it as a candidate list
+hydrated from Postgres (D8c stays 🟡, now built against).
+[ADR](../adr/260914-message-search-index-is-a-candidate-list.md). It opened
+**D29, a reindex path, 🔴** — see *Worker*.
+**Settled 2026-09-14:** D17 — the Worker runs as two KEDA-scaled pools split on
+latency — and D30 — Socket.IO is WebSocket-only, which is what lets the Helm chart
+carry no session affinity.
 
 - 🟢 **Identity federation** [D5] — Auth is an OIDC *relying party*, never a provider. Dex is
   the upstream locally; a customer's own IdP elsewhere. `dev-login` is deleted.
@@ -64,7 +72,7 @@ under *Messaging* for the scope, which is narrower than the row's old title:
 |----|----------|-----------------|----------------|-------|
 | D8a | Threading depth | 🟡 Single-level | Confirm against UX needs. **Built against it 2026-08-16:** `thread_root_id` ships as a column and serializes as `null`; there is no thread API and `ix_messages_thread` is not created | Messaging |
 | D8b | DM modelling | 🟡 `kind='dm'` channels | **Built against it 2026-08-16:** `kind='dm'` is rejected by `CREATABLE_KINDS` in `messaging/models.py`, and nothing creates or lists a DM. The column accepts it; the API does not | Messaging |
-| D8c | `/search/messages` lives in Messaging vs. a dedicated search gateway | 🟡 Thin proxy in Messaging | Revisit if search grows. **Built against it 2026-08-16:** neither exists — no `/search/messages`, and no `jobs:index` producer to feed one (doc 02 §5) | Messaging |
+| D8c | `/search/messages` lives in Messaging vs. a dedicated search gateway | 🟡 Thin proxy in Messaging | Revisit if search grows. **Built against it 2026-09-14:** `GET /api/v1/search/messages` is a thin proxy in Messaging over the `messages` index the Worker writes from `jobs:index`. Visibility is filtered per request and results are hydrated from Postgres, so the index is never the authority — see the [ADR](../adr/260914-message-search-index-is-a-candidate-list.md) and doc 02 §3.1.6 | Messaging |
 | D8d | Edit/delete semantics and tombstone retention | 🟢 **Decided 2026-08-16** — see below | [ADR](../adr/260816-message-edit-and-delete-semantics.md) | Messaging + Worker |
 
 **D8d, in full.** No time window on either action. The author edits their own
@@ -104,10 +112,11 @@ outlives a user pressing "delete" until D16 says otherwise.
 | ID | Decision | Default in docs | Recommendation | Scope |
 |----|----------|-----------------|----------------|-------|
 | D16 | Retention policy values (message days, pending-asset hours, etc.) | 🔴 Open | Set concrete numbers. **No longer blocked on D8d** — that settled 2026-08-16 with no edit or delete window and tombstones retained in history, so retention and edit semantics are independent of each other. Nothing in the messaging core depends on a value: `POST /internal/messages/sweep` is not built and no retention job exists. **But a delete currently keeps the message text in the row**, redacting only on the way out — so this is the decision that governs when text is actually destroyed | Worker (+ Messaging) |
-| D17 | Specialised worker pools vs. one deployment for all streams | 🟡 Single, split suggested | Split CPU-heavy (thumbnail/export) from IO-heavy (index/notify) | Worker |
+| D17 | Specialised worker pools vs. one deployment for all streams | 🟢 **Decided (2026-09-14):** two pools split on latency — `notify` (`jobs:notify`, floor of 1, **off until its handler exists**) and `batch` (`jobs:index` today, other streams as their handlers ship; scales from 0) | One Deployment cannot both scale to zero and hold a notify floor. KEDA scales each pool on `lagCount`; the doc's `pendingEntriesCount` could never wake a pool from zero. A CPU/IO split inside `batch` remains possible. See [ADR 260914](../adr/260914-worker-pools-split-on-latency.md) | Worker |
 | D18 | Notification channels in v1 | 🔴 Open | In-app first; push/email later | Worker |
 | D19 | Canvas export rendering engine (headless renderer / server-side Yjs via `pycrdt` + skia) | 🔴 Open | Non-trivial; consider deferring | Worker |
-| D25 | How the Worker gets the data its handlers need | 🟢 **Decided (2026-07-27):** producers put what they already hold into the job payload; anything else is fetched from the owning service's internal endpoint with a service token. No database connection, and retention inverts to a per-service internal sweep endpoint | Index jobs need a monotonic version for Elasticsearch external versioning; `messages` has no `version` column yet. See [ADR 260727](../adr/260727-worker-never-reads-service-databases.md) | Cross-cutting (Worker, Messaging, Canvas, Asset, Auth) |
+| D25 | How the Worker gets the data its handlers need | 🟢 **Decided (2026-07-27):** producers put what they already hold into the job payload; anything else is fetched from the owning service's internal endpoint with a service token. No database connection, and retention inverts to a per-service internal sweep endpoint | Index jobs need a monotonic version for Elasticsearch external versioning; `messages.version` is it. **Built against it 2026-09-14:** the `jobs:index` producer (Messaging) and consumer (Worker) exist, and delete jobs carry `body: ""`. See [ADR 260727](../adr/260727-worker-never-reads-service-databases.md) | Cross-cutting (Worker, Messaging, Canvas, Asset, Auth) |
+| D29 | Reindex / backfill path for search (raised 2026-09-14) | 🔴 Open | Needed before search can be trusted after an R3 outage: enqueue is fire-and-forget (Conventions §7), so a job lost between commit and `XADD` leaves the index wrong until something rebuilds it. Likely a Messaging internal endpoint that pages messages, plus a `reindex` job type into a fresh `messages-v2` behind the alias (doc 05 §4). Not a correctness risk for *visibility* — results are hydrated from Postgres — only for recall | Worker + Messaging |
 
 ## Frontend SPA
 
@@ -121,6 +130,7 @@ outlives a user pressing "delete" until D16 says otherwise.
 | D26 | SPA styling: Tailwind vs. CSS Modules (doc 06 §2 left it as "team choice"; never had an ID) | 🟢 **Decided (2026-08-15):** Tailwind CSS v4 via `@tailwindcss/vite` | No config files — the theme is `@theme` tokens in `index.css`. See [ADR 260815](../adr/260815-tailwind-v4-for-spa-styling.md) | Frontend |
 | D27 | How acceptance criteria are expressed and run (not previously registered) | 🟢 **Decided (2026-08-15):** Gherkin + pytest-bdd + Playwright (sync API), against `docker compose up` | Selectors are `data-testid` only and live in page objects. See [ADR 260815](../adr/260815-pytest-bdd-and-playwright-for-acceptance-tests.md) | Cross-cutting (Frontend, testing) |
 | D28 | Where per-user preferences live — **no feature for them exists at all** (raised 2026-08-15) | 🔴 Open. `users` has display name, avatar and status and nothing else; `PATCH /users/me` updates two of those | Decide whether preferences are Auth's (a `preferences jsonb` column, exposed on `/users/me`, possibly cached in R1) or a separate service, before the first thing that needs one ships. Blocking a theme toggle now; i18n and notification channels (D18) need the same thing. **Built against it 2026-08-16:** six messaging slices shipped a light-only palette and stored no per-user choice anywhere — no theme, no locale, no notification setting — so the decision is still unforced | Cross-cutting (Auth, Frontend, Worker) |
+| D30 | Socket.IO transport: WebSocket with long-polling fallback vs. WebSocket only (raised 2026-09-14; never had an ID) | 🟢 **Decided (2026-09-14):** WebSocket only, refused by the server as well as not offered by the client | Long-polling needs every request of a session on one pod. `sessionAffinity: ClientIP` is bypassed by ingress-nginx, and would see only the controller's IP if it were not, so the chart carries no affinity at all. Cost: networks that block WebSockets cannot connect. See [ADR 260914](../adr/260914-websocket-only-socket-io.md) | Cross-cutting (Messaging, Canvas, Frontend, chart) |
 
 ---
 

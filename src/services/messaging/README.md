@@ -22,7 +22,12 @@ edit and delete.
 `delete_message` / `typing`, and outbound `message_received` / `message_edited` /
 `message_deleted` / `user_typing`.
 
-Not built: threads, reactions, read receipts and search — see spec §3.1.5, which
+**Search.** `GET /api/v1/search/messages?q=` — newest-first matches in channels
+the caller can see. Every message write enqueues a `jobs:index` job after its
+broadcast (`indexing.py`); the Worker writes the `messages` Elasticsearch index;
+`search.py` queries it. See spec §3.1.6.
+
+Not built: threads, reactions and read receipts — see spec §3.1.5, which
 lists every endpoint the design doc names and this service does not implement,
 with the reason for each.
 
@@ -52,6 +57,15 @@ creator. So a guard here is `get_visible`, never `is_member`.
 
 **Posting does not create a membership row.** `myRole` stays `null` for someone
 who has spoken in a public channel they never joined.
+
+**Search results come from Postgres, not Elasticsearch.** The index supplies an
+ordered list of candidate ids, filtered to the channels `channels.visible_ids`
+says the caller can see right now; `search.py` then loads those rows with
+`deleted_at IS NULL`. So nothing about who may see what lives in the index, and
+index lag cannot show a deleted message's text — at the price that a page can be
+shorter than `limit`. Only `nextCursor: null` means the end. The enqueue is
+fire-and-forget: an R3 outage loses index jobs, never writes. See
+docs/adr/260914-message-search-index-is-a-candidate-list.md.
 
 **Channels archive, they do not soft-delete.** The column is `archived_at`, not
 `deleted_at`, so Conventions §3's "filter `deleted_at IS NULL`" reads as

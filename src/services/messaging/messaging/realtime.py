@@ -54,7 +54,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from messaging import channels
 from messaging.schemas import MessageResponse
 from messaging.settings import Settings
-from shared import ProblemException, SecurityContext, problem_body, verify_user_token
+from shared import JobQueue, ProblemException, SecurityContext, problem_body, verify_user_token
 
 _log = logging.getLogger("collabhub.messaging.realtime")
 
@@ -94,6 +94,8 @@ class RealtimeContext:
     settings: Settings
     sessions: async_sessionmaker[AsyncSession]
     security: SecurityContext
+    #: The `jobs:index` producer's queue, shared with the REST routers.
+    jobs: JobQueue
 
 
 # --- the ack envelope ------------------------------------------------------
@@ -151,6 +153,11 @@ def build_server(context: RealtimeContext) -> socketio.AsyncServer:
         # an allow-list containing nothing and refuses every browser handshake
         # with a 400. `None` is its spelling of "same origin only".
         cors_allowed_origins=context.settings.cors_allowed_origins or None,
+        # WebSocket only (register D30). A long-polling session needs every
+        # request to reach the same pod, and nothing in front of this service
+        # promises that — so the server refuses polling rather than trusting
+        # each client not to try it.
+        transports=["websocket"],
     )
 
     async def principal_for(sid: str):

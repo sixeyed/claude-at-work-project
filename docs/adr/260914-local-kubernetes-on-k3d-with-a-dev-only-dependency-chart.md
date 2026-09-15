@@ -74,10 +74,16 @@ redirect URIs only from its file. All three must change together.
 The frontend image is environment-specific: the `VITE_*` URLs are inlined at build
 time, and `build.sh` defaults them to the k3d origin.
 
-Traefik balances across pods itself and ignores a Service's `sessionAffinity`.
-Socket.IO connects over WebSocket first, which stays on one pod, so this only bites
-a client that falls back to long-polling. When Canvas gains real-time it will also
+Traefik balances across pods itself and ignores anything a Service says about
+affinity. Since Socket.IO became WebSocket-only (register D30) that costs nothing —
+a connection stays on the pod it reached. When Canvas gains real-time it will also
 want `/socket.io`, which Messaging already holds on this origin.
+
+The environment also has to satisfy what the app chart asks of every environment:
+KEDA installed for the Worker pools, and NetworkPolicy peers that are actually
+right, because k3s enforces NetworkPolicy. `deploy.sh infra` installs KEDA pinned
+to `versions.md`, and `values-k3d.yaml` names each peer — Traefik as the ingress
+controller, and the local chart's pods for everything else.
 
 The environment is heavy. With Elasticsearch included, running k3d beside the
 Compose development stack is two of everything. `deploy.sh down` deletes all data

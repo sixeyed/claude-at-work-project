@@ -1,0 +1,29 @@
+{{- $component := .Values.components.auth }}
+{{- if and $component.enabled .Values.networkPolicy.enabled }}
+{{- $ctx := dict "root" $ "name" "auth" }}
+# Auth — reached by the browser through the ingress, by every service for JWKS,
+# and by the Worker for service tokens. Reaches its own Postgres, R1 for the
+# denylist, and the upstream OIDC provider (register D5).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "collabhub.componentFullname" $ctx }}
+  labels:
+    {{- include "collabhub.labels" $ctx | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "collabhub.selectorLabels" $ctx | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    {{- include "collabhub.ingressFromController" $ctx | nindent 4 }}
+    {{- include "collabhub.ingressFromComponents" (dict "root" $ "from" (list "messaging" "canvas" "asset" "worker")) | nindent 4 }}
+  egress:
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "auth" "peer" "dns") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "auth" "peer" "postgres") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "auth" "peer" "redisCache") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "auth" "peer" "oidcProvider") | nindent 4 }}
+    {{- include "collabhub.egressToPeer" (dict "root" $ "name" "auth" "peer" "otelCollector") | nindent 4 }}
+{{- end }}

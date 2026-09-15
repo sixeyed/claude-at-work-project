@@ -248,7 +248,7 @@ Ingress k3s ships with.
 |---|---|
 | `scripts/build.sh [component...] [--push]` | Builds `localhost:5500/collabhub/<component>:<tag>`. The tag is the short commit SHA, plus `-dirty` for uncommitted changes |
 | `scripts/deploy.sh cluster` | Creates the `collabhub` k3d cluster (k3s pinned to `versions.md`) and its registry on `localhost:5500` |
-| `scripts/deploy.sh infra` | Installs `charts/collabhub-local`: Postgres, three Redis, Elasticsearch, Garage (bootstrapped), Dex, the OTel collector, the Secrets and the Ingress |
+| `scripts/deploy.sh infra` | Installs KEDA (pinned to `versions.md`), then `charts/collabhub-local`: Postgres, three Redis, Elasticsearch, Garage (bootstrapped), Dex, the OTel collector, the Secrets and the Ingress |
 | `scripts/deploy.sh app` | Installs `charts/collabhub` at the current tag. Migrations run as Helm hook Jobs before any pod rolls |
 | `scripts/deploy.sh` | All three, in order. Idempotent — re-run it to upgrade |
 | `scripts/deploy.sh status` / `down` | What is running / delete the cluster, its registry and **all its data** |
@@ -265,6 +265,42 @@ everything, Elasticsearch included — give Docker the memory for it.
 of demo accounts, and nothing in it is backed up. Never install it anywhere else.
 
 ### What the chart expects of an environment
+
+Three things the chart now needs, all per environment:
+
+- **KEDA**, installed in the cluster — the chart fails to render without the `keda.sh/v1alpha1`
+  API, since the Worker's `ScaledObject`s depend on it. No KEDA and don't want it? Set
+  `components.worker.autoscaling.enabled=false` and the Worker renders as plain Deployments
+  instead.
+- **`networkPolicy.peers` set in a values file for that environment** — `postgres`,
+  `redisCache`, `redisRealtime`, `redisStreams`, `elasticsearch`, `objectStore`,
+  `otelCollector`, `oidcProvider`. Where Postgres, Redis and the rest actually live varies per
+  cluster, so the chart ships no defaults for them, and the render fails, naming whichever
+  peer is missing, until every one an enabled component needs is set. Don't want NetworkPolicy
+  objects at all? Set `networkPolicy.enabled=false`.
+- **A `REDIS_STREAMS_PASSWORD` key in the `collabhub-worker` secret**, and
+  `components.worker.env.REDIS_STREAMS_ADDRESS` pointed at R3's `host:port` — KEDA's
+  `TriggerAuthentication` and its `redis-streams` trigger read these directly; they are not
+  parsed out of `REDIS_STREAMS_URL`.
+
+`ingressController` and `dns` are the exceptions: they ship non-empty defaults (ingress-nginx
+in namespace `ingress-nginx`; CoreDNS via `k8s-app: kube-dns` in `kube-system`), so they pass
+the empty-peer check even on a cluster where they're wrong. That's silent — nothing fails — so
+check them by hand for your cluster. Under a CNI that enforces NetworkPolicy, a wrong
+`ingressController` peer blocks all public ingress traffic to every component.
+
+The k3d environment is a worked example of all three: `deploy.sh infra` installs KEDA,
+`charts/collabhub/values-k3d.yaml` sets every peer (k3s's Traefik as the ingress controller,
+and k3s does enforce NetworkPolicy), and `charts/collabhub-local` supplies the Secret keys.
+
+```bash
+helm lint charts/collabhub -f <env-values>.yaml --set components.worker.autoscaling.enabled=false
+helm template collabhub charts/collabhub -f <env-values>.yaml --api-versions keda.sh/v1alpha1
+```
+
+`helm lint` has no `--api-versions` flag, so it can't see the KEDA API either way — the
+`--set` above sidesteps that check the same way a KEDA-less cluster would. `helm template`
+does take `--api-versions`, so pass it there instead once your peers are set.
 
 The chart deploys CollabHub's own workloads only. Postgres, Redis, Elasticsearch and Garage
 are expected to exist already — they have their own lifecycle and backups, and bundling them

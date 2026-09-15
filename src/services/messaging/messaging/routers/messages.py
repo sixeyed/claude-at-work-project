@@ -23,7 +23,8 @@ for ordinary reads.
 A broadcast for a row whose transaction then fails is a message that exists only
 in other people's windows. `sio` is `None` under `ASGITransport`, so the
 publisher is a return statement in every integration test — the router code is
-the same either way.
+the same either way. Then, for the search index, it enqueues a `jobs:index` job —
+fire-and-forget, see `indexing.py`.
 """
 
 from __future__ import annotations
@@ -34,7 +35,7 @@ import socketio
 from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from messaging import channels, messages, realtime
+from messaging import channels, indexing, messages, realtime
 from messaging.db import session as db_session
 from messaging.models import Message
 from messaging.schemas import (
@@ -44,7 +45,7 @@ from messaging.schemas import (
     SendMessageRequest,
 )
 from messaging.settings import Settings
-from shared import PageParams, ProblemException, UserPrincipal, require_user
+from shared import JobQueue, PageParams, ProblemException, UserPrincipal, require_user
 
 #: Two prefixes, one surface. History and sending hang off the channel that owns
 #: them; a single message is addressable on its own.
@@ -145,6 +146,7 @@ async def send_message(
     principal: UserPrincipal = Depends(require_user),
     session: AsyncSession = Depends(db_session),
     sio: socketio.AsyncServer | None = Depends(realtime.server),
+    jobs: JobQueue = Depends(indexing.queue),
 ) -> MessageResponse:
     """Say something in a channel the caller can see.
 
@@ -168,6 +170,7 @@ async def send_message(
     response = _as_message(created)
     await session.commit()
     await realtime.publish_message_received(sio, response)
+    await indexing.enqueue_upsert(jobs, response, workspace_id=principal.workspace_id)
     return response
 
 
@@ -189,6 +192,7 @@ async def edit_message(
     principal: UserPrincipal = Depends(require_user),
     session: AsyncSession = Depends(db_session),
     sio: socketio.AsyncServer | None = Depends(realtime.server),
+    jobs: JobQueue = Depends(indexing.queue),
 ) -> MessageResponse:
     """Rewrite a message. **The author, and nobody else.**
 
@@ -236,6 +240,7 @@ async def edit_message(
     response = _as_message(edited)
     await session.commit()
     await realtime.publish_message_edited(sio, response)
+    await indexing.enqueue_upsert(jobs, response, workspace_id=principal.workspace_id)
     return response
 
 
@@ -245,6 +250,7 @@ async def delete_message(
     principal: UserPrincipal = Depends(require_user),
     session: AsyncSession = Depends(db_session),
     sio: socketio.AsyncServer | None = Depends(realtime.server),
+    jobs: JobQueue = Depends(indexing.queue),
 ) -> MessageResponse:
     """Tombstone a message. The author, or an admin of its channel.
 
@@ -256,10 +262,11 @@ async def delete_message(
     a `POST`, and a deliberate deviation from "DELETE returns 204" rather than a
     surprise in the OpenAPI document.
 
-    Deleting twice returns the same tombstone, unchanged.
+    Deleting twice returns the same tombstone, unchanged — and enqueues no
+    second index job, because nothing about the document changed.
     """
     try:
-        deleted = await messages.delete(
+        result = await messages.delete(
             session,
             workspace_id=principal.workspace_id,
             user_id=principal.user_id,
@@ -270,12 +277,14 @@ async def delete_message(
             "Only the author or a channel admin can delete a message."
         ) from exc
 
-    if deleted is None:
+    if result is None:
         raise ProblemException.not_found("No such channel.")
 
-    response = _as_message(deleted)
+    response = _as_message(result.message)
     await session.commit()
     # The redacted DTO, not an id: the row stays in the history and every
     # recipient has to render the tombstone.
     await realtime.publish_message_deleted(sio, response)
+    if result.deleted_now:
+        await indexing.enqueue_delete(jobs, response, workspace_id=principal.workspace_id)
     return response
