@@ -60,6 +60,7 @@ async def _create(server: PostgresServer, name: str) -> None:
             if not exists:
                 # conventions: ok — an identifier cannot be a bind parameter, and `name`
                 # matched `_DATABASE_NAME` above.
+                # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text — SQLAlchemy has no CREATE DATABASE construct, and the name is validated
                 await connection.execute(text(f'CREATE DATABASE "{name}"'))
     finally:
         await engine.dispose()
