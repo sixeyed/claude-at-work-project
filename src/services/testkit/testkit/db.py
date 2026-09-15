@@ -23,4 +23,5 @@ async def truncate(engine: AsyncEngine, tables: Sequence[str]) -> None:
     async with engine.begin() as connection:
         # conventions: ok — identifiers cannot be bind parameters, and every name
         # matched `_TABLE_NAME` above.
+        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text — SQLAlchemy has no TRUNCATE construct, and every name is validated
         await connection.execute(text(f"TRUNCATE {', '.join(tables)} RESTART IDENTITY CASCADE"))
