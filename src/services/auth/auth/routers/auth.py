@@ -114,6 +114,8 @@ async def refresh(
         # fall back rather than strand them with no way back in.
         membership = identities.default_membership(await identities.memberships(session, user.id))
         if membership is None:
+            # conventions: ok — this is the caller's own account state, not a
+            # resource of someone else's that a 404 would have to hide.
             raise ProblemException.forbidden("This account belongs to no workspace.")
 
     pair = await sessions.rotate(
@@ -153,6 +155,9 @@ async def switch_workspace(
 
     membership = await identities.membership(session, user.id, body.workspace_id)
     if membership is None:
+        # conventions: ok — refusing a workspace switch the caller asked for by
+        # id. See the note in the CH004 discussion: whether this should be a 404
+        # is a real question, but it is a behaviour change, not a lint waiver.
         raise ProblemException.forbidden("You are not a member of that workspace.")
 
     pair = await sessions.rotate(

@@ -94,7 +94,7 @@ components:
       MESSAGING_MAX_BODY_CHARS: "8000"
       MESSAGING_MAX_ATTACHMENTS: "10"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-    # Supplies POSTGRES_DSN and all three REDIS_*_URL values.
+    # Supplies POSTGRES_DSN, all three REDIS_*_URL values and ELASTICSEARCH_URL.
     envFromSecrets:
       - collabhub-messaging
 
@@ -176,10 +176,12 @@ components:
     env:
       APP_ENV: production
       LOG_LEVEL: info
-      WORKER_STREAMS: jobs:index,jobs:thumbnail,jobs:notify,jobs:export,jobs:retention
+      # Only streams with handlers — the Worker refuses to start otherwise.
+      WORKER_STREAMS: jobs:index
       WORKER_MAX_ATTEMPTS: "5"
       WORKER_VISIBILITY_TIMEOUT_SECONDS: "60"
       WORKER_BATCH_SIZE: "16"
+      WORKER_DEAD_LETTER_MAXLEN: "10000"
       OBJECT_STORE_BUCKET: collabhub-assets
       ASSET_INTERNAL_URL: http://collabhub-asset:8000/api/v1/internal
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317

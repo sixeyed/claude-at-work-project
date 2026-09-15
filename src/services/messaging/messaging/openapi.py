@@ -24,6 +24,7 @@ _PLACEHOLDERS = {
     "redis_cache_url": "redis://openapi/0",
     "redis_realtime_url": "redis://openapi/0",
     "redis_streams_url": "redis://openapi/0",
+    "elasticsearch_url": "http://openapi.invalid:9200",
     "auth_issuer": "https://auth.invalid",
     "auth_jwks_url": "https://auth.invalid/.well-known/jwks.json",
 }

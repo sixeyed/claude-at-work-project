@@ -155,7 +155,9 @@ def messaging_dsn(bdd_postgres_port: str) -> str:
 
 def _reachable(url: str, timeout: float = 2.0) -> bool:
     try:
-        with urlopen(url, timeout=timeout) as response:
+        # S310: the URL is built by this harness from its own port constants,
+        # never from test data, and only ever addresses the local test stack.
+        with urlopen(url, timeout=timeout) as response:  # noqa: S310
             return response.status < 500
     except (URLError, OSError):
         return False

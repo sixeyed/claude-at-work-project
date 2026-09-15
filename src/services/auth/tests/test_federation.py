@@ -162,7 +162,9 @@ async def test_login_redirects_to_dex_with_pkce_and_state(client: httpx.AsyncCli
     assert query["response_type"] == ["code"]
     assert query["code_challenge_method"] == ["S256"]
     assert query["client_id"] == [DEX_CLIENT_ID]
-    assert query["state"] and query["nonce"] and query["code_challenge"]
+    assert query["state"]
+    assert query["nonce"]
+    assert query["code_challenge"]
 
 
 async def test_our_own_pkce_challenge_is_not_the_spas(client: httpx.AsyncClient) -> None:

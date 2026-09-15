@@ -11,6 +11,12 @@
  * `connectionStatus` — a fact *about* the resource — does live in the store.
  */
 
+/* eslint-disable react-refresh/only-export-components --
+   `useSocket` is this context's only reader and belongs beside the provider
+   that supplies it. Splitting them to keep Fast Refresh happy would scatter one
+   idea across two files; a full reload on edits to this file is the cheaper
+   trade. */
+
 import { createContext, useContext, type ReactNode } from 'react'
 
 import type { Socket } from './socket'

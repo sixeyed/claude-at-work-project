@@ -123,7 +123,7 @@ async def login(
 
 
 @router.get("/callback/{provider}")
-async def callback(
+async def callback(  # noqa: C901 — flat sequence of OIDC error checks, not nesting
     request: Request,
     provider: str,
     code: str | None = None,
@@ -259,6 +259,8 @@ async def token(
         # Removed from the workspace between signing in and collecting the code.
         membership = identities.default_membership(await identities.memberships(session, user.id))
         if membership is None:
+            # conventions: ok — the caller's own account has no workspace at all;
+            # there is no other party's resource to conceal.
             raise ProblemException.forbidden("This account belongs to no workspace.")
 
     pair = await sessions.issue(

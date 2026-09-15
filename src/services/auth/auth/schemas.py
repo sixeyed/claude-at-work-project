@@ -62,13 +62,14 @@ class TokenResponse(CamelModel):
     """
 
     access_token: str
-    token_type: str = "Bearer"
+    # S105: "Bearer" is the RFC 6750 scheme name, not a credential.
+    token_type: str = "Bearer"  # noqa: S105
     expires_in: int
 
 
 class ServiceTokenResponse(CamelModel):
     access_token: str
-    token_type: str = "Bearer"
+    token_type: str = "Bearer"  # noqa: S105
     expires_in: int
 
 

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/lint.sh\"",
+            "timeout": 60,
+            "statusMessage": "Linting what changed"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-.}/.claude/hooks/security.sh\"",
+            "timeout": 120,
+            "statusMessage": "Running the security checks"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -3,10 +3,11 @@
 What lives here is the platform's shared contract, implemented once so five
 services cannot drift: RFC 7807 Problem Details, UUID v7 keys, JWKS-backed token
 verification with `require_user` / `require_service`, the Redis token denylist,
-and the health router.
+the health router, and the job envelope and queue (Conventions §7), which
+arrived with message search.
 
-Still to arrive with the services that need them: the job envelope, the
-`ObjectStore` protocol, and structlog + OpenTelemetry setup.
+Still to arrive with the services that need them: the `ObjectStore` protocol,
+and structlog + OpenTelemetry setup.
 See docs/design/00-platform-conventions.md.
 """
 
@@ -14,6 +15,7 @@ from shared.cors import install_cors
 from shared.denylist import Denylist, TokenState
 from shared.health import HealthCheck, build_health_router, http_check, postgres_check, redis_check
 from shared.ids import uuid7
+from shared.jobs import JOB_DATA_FIELD, JobEnvelope, JobQueue
 from shared.keys import JwksClient, KeySource, StaticKeySource, UnknownKeyError, jwks_document
 from shared.pagination import (
     DEFAULT_LIMIT,
@@ -48,10 +50,13 @@ from shared.security import (
 
 __all__ = [
     "DEFAULT_LIMIT",
+    "JOB_DATA_FIELD",
     "MAX_LIMIT",
     "PROBLEM_MEDIA_TYPE",
     "Denylist",
     "HealthCheck",
+    "JobEnvelope",
+    "JobQueue",
     "JwksClient",
     "KeySource",
     "Page",

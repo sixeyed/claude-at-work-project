@@ -18,15 +18,51 @@ select = [
     "SIM",  # flake8-simplify
     "ASYNC",# flake8-async
     "RUF",
+    # Security and correctness families added for the Claude Code hooks (see
+    # .claude/hooks/). Each one was measured against the tree before being
+    # enabled: every family here was at or near zero violations, so the gate is
+    # green on day one and a new finding always means new code.
+    "S",    # flake8-bandit — the static security core
+    "PT",   # flake8-pytest-style
+    "BLE",  # flake8-blind-except — `except Exception:` swallowing everything
+    "RSE",  # flake8-raise
+    "ISC",  # implicit string concat
+    "PERF", # perflint
+    "FURB", # refurb
+    "Q",    # flake8-quotes
+    "EXE",  # flake8-executable
+    "C90",  # mccabe complexity, see [lint.mccabe] below
+    "ERA",  # eradicate — commented-out code
 ]
+# Deliberately NOT selected, with the violation count each would add today:
+#   ANN (683) and D (598) — annotating and docstringing every symbol is a
+#     separate project, not a gate.
+#   PL (274) — pylint's refactor rules are opinionated enough to argue with.
+#   COM (236) — trailing-comma rules fight `ruff format`.
+#   TRY (112) / EM (111) — exception-message style; noise against real code.
+#   TCH (86) — moving imports into `if TYPE_CHECKING:` breaks FastAPI and
+#     pydantic, which resolve annotations at runtime.
+#   INP (39) — flags missing __init__.py, but the test layout is deliberately
+#     namespace-package based (see pytest's --import-mode=importlib).
+#   ARG (35) — FastAPI dependency overrides legitimately ignore arguments.
 ignore = [
     "E501",  # line length is handled by the formatter
     "B008",  # FastAPI's Depends() in defaults is idiomatic
 ]
 
+[lint.mccabe]
+max-complexity = 10
+
 [lint.per-file-ignores]
 "**/migrations/**" = ["I", "N", "UP"]  # Alembic-generated revisions
-"**/tests/**" = ["T20"]
+# `assert` IS the point of a test, and test fixtures hold fake credentials for
+# Dex and the Worker's service token. S101/S105/S106 fire on both by design.
+"**/tests/**" = ["T20", "S101", "S105", "S106"]
+"tests/**" = ["T20", "S101", "S105", "S106"]
+# The Claude Code hooks are developer tooling that runs on a laptop, not code
+# that ships: printing findings is their interface, and resolving `git` through
+# PATH (S607) is what you want there.
+".claude/hooks/**" = ["T20", "S607"]
 # Developer CLI tools, not services: stdout *is* their interface, so the
 # no-print rule — which exists to keep structlog the only logging path in a
 # running service — does not apply.

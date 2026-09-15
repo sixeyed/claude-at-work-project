@@ -84,11 +84,11 @@ class Settings(BaseSettings):
     auth_service_token_minutes: int = 10
 
     # JSON in the environment, e.g.
-    # AUTH_SERVICE_CLIENTS='[{"client_id":"worker","secret":"s","scopes":["assets:write-variants"]}]'
+    # AUTH_SERVICE_CLIENTS='[{"client_id":"worker","secret":"s","scopes":["assets:write-variants"]}]'  # noqa: ERA001
     auth_service_clients: list[ServiceClient] = []
 
     # Upstream identity providers. JSON in the environment, e.g.
-    # OIDC_PROVIDERS='[{"name":"dex","authority":"http://localhost:5556/dex",...}]'
+    # OIDC_PROVIDERS='[{"name":"dex","authority":"http://localhost:5556/dex",...}]'  # noqa: ERA001
     oidc_providers: list[OidcProvider] = []
 
     # Both halves of a login are single-use keys in R1 with a ceiling on how

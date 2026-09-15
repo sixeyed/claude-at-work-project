@@ -344,7 +344,8 @@ def test_challenges_are_base64url_without_padding() -> None:
     challenge = pkce.challenge_for(pkce.new_verifier())
 
     assert "=" not in challenge
-    assert "+" not in challenge and "/" not in challenge
+    assert "+" not in challenge
+    assert "/" not in challenge
 
 
 def test_verifiers_are_unique() -> None:

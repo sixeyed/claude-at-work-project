@@ -2,16 +2,18 @@
 
 A module of its own rather than more handlers in `realtime.py`: that file owns
 the connection, the rooms and the outbound publishers, and this one owns what a
-client can ask the server to do. `register_write_handlers` is the single export,
+client can ask the server to do. `register_write_handlers` is the entry point,
 called once from `build_asgi_app`.
 
-Four rules run through every handler here.
+Four rules run through every write handler here — `send_message`,
+`edit_message` and `delete_message`. `typing` persists nothing and acks nothing,
+and of these rules it keeps only the expiry half of the token check.
 
 **Nothing raises.** A python-socketio handler that raises never sends its
 acknowledgement, so the client's callback simply never fires and the optimistic
 bubble hangs forever with no error to show. `@_acked` — S5's, imported — turns a
 `ProblemException` into an error ack and anything unexpected into a 500-shaped
-one. This is the single most important line in the module.
+one. A write handler without it is the easiest bug to add to this module.
 
 **Visibility authorizes the write, not room membership.** The delivery plan said
 "a client may only act on a channel it has joined", and that is wrong twice
@@ -26,8 +28,9 @@ user could act on. A room decides who *receives* a broadcast and nothing else.
 **Every write re-checks the token.** A REST call verifies signature, expiry and
 the denylist on every request; a socket connection is verified once and can
 outlive its fifteen-minute token by hours. That was tolerable while the socket
-could only read. Handing it a write path without re-checking would make moving
-the composer onto it a security regression.
+could only read. So each write re-tests expiry and the denylist (`principal_of`,
+`check_revoked`) — the signature cannot have changed since the handshake.
+Without that, moving the composer onto the socket would be a security regression.
 
 **The same domain functions the REST routers call.** Not a second copy of the
 rules — `messages.create`, `messages.edit`, `messages.delete`, and the same
@@ -44,7 +47,7 @@ from typing import Any
 import socketio
 from pydantic import Field, ValidationError
 
-from messaging import channels, messages, realtime
+from messaging import channels, indexing, messages, realtime
 from messaging.realtime import NAMESPACE, RealtimeContext, _acked, _ok
 from messaging.routers.messages import _as_message
 from messaging.schemas import MAX_BODY_FIELD_LENGTH, CamelRequest
@@ -54,13 +57,16 @@ _log = logging.getLogger("collabhub.messaging.realtime_writes")
 
 
 class SendMessagePayload(CamelRequest):
-    """`send_message`, narrowed from what spec §3.2 documents.
+    """`send_message`: `{channelId, body}` and nothing else (spec §3.2).
 
-    The doc lists `threadRootId` and `attachmentIds` as optional. Both are out
-    of scope — threading has a column and no API, and attachments are always
-    empty because the Asset service is a skeleton — and accepting a field the
-    handler drops on the floor is a claim the service does not honour. They
-    return with the features that need them.
+    The spec once listed `threadRootId` and `attachmentIds` as optional. Both are
+    out of scope — threading has a column and no API, and attachments are always
+    empty because the Asset service is a skeleton — and declaring a field the
+    handler ignores is a claim the service does not honour. They return with the
+    features that need them.
+
+    Not declaring them is not the same as refusing them: nothing here forbids
+    extra keys, so a client that sends either field gets no error, just no effect.
 
     Validated here rather than in `schemas.py`: these are not REST bodies, they
     never appear in the OpenAPI document, and they belong beside the handlers
@@ -72,7 +78,7 @@ class SendMessagePayload(CamelRequest):
 
 
 class EditMessagePayload(CamelRequest):
-    """`edit_message` — **with `version`, which spec §3.2 omits.**
+    """`edit_message` — **with `version`**, which spec §3.2 originally omitted.
 
     The expected version is required on `PATCH /messages/{id}`, and a socket
     event without one would make this the way to lose someone else's edit
@@ -85,8 +91,8 @@ class EditMessagePayload(CamelRequest):
 
 
 class DeleteMessagePayload(CamelRequest):
-    """Unconditional, so no `version` — deleting a message someone else just
-    edited is not a conflict worth surfacing."""
+    """Unconditional, so no `version` — a channel admin deleting a message its
+    author has just edited is not a conflict worth surfacing."""
 
     message_id: uuid.UUID
 
@@ -96,7 +102,11 @@ class TypingPayload(CamelRequest):
 
 
 def _parse(model: type[CamelRequest], payload: Any) -> Any:
-    """Validate an inbound payload into a problem, never into an exception."""
+    """Validate an inbound payload, or raise it as a 400 `ProblemException`.
+
+    A bare `ValidationError` would reach `@_acked` as an unexpected error and ack
+    a 500. At most five validation messages are passed on.
+    """
     try:
         return model.model_validate(payload)
     except ValidationError as exc:
@@ -106,11 +116,13 @@ def _parse(model: type[CamelRequest], payload: Any) -> Any:
         ) from exc
 
 
-def register_write_handlers(sio: socketio.AsyncServer, context: RealtimeContext) -> None:
+def register_write_handlers(  # noqa: C901 — a registry of handlers; mccabe counts each one
+    sio: socketio.AsyncServer, context: RealtimeContext
+) -> None:
     """Attach the inbound events to a server S5 already built."""
 
     async def principal_of(sid: str) -> UserPrincipal:
-        """The connection's principal, plus the check the handshake cannot make.
+        """The connection's principal, plus the expiry check the handshake made only once.
 
         Expiry is re-tested on **every** inbound event including `typing`: it
         costs nothing and it is the difference between a connection that is
@@ -126,12 +138,13 @@ def register_write_handlers(sio: socketio.AsyncServer, context: RealtimeContext)
     async def check_revoked(principal: UserPrincipal) -> None:
         """The denylist half, on writes only, and **fail-open** on an outage.
 
-        Channel writes are outside the fail-closed set in Conventions §5.2 — the
-        REST routers say so in their own docstrings — so an unreachable R1
-        accepts the write exactly as it accepts a `GET`.
+        Only `REVOKED` refuses. Channel writes are outside the fail-closed set in
+        Conventions §5.2 — the REST routers say so in their own docstrings — so
+        any other state, an unreachable R1 included, accepts the write exactly as
+        it accepts a `GET`.
 
-        `typing` skips this entirely: it persists nothing, and one Redis round
-        trip per throttle window is real load for no authority gained.
+        `typing` skips this entirely: it persists nothing, and a Redis round trip
+        per typing event is real load for no authority gained.
         """
         state = await context.security.denylist.state(principal.token_id)
         if state is TokenState.REVOKED:
@@ -182,6 +195,7 @@ def register_write_handlers(sio: socketio.AsyncServer, context: RealtimeContext)
         # Commit, then publish. A broadcast for a row whose transaction failed
         # is a message that exists only in other people's windows.
         await realtime.publish_message_received(sio, response)
+        await indexing.enqueue_upsert(context.jobs, response, workspace_id=principal.workspace_id)
         return _ok(response.model_dump(mode="json", by_alias=True))
 
     @sio.event(namespace=NAMESPACE)
@@ -225,6 +239,7 @@ def register_write_handlers(sio: socketio.AsyncServer, context: RealtimeContext)
             await session.commit()
 
         await realtime.publish_message_edited(sio, response)
+        await indexing.enqueue_upsert(context.jobs, response, workspace_id=principal.workspace_id)
         return _ok(response.model_dump(mode="json", by_alias=True))
 
     @sio.event(namespace=NAMESPACE)
@@ -236,7 +251,7 @@ def register_write_handlers(sio: socketio.AsyncServer, context: RealtimeContext)
 
         async with context.sessions() as session:
             try:
-                deleted = await messages.delete(
+                result = await messages.delete(
                     session,
                     workspace_id=principal.workspace_id,
                     user_id=principal.user_id,
@@ -247,13 +262,18 @@ def register_write_handlers(sio: socketio.AsyncServer, context: RealtimeContext)
                     "Only the author or a channel admin can delete a message."
                 ) from exc
 
-            if deleted is None:
+            if result is None:
                 raise ProblemException.not_found("No such channel.")
 
-            response = _as_message(deleted)
+            response = _as_message(result.message)
             await session.commit()
 
         await realtime.publish_message_deleted(sio, response)
+        # A repeat delete changed nothing, so it has nothing to index.
+        if result.deleted_now:
+            await indexing.enqueue_delete(
+                context.jobs, response, workspace_id=principal.workspace_id
+            )
         # The tombstone, not an id — the row stays in the history and the client
         # that issued the delete has to render it like everyone else.
         return _ok(response.model_dump(mode="json", by_alias=True))
@@ -269,9 +289,9 @@ def register_write_handlers(sio: socketio.AsyncServer, context: RealtimeContext)
         invent a timeout for the client that closed its laptop mid-word.
 
         The payload carries no display name. Messaging holds none, and the
-        browser already has the workspace directory it resolves every other name
-        from — two sources for one name is the drift that is worth avoiding even
-        for an event that cannot go stale.
+        browser already resolves every other name from the workspace directory;
+        a second source for the same name invites drift, even on an event too
+        short-lived to go stale.
         """
         try:
             event = _parse(TypingPayload, payload)

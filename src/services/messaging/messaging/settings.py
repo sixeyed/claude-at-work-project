@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     redis_realtime_url: str
     redis_streams_url: str
 
+    # Read-only: the Worker writes the `messages` index, this service queries it
+    # for `GET /search/messages`. Not a readiness dependency — an Elasticsearch
+    # outage degrades search and must not take chat out of rotation.
+    elasticsearch_url: str
+
     auth_issuer: str
     auth_audience: str = "collabhub"
     auth_internal_audience: str = "collabhub-internal"
