@@ -59,27 +59,3 @@ Feature: Real-time delivery
     And Grace's network comes back
     Then Grace's connection is restored
     And Grace sees "sent while Grace was away" in the channel without reloading
-
-  Scenario: A typing indicator appears for Grace and clears when Ada stops
-    Given Ada has created a public channel named "general"
-    And Grace is looking at the "general" channel
-    When Ada types "standup at" into her message box without sending it
-    Then Grace sees that Ada is typing
-    When Ada stops typing
-    Then Grace no longer sees that Ada is typing
-
-  Scenario: A sent message appears immediately and is confirmed
-    Given Ada has created a public channel named "general"
-    When Ada sends "lunch is at one"
-    Then Ada sees "lunch is at one" in the channel before it is confirmed
-    And Ada's message box is empty
-    And Ada sees "lunch is at one" confirmed
-    And "lunch is at one" appears in Ada's channel exactly once
-
-  Scenario: A rejected send is rolled back and the error is shown
-    Given Ada has created a public channel named "general"
-    When Ada tries to send a message of 8001 characters
-    Then Ada sees that message in the channel before it is confirmed
-    And Ada is told the message is too long
-    And Ada sees no messages in the channel
-    And Ada's message box still holds what she typed

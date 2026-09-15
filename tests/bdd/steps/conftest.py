@@ -8,9 +8,8 @@ subtly different versions of its most-used step.
 
 What belongs here is the vocabulary every feature speaks: who is signed in,
 which channels exist, what is in whose sidebar. What stays in a
-`test_*_steps.py` is the phrasing that feature introduced — renaming a channel
-belongs to `channels.feature`, being refused a control belongs to
-`permissions.feature`.
+`test_*_steps.py` is the phrasing that feature introduced — adding a member
+belongs to `permissions.feature`, dropping the network to `realtime.feature`.
 
 No selectors here either. A step says what a person did; the page object
 (`tests/bdd/pages/`) knows what to click.
@@ -83,11 +82,6 @@ def in_adas_list(ada: ChatPage, name: str) -> None:
     assert name in ada.channel_names()
 
 
-@then(parsers.parse('"{name}" is not in Ada\'s channel list'))
-def not_in_adas_list(ada: ChatPage, name: str) -> None:
-    assert name not in ada.channel_names()
-
-
 @then(parsers.parse('"{name}" is in Grace\'s channel list'))
 def in_graces_list(grace: ChatPage, name: str) -> None:
     assert name in grace.channel_names()
@@ -114,27 +108,12 @@ def ada_reloads(ada: ChatPage) -> None:
     ada.open()
 
 
-#: `parsers.re` rather than `parsers.parse`, and the reason is not style.
-#:
-#: `parse`'s `{body}` will happily swallow a closing quote, so
-#: `Ada sends "{body}"` also matches `Ada sends "x" in "general"` with a body of
-#: `x" in "general` — and which of the two definitions wins then depends on
-#: fixture resolution order. `[^"]*` cannot cross a quote, so the two phrases
-#: are distinguishable by the pattern itself.
+#: `parsers.re` rather than `parsers.parse`: `parse`'s `{body}` will happily
+#: swallow a closing quote, and `[^"]*` cannot cross one, so a later
+#: `Ada sends "…" in "…"` phrase cannot be matched by this step by accident.
 @when(parsers.re(r'Ada sends "(?P<body>[^"]*)"'))
 def ada_sends(ada: ChatPage, body: str) -> None:
     ada.send_message_and_wait(body)
-
-
-@when(parsers.re(r'Ada sends "(?P<body>[^"]*)" in "(?P<channel>[^"]*)"'))
-def ada_sends_in(ada: ChatPage, body: str, channel: str) -> None:
-    ada.open_channel(channel)
-    ada.send_message_and_wait(body)
-
-
-@when(parsers.parse("Ada tries to send a message of {count:d} characters"))
-def ada_sends_too_long(ada: ChatPage, count: int) -> None:
-    ada.send_message_expecting_failure("a" * count)
 
 
 @then(parsers.parse('Ada sees "{body}" in the channel'))
@@ -152,20 +131,9 @@ def ada_does_not_see(ada: ChatPage, body: str) -> None:
     assert not ada.has_message(body), ada.message_bodies()
 
 
-@then("Ada sees no messages in the channel")
-def ada_sees_nothing(ada: ChatPage) -> None:
-    assert ada.message_bodies() == []
-
-
 @then("Ada's message box is empty")
 def adas_box_is_empty(ada: ChatPage) -> None:
     assert ada.draft() == ""
-
-
-@then("Ada is told the message is too long")
-def ada_told_too_long(ada: ChatPage) -> None:
-    shown = ada.composer_error().lower()
-    assert "or fewer" in shown, shown
 
 
 @when(parsers.parse('Ada edits "{old}" to say "{new}"'))

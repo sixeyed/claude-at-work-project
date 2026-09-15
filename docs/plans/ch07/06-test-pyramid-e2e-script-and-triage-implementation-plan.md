@@ -249,25 +249,69 @@ Every task above was executed in the worktree; results below.
 
 ## BDD triage status
 
-Collected before: **43**. After this plan: **41**.
+**First pass** (before the unit and integration branches merged): 43 → 41, deleting the two rows
+whose only replacement was an integration test already on `main`.
 
-| Scenario | Verdict | Status |
+**Second pass**, after merging `main` at `f50c582`, which carries plan 04's and plan 05-backfill's
+`## BDD replacements` tables: every remaining demote row has both halves confirmed, so all of them
+are deleted, with every step definition, page-object method and harness fixture
+(`seed_history`) that nothing else used. **41 → 15.**
+
+| Scenario | Status | Replacements (from plans 04 and 05) |
 |---|---|---|
-| A rename is visible to everyone in the workspace | demote | **deleted** — `test_a_rename_is_what_the_next_read_returns` confirmed passing |
-| Grace does not receive messages for a channel she is not looking at | demote | **deleted** — `test_a_client_in_another_room_receives_nothing` confirmed passing |
-| A public channel name cannot be reused, whatever its case | demote | kept — Vitest `CreateChannelDialog` not landed (plan C) |
-| A channel name cannot be blank / has to be typeable / ≤ 80 | demote | kept — unit `validate_name` table and Vitest not landed |
-| A channel admin renames a channel | demote | kept — Vitest `ChannelHeader` not landed |
-| An admin archives a channel and it leaves the list | demote | kept — Vitest `ChannelList` not landed |
-| Ada creates a public channel — the other outline rows | demote | kept — Vitest `CreateChannelDialog` not landed |
-| A message shows its author and timestamp | demote | kept — Vitest `MessageItem` not landed |
-| A blank message is not sent / over 8000 rejected | demote | kept — Vitest `MessageComposer` not landed |
-| Scrolling up loads older messages | demote | kept — Vitest `MessageList` not landed |
-| Ada cannot edit Grace's message | demote | kept — unit `check_editable` (backfill) and Vitest not landed |
-| Admin deletes another's / non-admin cannot | demote | kept — unit `check_deletable` deferred to the backfill |
-| A member without admin rights is not offered the channel controls | demote | kept — Vitest `ChannelHeader` not landed |
-| A typing indicator appears and clears | demote | kept — Vitest `TypingIndicator` not landed |
-| A sent message appears immediately / a rejected send is rolled back | demote | kept — Vitest `useSendMessage` not landed |
+| A rename is visible to everyone in the workspace | deleted (pass 1) | integration `test_a_rename_is_what_the_next_read_returns` |
+| Grace does not receive messages for a channel she is not looking at | deleted (pass 1) | integration `test_a_client_in_another_room_receives_nothing`, `test_leaving_a_room_stops_the_broadcasts`. The SPA half, which room it joins, is not in plan 04's table but is asserted by `src/frontend/src/lib/realtime/useChannelSocket.test.tsx` (`join_channel` with the opened channel's id) |
+| Ada creates a public channel — rows `team-42`, `Design-Review` | deleted; `general` kept | Vitest `CreateChannelDialog` (all three rows) |
+| A public channel name cannot be reused, whatever its case | deleted | Vitest `CreateChannelDialog`; integration `test_public_names_collide_regardless_of_case`, `test_a_rejected_duplicate_leaves_one_channel` |
+| A channel name cannot be blank / has to be typeable / ≤ 80 | deleted | Vitest `CreateChannelDialog`; unit `test_channel_rules.py` |
+| A channel admin renames a channel | deleted | Vitest `ChannelHeader`; integration `test_an_admin_renames_a_channel` |
+| An admin archives a channel and it leaves the list | deleted | Vitest `ChannelList`, `ChannelHeader`; integration `test_an_admin_archives_a_channel_and_it_leaves_the_list` |
+| A message shows its author and timestamp | deleted | Vitest `MessageItem` |
+| A blank message is not sent / over 8000 rejected | deleted | Vitest `MessageComposer`; unit `test_message_body.py` |
+| Scrolling up loads older messages | deleted | Vitest `MessageList`; integration `test_pagination.py` |
+| Ada cannot edit Grace's message | deleted | Vitest `MessageItem`; unit `test_message_policy.py`; integration `test_a_non_author_cannot_edit` |
+| A channel admin deletes another user's message | deleted | Vitest `MessageItem`; unit `test_message_policy.py`; integration `test_a_channel_admin_deletes_another_users_message` |
+| A non-admin cannot delete someone else's message | deleted | Vitest `MessageItem`; unit `test_message_policy.py`; integration `test_a_non_admin_cannot_delete_someone_elses_message` |
+| A member without admin rights is not offered the channel controls | deleted | Vitest `ChannelHeader` |
+| A typing indicator appears and clears | deleted | Vitest `useTyping`, `TypingIndicator`, `MessageComposer`; integration `test_typing_reaches_the_room_but_not_the_sender` |
+| A sent message appears immediately and is confirmed | deleted | Vitest `useMessages` › `useSendMessage`, `MessageComposer` |
+| A rejected send is rolled back and the error is shown | deleted | Vitest `useMessages` › `useSendMessage`, `MessageComposer` |
+
+**The 15 journeys kept:** channels — signs in and sees her workspace; creates a public channel
+(`general`); a new public channel appears for another member; a private channel only she can see.
+messages — sends and sees it; Grace sees it after reloading; edits her own with a marker; deletes
+her own and the tombstone survives reload. permissions — admin adds a member; removing revokes the
+view; a non-member's link is a 404. realtime — Grace sees it without reloading; edit live; delete
+live; the stream recovers after a drop.
+
+The features' narrative paragraphs still describe the demoted rules. They are prose, not
+scenarios, and rewriting Gherkin needs Elton's approval, so they are left as they are.
+
+Two blocked deletions in the second pass (the auto-mode classifier flagged them as test removal)
+went ahead once Elton granted the permission.
+
+**Verified after the second pass:** 15 collected; `scripts/test.sh lint unit` passes (ruff,
+conventions, eslint, tsc, helm; 209 pytest, 97 Vitest); `scripts/test.sh e2e` passes 15 on most
+runs and tears down.
+
+### Known flake — not fixed here
+
+The two live-delivery scenarios that start with `Grace is looking at the "general" channel` fail
+intermittently: 3 of 11 runs on a kept stack, with *Ada's delete propagates to Grace live* and
+*Grace sees Ada's message without reloading* each failing at least once. Grace's page shows "Live"
+and the broadcast never arrives.
+
+The cause is a race in the SPA that predates this branch (`useChannelSocket.ts`, unchanged since
+ch06). `onConnect` sets the connection status to `connected` and *then* emits `join_channel`
+without asking for the acknowledgement the server already sends (`{"ok": true}`), and opening a
+channel on an already-connected socket emits the join with no ack either. `wait_for_connection`
+therefore proves the socket is up, not that the room is joined, and Ada's write can be broadcast
+to a room Grace has not entered yet. A real user can lose a message the same way, in the gap
+between opening a channel and the server processing the join.
+
+The fix belongs in the SPA, test-first, and is not this handoff's: emit `join_channel` with an
+ack, expose the joined channel (for example `data-joined-channel` on the connection status), and
+have the page object wait for that. Until then the e2e layer is not reliably green.
 
 **Workstream 3, missing journeys:** nothing to draft. As of `5c15626` the SPA renders neither
 search nor unread counts (`grep -rniE 'search|unread' src/frontend/src` finds only

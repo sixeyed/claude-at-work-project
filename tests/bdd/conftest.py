@@ -48,7 +48,6 @@ from playwright.sync_api import Browser, BrowserContext
 
 from bdd.pages.chat_page import ChatPage
 from bdd.pages.sign_in_page import SignInPage
-from shared import uuid7
 
 ADA = "ada@collabhub.dev"
 GRACE = "grace@collabhub.dev"
@@ -207,47 +206,6 @@ async def _truncate(dsn: str) -> None:
         await connection.close()
 
 
-async def _seed_history(dsn: str, channel_name: str, count: int, prefix: str) -> None:
-    """Put `count` messages into a channel, straight into Postgres.
-
-    The scenario this exists for is "scrolling up loads older messages", and the
-    default page is fifty — so it needs fifty-one messages before there is a
-    second page to load. Sending those through the composer is fifty-one browser
-    round trips per run, for an *arrangement* rather than for the thing under
-    test.
-
-    The trade is worth stating plainly: only the arrangement bypasses the API.
-    The read path, the cursor and the scroll are all exercised exactly as a user
-    hits them, and the write path has its own scenario a few lines above.
-
-    Two details that matter. **Ids are generated here with `uuid7()`, in order**,
-    so the seeded rows sort older than anything sent afterwards and the keyset
-    walks them in a defined order — ids come from the application on this
-    platform, never from the database. And the author is lifted from an existing
-    message in the channel when there is one, so a seeded row looks like the
-    sender's rather than like a stranger's.
-    """
-    connection = await asyncpg.connect(dsn)
-    try:
-        channel_id = await connection.fetchval(
-            "SELECT id FROM channels WHERE name = $1 ORDER BY created_at DESC LIMIT 1",
-            channel_name,
-        )
-        if channel_id is None:
-            raise AssertionError(f"no channel named {channel_name!r} to seed history into")
-
-        author_id = await connection.fetchval(
-            "SELECT author_id FROM messages WHERE channel_id = $1 LIMIT 1", channel_id
-        ) or await connection.fetchval("SELECT created_by FROM channels WHERE id = $1", channel_id)
-
-        await connection.executemany(
-            "INSERT INTO messages (id, channel_id, author_id, body) VALUES ($1, $2, $3, $4)",
-            [(uuid7(), channel_id, author_id, f"{prefix} {i:03d}") for i in range(count)],
-        )
-    finally:
-        await connection.close()
-
-
 def _run_off_loop(work: Callable[[], Coroutine[Any, Any, None]]) -> None:
     """Run one coroutine on a thread of its own.
 
@@ -276,22 +234,6 @@ def reset_messaging(messaging_dsn: str, stack_ready: None) -> None:
     proved the database on the other end of this DSN is the disposable one.
     """
     _run_off_loop(partial(_truncate, messaging_dsn))
-
-
-@pytest.fixture
-def seed_history(messaging_dsn: str, reset_messaging: None) -> Callable[[str, int, str], None]:
-    """Arrange a channel's back catalogue without driving the composer.
-
-    Returned as a callable so a step definition never sees a DSN — the same
-    reason page objects hold the selectors. Depends on `reset_messaging` so the
-    seed always lands after the truncate, whatever order pytest happens to
-    resolve the two autouse fixtures in.
-    """
-
-    def seed(channel_name: str, count: int, prefix: str = "old message") -> None:
-        _run_off_loop(partial(_seed_history, messaging_dsn, channel_name, count, prefix))
-
-    return seed
 
 
 def _signed_in_context(browser: Browser, base_url: str, email: str) -> Iterator[BrowserContext]:
