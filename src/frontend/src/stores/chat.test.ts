@@ -32,4 +32,12 @@ describe('the chat store', () => {
 
     expect(useChatStore.getState().connectionStatus).toBe('connected')
   })
+
+  it('starts with no channel joined, and records the one the server has joined', () => {
+    expect(useChatStore.getState().joinedChannelId).toBeNull()
+
+    useChatStore.getState().setJoinedChannel('channel-1')
+
+    expect(useChatStore.getState().joinedChannelId).toBe('channel-1')
+  })
 })

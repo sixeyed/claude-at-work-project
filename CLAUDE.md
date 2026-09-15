@@ -58,7 +58,7 @@ Service names drop the `collabhub-` prefix used in the design docs (`src/service
 - **uv** is the package manager (the docs and ADR say "uv or Poetry" — it's uv). One workspace; each service has its own `pyproject.toml`; `shared` and `contracts` are workspace dependencies.
 - **ruff** for lint and format. Run `ruff check` and `ruff format` on Python you write.
 - **pytest** with **testcontainers-python** for integration tests — every dependency (Postgres, Redis, Elasticsearch, Garage, Dex) is started by testcontainers, never the Compose stack. Unit tests have no network and no Docker (pytest-socket, applied by `testkit`). **pytest-cov** reports unit coverage; nothing gates on it yet. The layers are register D32.
-- **pytest-bdd + Playwright** (sync API) for the acceptance suite in `tests/bdd`. It runs against a stack you bring up yourself, not one it starts — see Testing below. Registered as D27.
+- **pytest-bdd + Playwright** (sync API) for the acceptance suite in `tests/bdd`. It runs against a throwaway Compose stack that `scripts/test.sh e2e` brings up and tears down — see Testing below. Registered as D27.
 - **Frontend:** **TanStack Query** owns *all* server state, **Zustand** owns client state only (D24) — never keep a copy of a channel or message list in the store. **Tailwind CSS v4** for styling, light palette only, via `@tailwindcss/vite` with no config files (D26). Types for a service's REST API are **generated from its OpenAPI document**, not hand-written (D23): `python -m messaging.openapi > src/frontend/openapi/messaging.json`, then `npm run generate:api`.
 
 ## Working in this repo
@@ -177,9 +177,12 @@ The Worker's `tests/integration/conftest.py` has `run_consumer` and `jobs`. No G
 fixture until something uses object storage.
 
 ```bash
-scripts/test.sh                  # lint, unit, integration — what CI runs
+scripts/test.sh                  # lint, unit, integration — the everyday run
 scripts/test.sh unit             # pytest then Vitest, no network or Docker; prints coverage
 scripts/test.sh integration -- src/services/messaging   # starts its own containers
+scripts/test.sh e2e              # tests/bdd: brings the test stack up, runs, tears down
+scripts/test.sh e2e -- --headed -k channels
+scripts/test.sh all              # all four layers — what CI runs
 (cd src/frontend && npm test)    # Vitest only; `npm run test:watch` while working
 ```
 
@@ -195,19 +198,17 @@ helpers in `src/frontend/src/test/`:
 Query by role, label or text: `data-testid` belongs to the BDD suite, and a Vitest
 test neither adds nor reads one.
 
-The `tests/bdd` suite is different from both: it drives a real browser and needs
-a stack already running, which it will not start for you.
+The `tests/bdd` suite is different from both: it drives a real browser against a
+whole Compose stack, which `scripts/test.sh e2e` starts with `up --build --wait`
+and takes down afterwards, pass or fail. `KEEP_STACK=1` leaves it up, so you can
+rerun `uv run pytest tests/bdd -m bdd` without the rebuild.
 
 **It truncates the messaging tables before every scenario**, so it runs against a
 throwaway stack, never the one you develop on. Both run at once — the test stack
 is `docker-compose.test.yml`, a project-name override that republishes only the
 five ports reached from the host (SPA 5183, Auth 8011, Messaging 8012, Dex 5566,
-Postgres 5442):
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.test.yml up -d --build
-uv run pytest tests/bdd -m bdd
-```
+Postgres 5442). The script scales Elasticsearch and the Worker to zero there
+until a search journey needs them.
 
 The harness addresses only those ports, so it cannot reach the development
 stack; it fails with an instruction instead. Run it against the built frontend

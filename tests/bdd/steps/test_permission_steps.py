@@ -6,15 +6,12 @@ collect is a feature file that silently never runs.
 
 The shared vocabulary — signing in, creating channels, reading a sidebar —
 comes from `steps/conftest.py`. What is here is what this feature is about:
-being offered a control, being refused a channel, and membership changing what
-someone can see.
+being refused a channel, and membership changing what someone can see.
 
-Two of these scenarios turn on an *absence*, which is the kind of assertion
-worth being explicit about. "Grace is not offered the channel controls" checks
-that the admin controls are not rendered — not that clicking one fails. The
-server refuses a non-admin write with a 403 either way; that is covered in
-`src/services/messaging/tests/integration/test_channels.py`, because a control the SPA
-deliberately does not draw is not something a browser can drive.
+Whether a member is offered the channel controls is a rendering question, and
+is proven by the Vitest `ChannelHeader` tests (register D32); the server's 403
+for a non-admin write is in
+`src/services/messaging/tests/integration/test_channels.py`.
 """
 
 from __future__ import annotations
@@ -58,16 +55,6 @@ def grace_opens_the_link(ada: ChatPage, grace: ChatPage) -> None:
 
 
 # --- then -----------------------------------------------------------------
-
-
-@then("Grace is not offered the channel controls")
-def grace_has_no_controls(grace: ChatPage) -> None:
-    assert not grace.has_channel_controls()
-
-
-@then("Ada is offered the channel controls")
-def ada_has_controls(ada: ChatPage) -> None:
-    assert ada.has_channel_controls()
 
 
 @then("Grace is told the channel does not exist")

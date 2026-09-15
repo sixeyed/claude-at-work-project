@@ -17,13 +17,6 @@ Feature: Permissions
   Background:
     Given Ada is signed in
 
-  Scenario: A member without admin rights is not offered the channel controls
-    Given Ada has created a public channel named "general"
-    When Grace opens CollabHub
-    And Grace opens the "general" channel
-    Then Grace is not offered the channel controls
-    But Ada is offered the channel controls
-
   Scenario: An admin adds a member to a private channel and they can see it
     Given Ada has created a private channel named "launch-plans"
     And Ada has added Grace to the channel

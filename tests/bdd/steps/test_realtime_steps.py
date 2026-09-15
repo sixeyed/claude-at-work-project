@@ -15,6 +15,10 @@ dropping the network.
 Nothing in these steps navigates or reloads, so a message appearing on Grace's
 screen can only have got there over the socket. If a step here ever called
 `open()`, the scenario would still pass and would stop testing anything.
+
+Rooms, typing and the optimistic send are proven lower down (register D32):
+Messaging's `test_realtime.py` and `test_realtime_writes.py`, and the Vitest
+`useChannelSocket`, `useTyping`, `TypingIndicator` and `useSendMessage` tests.
 """
 
 from __future__ import annotations
@@ -23,7 +27,6 @@ import pytest
 from pytest_bdd import given, parsers, scenarios, then, when
 
 from bdd.pages.chat_page import ChatPage
-from bdd.steps.conftest import ADA_NAME
 
 pytestmark = pytest.mark.bdd
 
@@ -35,16 +38,16 @@ scenarios("../features/realtime.feature")
 
 @given(parsers.parse('Grace is looking at the "{name}" channel'))
 def grace_is_watching(grace: ChatPage, name: str) -> None:
-    """Grace opens the channel and waits until her socket is actually up.
+    """Grace opens the channel and waits until she is actually in its room.
 
     The wait is the point. Without it the scenario races its own arrangement:
     Ada sends, the broadcast goes to a room Grace has not joined yet, and the
     failure looks like "real-time does not work" rather than "the test was
-    early".
+    early". A connected socket is not enough — the join is acknowledged later.
     """
     grace.open()
     grace.open_channel(name)
-    grace.wait_for_connection()
+    grace.wait_for_channel_joined()
 
 
 # --- when -----------------------------------------------------------------
@@ -96,75 +99,6 @@ def appears_once_for_ada(ada: ChatPage, body: str) -> None:
 
 @then("Grace's connection is restored")
 def graces_connection_restored(grace: ChatPage) -> None:
-    grace.wait_for_connection()
-
-
-# --- the socket write path (slice 6) ---------------------------------------
-
-
-@when(parsers.parse('Ada types "{text}" into her message box without sending it'))
-def ada_types(ada: ChatPage, text: str) -> None:
-    """Typed a character at a time, because that is what the throttle sees.
-
-    `fill` would set the value in one go and fire one change event — one
-    keystroke's worth of signal for a whole sentence. The composer is disabled
-    until the socket is up, and Playwright waits for an editable element, so
-    this also absorbs the connection race.
-    """
-    ada.wait_for_connection()
-    ada.type_into_composer(text)
-
-
-@when("Ada stops typing")
-def ada_stops_typing(ada: ChatPage) -> None:
-    """Deliberately does nothing.
-
-    There is no `typing_stopped` event and there is not meant to be one:
-    stopping is the *absence* of an act. The indicator clears because the
-    receiver expires it, which is the only design that also covers the person
-    who closed their laptop mid-word.
-    """
-
-
-@then("Grace sees that Ada is typing")
-def grace_sees_typing(grace: ChatPage) -> None:
-    shown = grace.typing_indicator_text().lower()
-    # The name is resolved from the workspace directory — the event carries only
-    # a user id, because Messaging holds no names.
-    assert ADA_NAME in shown, shown
-
-
-@then("Grace no longer sees that Ada is typing")
-def grace_stops_seeing_typing(grace: ChatPage) -> None:
-    grace.expect_typing_indicator_gone()
-
-
-@then(parsers.parse('Ada sees "{body}" in the channel before it is confirmed'))
-def ada_sees_pending(ada: ChatPage, body: str) -> None:
-    seen = ada.pending_seen()
-    assert body in seen, seen
-
-
-@then("Ada sees that message in the channel before it is confirmed")
-def ada_sees_something_pending(ada: ChatPage) -> None:
-    """The rejected send has to have been *shown* before it can be rolled back.
-
-    That rollback is what makes this scenario different from the same rejection
-    over REST: there, nothing ever appeared.
-    """
-    assert ada.pending_seen(), "nothing was rendered optimistically"
-
-
-@then(parsers.parse('Ada sees "{body}" confirmed'))
-def ada_sees_confirmed(ada: ChatPage, body: str) -> None:
-    ada.wait_for_confirmed(body)
-
-
-@then("Ada's message box still holds what she typed")
-def adas_box_still_holds(ada: ChatPage) -> None:
-    """Nothing typed is lost when the server says no.
-
-    The draft is cleared on send — the message is already on screen — and put
-    back if the send is refused.
-    """
-    assert ada.draft() != ""
+    # Restored means back in the room, which is also when the SPA refetches
+    # what was said while the connection was down.
+    grace.wait_for_channel_joined()
