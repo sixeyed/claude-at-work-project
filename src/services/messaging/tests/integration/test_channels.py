@@ -12,8 +12,6 @@ import uuid
 import pytest
 from sqlalchemy import text
 
-pytestmark = pytest.mark.integration
-
 PROBLEM = "application/problem+json"
 
 

@@ -412,13 +412,23 @@ storage backend directly. See `docs/platform/versions.md` for pinned versions.
   Elasticsearch, and an OTel collector for local runs.
 - Each service ships **Alembic** migrations; `alembic upgrade head` per service against
   its own database (or schema-per-service on one local Postgres for convenience).
-- Test layers (pytest): unit (domain logic), integration (testcontainers-python for
-  Postgres/Redis/Garage/ES), contract (verify the Pydantic models in `collabhub-contracts`
-  against each side), and **acceptance** — Gherkin scenarios in `tests/bdd` driving a real
-  browser through the whole stack with pytest-bdd and Playwright (register D27). The first
-  three each stop at a service boundary; the last is what proves CORS, the SPA's baked-in
-  environment variables, a migration running on container start, and the OIDC redirect
-  chain actually work together.
+- Test layers (register D32) — a pyramid, and a new test goes at the lowest layer that can
+  prove the behaviour:
+  - **Unit** (pytest, Vitest for the SPA): every rule, mapping and wire shape, with no network
+    and no Docker. Contract tests are unit tests — both sides of a job are checked against the
+    Pydantic models in `collabhub-contracts`. Rules behind a database fetch become pure
+    functions over the loaded row; repositories and sessions are never faked.
+  - **Integration** (pytest + testcontainers-python): one service at its public boundary —
+    REST, Socket.IO, a stream consumer — in-process, against Postgres/Redis/Garage/ES/Dex
+    that testcontainers starts. It stops at the service boundary; tokens are minted locally
+    rather than fetched from Auth.
+  - **End-to-end** — Gherkin scenarios in `tests/bdd` driving a real browser through the whole
+    stack with pytest-bdd and Playwright (register D27), for **key user journeys only**. It is
+    what proves CORS, the SPA's baked-in environment variables, a migration running on
+    container start, and the OIDC redirect chain actually work together.
+- A service's tests live in `tests/unit/` and `tests/integration/`, and the directory decides
+  the layer: the `collabhub-testkit` pytest plugin marks each test by it and refuses a test
+  anywhere else.
 - The acceptance suite runs against a **separate, throwaway Compose stack**
   (`docker-compose.test.yml`), because it truncates tables between scenarios. It runs
   alongside the development stack rather than replacing it.

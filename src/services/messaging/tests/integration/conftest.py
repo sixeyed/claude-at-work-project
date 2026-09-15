@@ -127,8 +127,11 @@ def client_for(
     rather than a constant that happens to match it.
 
     A fixture rather than an import, deliberately. Every service in this repo
-    has a `tests` package, so `from tests.conftest import build_settings` binds
-    to whichever one pytest found first — Auth's, when the whole suite runs.
+    has a `tests` package with no `__init__.py`, so `tests` is one namespace
+    package spanning all of them; ruff bans `from tests.conftest import
+    build_settings` outright (TID251) rather than let it bind to whichever
+    service sorts first. Shared helpers go in `testkit`; a service's own go
+    through fixtures like this one.
     """
 
     @asynccontextmanager
@@ -205,9 +208,10 @@ class Tokens:
     """Mints the access tokens these tests authenticate with.
 
     Reached through the `tokens` fixture rather than imported. Every service in
-    this repo has a `tests` package, so `from tests.conftest import ...` binds
-    to whichever one the importer found first — Auth's, when the whole suite
-    runs. Fixtures have no such ambiguity.
+    this repo has a `tests` package with no `__init__.py`, so `tests` is one
+    namespace package spanning all of them and ruff bans `from tests.conftest
+    import ...` outright (TID251) rather than let it bind to whichever service
+    sorts first. Fixtures have no such ambiguity.
     """
 
     ADA = ADA

@@ -14,13 +14,11 @@ import uuid
 from typing import Any
 
 import httpx
-import pytest
-from tests.conftest import A_SIGNING_KEY, ADA, ALAN, DEX_PASSWORD, GRACE, build_settings
 
 from auth.main import create_app
-from tests import dexflow
-
-pytestmark = pytest.mark.integration
+from testkit import dexflow
+from testkit.auth import A_SIGNING_KEY, build_settings
+from testkit.dex import ADA, ALAN, DEX_PASSWORD, GRACE
 
 
 async def sign_in(client: httpx.AsyncClient, email: str = ADA) -> dict[str, Any]:

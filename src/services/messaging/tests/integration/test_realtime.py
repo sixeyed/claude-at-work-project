@@ -20,8 +20,6 @@ import httpx
 import pytest
 import socketio
 
-pytestmark = pytest.mark.integration
-
 #: Long enough that a slow container does not fail a test, short enough that a
 #: genuinely absent broadcast does not cost a minute.
 WAIT = 5

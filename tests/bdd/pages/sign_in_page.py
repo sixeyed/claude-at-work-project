@@ -6,8 +6,9 @@ two PKCE exchanges a real user causes (register D5). A faked token would prove
 nothing about the part most likely to break.
 
 The one fragile piece is Dex's login page: this clicks fields on a form
-upstream owns, so a redesign there breaks these tests. `auth/tests/dexflow.py`
-carries the same warning about parsing that page server-side.
+upstream owns, so a redesign there breaks these tests.
+`src/services/testkit/testkit/dexflow.py` carries the same warning about
+parsing that page server-side.
 """
 
 from __future__ import annotations

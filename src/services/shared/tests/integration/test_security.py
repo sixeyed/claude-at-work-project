@@ -35,8 +35,6 @@ from shared import (
     verify_user_token,
 )
 
-pytestmark = pytest.mark.integration
-
 ISSUER = "https://auth.test"
 KEY_ID = "test-key"
 USER_ID = uuid.uuid4()

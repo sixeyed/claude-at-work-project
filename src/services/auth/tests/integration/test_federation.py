@@ -18,23 +18,13 @@ from urllib.parse import parse_qs, urlparse
 
 import httpx
 import jwt
-import pytest
 from sqlalchemy import select
-from tests.conftest import (
-    ADA,
-    AUTH_ISSUER,
-    DEMO_WORKSPACE,
-    DEX_CLIENT_ID,
-    DEX_PASSWORD,
-    GRACE,
-    SPA_REDIRECT,
-)
 
 from auth import pkce
 from auth.models import ExternalIdentity
-from tests import dexflow
-
-pytestmark = pytest.mark.integration
+from testkit import dexflow
+from testkit.auth import AUTH_ISSUER, DEMO_WORKSPACE, SPA_REDIRECT
+from testkit.dex import ADA, DEX_CLIENT_ID, DEX_PASSWORD, GRACE
 
 
 async def sign_in(client: httpx.AsyncClient, email: str = ADA) -> dict[str, Any]:

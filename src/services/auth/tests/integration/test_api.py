@@ -17,16 +17,14 @@ from typing import Any
 
 import httpx
 import jwt
-import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from tests.conftest import ADA, DEMO_WORKSPACE, DEX_PASSWORD, GRACE, WORKER_SECRET, build_settings
-from tests.dexflow import renewed, session_cookie
 
 from auth.main import create_app
-from tests import dexflow
-
-pytestmark = pytest.mark.integration
+from testkit import dexflow
+from testkit.auth import DEMO_WORKSPACE, WORKER_SECRET, build_settings
+from testkit.dex import ADA, DEX_PASSWORD, GRACE
+from testkit.dexflow import renewed, session_cookie
 
 # A configured key for the one test that starts the app as if deployed, where
 # generating a key is (correctly) refused.
@@ -42,7 +40,7 @@ _A_KEY = (
 
 
 async def sign_in(client: httpx.AsyncClient, email: str = ADA) -> dict[str, Any]:
-    """A full sign-in through Dex — see tests/dexflow.py."""
+    """A full sign-in through Dex — see testkit/dexflow.py."""
     return await dexflow.sign_in(client, email=email, password=DEX_PASSWORD)
 
 

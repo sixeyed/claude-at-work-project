@@ -17,8 +17,6 @@ from sqlalchemy.exc import IntegrityError
 from auth.models import User, Workspace, WorkspaceMember
 from shared import uuid7
 
-pytestmark = pytest.mark.integration
-
 
 def a_user(email: str = "ada@example.com") -> User:
     return User(id=uuid7(), email=email, display_name="Ada Lovelace")

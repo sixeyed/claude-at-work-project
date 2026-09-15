@@ -17,12 +17,11 @@ from typing import Any
 
 import httpx
 import pytest
-from tests.conftest import ADA, ALAN, DEMO_WORKSPACE, DEX_PASSWORD, GRACE
-from tests.dexflow import renewed, session_cookie
 
-from tests import dexflow
-
-pytestmark = pytest.mark.integration
+from testkit import dexflow
+from testkit.auth import DEMO_WORKSPACE
+from testkit.dex import ADA, ALAN, DEX_PASSWORD, GRACE
+from testkit.dexflow import renewed, session_cookie
 
 
 async def sign_in(client: httpx.AsyncClient, email: str) -> dict[str, Any]:

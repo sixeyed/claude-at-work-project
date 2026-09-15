@@ -7,12 +7,9 @@ because the fail-open/fail-closed choice belongs to the caller — ordinary
 requests proceed, sensitive operations refuse.
 """
 
-import pytest
 import redis.asyncio as aioredis
 
 from shared import Denylist, TokenState
-
-pytestmark = pytest.mark.integration
 
 
 async def test_an_untouched_token_is_active(redis_client: aioredis.Redis) -> None:

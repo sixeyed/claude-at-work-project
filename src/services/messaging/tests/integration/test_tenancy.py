@@ -11,10 +11,6 @@ makes the leak unrepresentable rather than the handler refusing it.
 
 from __future__ import annotations
 
-import pytest
-
-pytestmark = pytest.mark.integration
-
 
 async def test_a_token_cannot_see_another_workspaces_channels(client, ada, tokens):
     await client.post("/api/v1/channels", json={"name": "general"}, headers=ada)
