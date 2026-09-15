@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
 
 import httpx
 import pytest
@@ -27,6 +26,7 @@ from messaging.realtime import NAMESPACE, RealtimeContext
 from messaging.realtime_writes import register_write_handlers
 from messaging.routers.channels import _as_channel
 from messaging.settings import Settings
+from testkit.fakes import RecordingServer
 
 ADA = uuid.uuid4()
 GRACE = uuid.uuid4()
@@ -60,20 +60,6 @@ def _settings() -> Settings:
 @pytest.fixture
 def app():
     return create_app(_settings())
-
-
-class RecordingServer:
-    """Stands in for `socketio.AsyncServer` where only `emit` is called.
-
-    Records the whole call — event, payload and every keyword — so an emit to
-    the wrong room, namespace or sid fails the assertion rather than passing it.
-    """
-
-    def __init__(self) -> None:
-        self.emits: list[tuple[str, Any, dict[str, Any]]] = []
-
-    async def emit(self, event: str, data: Any = None, **kwargs: Any) -> None:
-        self.emits.append((event, data, kwargs))
 
 
 # --- the REST contract -----------------------------------------------------

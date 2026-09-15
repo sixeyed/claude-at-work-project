@@ -12,6 +12,8 @@ and no `body`, so the text leaves the index the moment the job runs.
 
 from __future__ import annotations
 
+from typing import Any
+
 from elasticsearch import AsyncElasticsearch, BadRequestError, ConflictError
 from pydantic import ValidationError
 
@@ -30,7 +32,13 @@ def build_message_handlers(es: AsyncElasticsearch) -> dict[str, Handler]:
     return {MESSAGE_UPSERT: upsert, MESSAGE_DELETE: delete}
 
 
-async def _write(es: AsyncElasticsearch, envelope: JobEnvelope, *, deleted: bool) -> None:
+def index_request(envelope: JobEnvelope, *, deleted: bool) -> dict[str, Any]:
+    """The `es.index` arguments for one job — the document and its external version.
+
+    A pure function of the envelope, so the consumer half of the `jobs:index`
+    contract is unit tested without Elasticsearch (register D32). A payload
+    that fails the contract raises `PermanentJobError`: no retry can fix it.
+    """
     try:
         payload = MessageIndexPayload.model_validate(envelope.payload)
     except ValidationError as exc:
@@ -41,14 +49,20 @@ async def _write(es: AsyncElasticsearch, envelope: JobEnvelope, *, deleted: bool
     if not deleted:
         document["body"] = payload.body
 
+    return {
+        "index": MESSAGES_ALIAS,
+        "id": str(payload.message_id),
+        "document": document,
+        "version": payload.version,
+        "version_type": "external",
+    }
+
+
+async def _write(es: AsyncElasticsearch, envelope: JobEnvelope, *, deleted: bool) -> None:
+    request = index_request(envelope, deleted=deleted)
+
     try:
-        await es.index(
-            index=MESSAGES_ALIAS,
-            id=str(payload.message_id),
-            document=document,
-            version=payload.version,
-            version_type="external",
-        )
+        await es.index(**request)
     except ConflictError:
         # Already at this version or newer — see the module docstring.
         return

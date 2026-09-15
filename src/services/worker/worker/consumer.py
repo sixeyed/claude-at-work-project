@@ -65,6 +65,56 @@ class ConsumerConfig:
     group: str = "worker"
 
 
+@dataclass(frozen=True)
+class Run:
+    """The entry is a job with a handler, and has deliveries left: run it."""
+
+    envelope: JobEnvelope
+    handler: Handler
+
+
+@dataclass(frozen=True)
+class DeadLetter:
+    """The entry cannot succeed however often it is retried."""
+
+    reason: str
+
+
+def triage(
+    fields: Mapping[str, str],
+    *,
+    deliveries: int,
+    max_attempts: int,
+    handlers: Mapping[str, Handler],
+) -> Run | DeadLetter:
+    """Decide what happens to an entry before any handler is called.
+
+    **The order is malformed, then attempts, then type.** An entry that is not
+    an envelope says so whatever its delivery count, because "max-attempts" on a
+    dead-lettered entry would send whoever reads it looking for a flaky handler.
+
+    Pure — a function of the entry, a count Redis supplied and the handler map —
+    so the dead-letter decisions are unit tested with no stream (register D32).
+    What a handler's own failure means stays in `_process`, around the `await`.
+    """
+    raw = fields.get(JOB_DATA_FIELD)
+    try:
+        envelope = JobEnvelope.decode(raw) if raw is not None else None
+    except ValidationError:
+        envelope = None
+    if envelope is None:
+        return DeadLetter("malformed-envelope")
+
+    if deliveries > max_attempts:
+        return DeadLetter("max-attempts")
+
+    handler = handlers.get(envelope.job_type)
+    if handler is None:
+        return DeadLetter("unknown-type")
+
+    return Run(envelope, handler)
+
+
 class StreamConsumer:
     def __init__(
         self,
@@ -165,25 +215,19 @@ class StreamConsumer:
 
     async def _process(self, entry_id: str, fields: Mapping[str, str], *, deliveries: int) -> None:
         raw = fields.get(JOB_DATA_FIELD)
+        decision = triage(
+            fields,
+            deliveries=deliveries,
+            max_attempts=self._config.max_attempts,
+            handlers=self._handlers,
+        )
+        if isinstance(decision, DeadLetter):
+            await self._dead_letter(entry_id, raw, decision.reason, deliveries)
+            return
+
+        envelope = decision.envelope
         try:
-            envelope = JobEnvelope.decode(raw) if raw is not None else None
-        except ValidationError:
-            envelope = None
-        if envelope is None:
-            await self._dead_letter(entry_id, raw, "malformed-envelope", deliveries)
-            return
-
-        if deliveries > self._config.max_attempts:
-            await self._dead_letter(entry_id, raw, "max-attempts", deliveries)
-            return
-
-        handler = self._handlers.get(envelope.job_type)
-        if handler is None:
-            await self._dead_letter(entry_id, raw, "unknown-type", deliveries)
-            return
-
-        try:
-            await handler(envelope)
+            await decision.handler(envelope)
         except PermanentJobError as exc:
             await self._dead_letter(entry_id, raw, f"permanent:{exc}", deliveries)
             return

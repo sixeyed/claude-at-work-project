@@ -417,7 +417,10 @@ storage backend directly. See `docs/platform/versions.md` for pinned versions.
   - **Unit** (pytest, Vitest for the SPA): every rule, mapping and wire shape, with no network
     and no Docker. Contract tests are unit tests — both sides of a job are checked against the
     Pydantic models in `collabhub-contracts`. Rules behind a database fetch become pure
-    functions over the loaded row; repositories and sessions are never faked.
+    functions over the loaded row; repositories and sessions are never faked. The SPA's
+    Vitest tests (jsdom, Testing Library) stub REST at the network edge with MSW handlers
+    typed from the generated OpenAPI types, and replace the Socket.IO client with an
+    in-memory fake, so TanStack Query and `openapi-fetch` run for real.
   - **Integration** (pytest + testcontainers-python): one service at its public boundary —
     REST, Socket.IO, a stream consumer — in-process, against Postgres/Redis/Garage/ES/Dex
     that testcontainers starts. It stops at the service boundary; tokens are minted locally

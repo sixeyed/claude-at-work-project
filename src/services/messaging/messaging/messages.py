@@ -100,6 +100,38 @@ def validate_body(raw: str, *, max_chars: int) -> str:
     return raw
 
 
+def check_editable(message: Message, *, user_id: uuid.UUID) -> None:
+    """Raise unless `user_id` may rewrite this message. Author only (D8d).
+
+    **State, then authorship — that order is the security property**, and it is
+    the order `edit` has always checked in: a deleted message answers "deleted"
+    to everyone, rather than "not yours" to some and "deleted" to others.
+    Visibility comes before both and is not here: it is a SQL predicate, and a
+    message the caller cannot see never reaches this function.
+
+    A pure function over the loaded row (register D32), so the rule is unit
+    tested with no session; `edit` is the shell that fetches and writes.
+    """
+    if message.deleted_at is not None:
+        raise AlreadyDeletedError(message.id)
+    if message.author_id != user_id:
+        raise NotAuthorError(message.id)
+
+
+def check_deletable(message: Message, *, user_id: uuid.UUID, is_channel_admin: bool) -> None:
+    """Raise unless `user_id` may delete this message: its author, or a channel admin.
+
+    **Silent about a message that is already deleted.** A repeat delete returns
+    the existing tombstone (D8d), so borrowing `check_editable`'s state check
+    here would turn an idempotent retry into a 409.
+
+    `is_channel_admin` is passed in rather than looked up because it costs a
+    query, and `delete` only pays for it when the caller is not the author.
+    """
+    if message.author_id != user_id and not is_channel_admin:
+        raise NotDeletableError(message.id)
+
+
 async def create(
     session: AsyncSession,
     *,
@@ -230,10 +262,7 @@ async def edit(
     )
     if message is None:
         return None
-    if message.deleted_at is not None:
-        raise AlreadyDeletedError(message_id)
-    if message.author_id != user_id:
-        raise NotAuthorError(message_id)
+    check_editable(message, user_id=user_id)
 
     body = validate_body(body, max_chars=max_chars)
 
@@ -302,11 +331,11 @@ async def delete(
     if message is None:
         return None
 
-    is_author = message.author_id == user_id
-    if not is_author and not await channels.is_admin(
+    # The admin lookup is a query, so the author never pays for it.
+    is_channel_admin = message.author_id != user_id and await channels.is_admin(
         session, channel_id=message.channel_id, user_id=user_id
-    ):
-        raise NotDeletableError(message_id)
+    )
+    check_deletable(message, user_id=user_id, is_channel_admin=is_channel_admin)
 
     if message.deleted_at is not None:
         return DeleteResult(message, deleted_now=False)
