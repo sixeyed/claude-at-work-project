@@ -47,8 +47,13 @@ require_cmd uv
 cd "$REPO_ROOT"
 
 ensure_node_modules() {
-    # CI always installs clean; a developer's existing install is trusted.
-    if [ -n "${CI:-}" ] || [ ! -d src/frontend/node_modules ]; then
+    # CI always installs clean. Locally an existing install is trusted — unless
+    # the lockfile is newer than it, which is how a merge that added Vitest left
+    # lint failing on packages that were never installed. npm rewrites
+    # node_modules/.package-lock.json on every install, so it dates the install.
+    local lock=src/frontend/package-lock.json
+    local installed=src/frontend/node_modules/.package-lock.json
+    if [ -n "${CI:-}" ] || [ ! -f "$installed" ] || [ "$lock" -nt "$installed" ]; then
         log "installing frontend dependencies"
         (cd src/frontend && npm ci)
     fi

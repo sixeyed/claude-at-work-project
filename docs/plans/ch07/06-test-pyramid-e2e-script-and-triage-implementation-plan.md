@@ -294,24 +294,39 @@ went ahead once Elton granted the permission.
 conventions, eslint, tsc, helm; 209 pytest, 97 Vitest); `scripts/test.sh e2e` passes 15 on most
 runs and tears down.
 
-### Known flake — not fixed here
+### The live-delivery flake — two SPA races, both fixed
 
-The two live-delivery scenarios that start with `Grace is looking at the "general" channel` fail
-intermittently: 3 of 11 runs on a kept stack, with *Ada's delete propagates to Grace live* and
-*Grace sees Ada's message without reloading* each failing at least once. Grace's page shows "Live"
-and the broadcast never arrives.
+The live-delivery journeys failed intermittently: 3 of 11 runs on a kept stack, with *Ada's
+delete propagates to Grace live* and *Grace sees Ada's message without reloading* each failing.
+Grace's page showed "Live" and never showed the change. Both causes were real message-loss bugs
+in `useChannelSocket.ts`, unchanged since ch06, so a user could hit them too. Elton approved
+fixing them here, test-first, with each set of failing tests reviewed at red.
 
-The cause is a race in the SPA that predates this branch (`useChannelSocket.ts`, unchanged since
-ch06). `onConnect` sets the connection status to `connected` and *then* emits `join_channel`
-without asking for the acknowledgement the server already sends (`{"ok": true}`), and opening a
-channel on an already-connected socket emits the join with no ack either. `wait_for_connection`
-therefore proves the socket is up, not that the room is joined, and Ada's write can be broadcast
-to a room Grace has not entered yet. A real user can lose a message the same way, in the gap
-between opening a channel and the server processing the join.
+**1. "Connected" was not "in the room"** — commit `6541212`. The hook set `connected` and emitted
+`join_channel` with no ack, and refetched the history alongside the emit. The server enters the
+room only after its visibility check, so a broadcast in that window missed the reader, and the
+page object's `data-status="connected"` wait did not cover it. The join now asks for the ack; on
+`ok` the store records `joinedChannelId` (rendered as `data-joined-channel`, which the page
+object's `wait_for_channel_joined` waits on) and only then refetches. 7 Vitest tests. Afterwards
+the delete scenario stopped failing, but *Grace sees Ada's message without reloading* still
+failed 2 of 25.
 
-The fix belongs in the SPA, test-first, and is not this handoff's: emit `join_channel` with an
-ack, expose the joined channel (for example `data-joined-channel` on the connection status), and
-have the page object wait for that. Until then the e2e layer is not reliably green.
+**2. A history fetch overwrote a message that arrived while it was in flight** — commit
+`73ce3f9`. Traced by logging Grace's socket frames and history requests (a throwaway plugin in
+the scratchpad, not in the repo). In a failing run the history `GET` started at 2.622s, before
+the message existed; `message_received` landed at 2.684s; the `GET` resolved at 2.685s with zero
+items and replaced the cache. On a first load the event was dropped outright, against an empty
+entry. An event that arrives while that channel's history is fetching is now applied again once
+the fetch succeeds. 3 Vitest tests. Doc 06 §5.2 records both rules; doc 02 §3.2.3 the join order.
+
+**Verified after both fixes:**
+
+| Run | Result |
+|---|---|
+| Realtime journeys (`without_reloading or propagates or recovers`), kept stack | **0 of 30** failed |
+| `scripts/test.sh all`, run 1 | passed — 209 pytest unit, 107 Vitest, 315 integration, 15 e2e |
+| `scripts/test.sh all`, run 2 | passed — same counts |
+| `scripts/test.sh all`, run 3 | the first attempt was killed mid-integration when the host ran low on memory (the k3d cluster was also up); rerun after clearing its orphaned testcontainers: passed — same counts, no containers left behind |
 
 **Workstream 3, missing journeys:** nothing to draft. As of `5c15626` the SPA renders neither
 search nor unread counts (`grep -rniE 'search|unread' src/frontend/src` finds only
