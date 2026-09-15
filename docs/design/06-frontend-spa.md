@@ -173,6 +173,10 @@ leave implicit, each of which is a bug that only shows up in a running app:
   with an ack; on `ok` the store's `joinedChannelId` is set (rendered as
   `data-joined-channel`, which the acceptance suite waits on) and the channel is
   refetched. A disconnect or leaving the channel clears it.
+  **And an event that arrives while that history is being fetched is applied again
+  when the fetch lands.** A resolving fetch replaces the cached pages with what it
+  read, which predates the event — so without the re-apply, a message broadcast
+  during a load or refetch disappeared until a reload.
 - **`connect_error` disconnects; a transport drop does not.** A handshake the
   server refused will be refused identically on every retry, so Socket.IO's
   backoff would loop forever against a service that has already said no.

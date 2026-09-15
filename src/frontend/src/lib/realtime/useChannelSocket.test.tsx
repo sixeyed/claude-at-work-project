@@ -52,6 +52,43 @@ function isInvalidated(queryClient: ReturnType<typeof createTestQueryClient>, ch
 
 const joinedChannel = () => useChatStore.getState().joinedChannelId
 
+/**
+ * Starts a history fetch for a channel and holds its response back.
+ *
+ * The response is the page the server read *before* the message the test is
+ * about to broadcast existed — which is exactly what a real fetch answers when
+ * the broadcast lands while it is in flight.
+ */
+function holdHistoryFetch(
+  queryClient: ReturnType<typeof createTestQueryClient>,
+  channelId: string,
+) {
+  let release!: (page: MessagePage) => void
+  const response = new Promise<MessagePage>((resolve) => {
+    release = resolve
+  })
+  const done = queryClient.fetchInfiniteQuery({
+    queryKey: messageKeys.list(WORKSPACE, channelId),
+    queryFn: () => response,
+    initialPageParam: undefined as string | undefined,
+  })
+
+  return {
+    async answer(page: MessagePage) {
+      await act(async () => {
+        release(page)
+        await done
+      })
+    },
+  }
+}
+
+function historyItems(queryClient: ReturnType<typeof createTestQueryClient>, channelId: string) {
+  return queryClient.getQueryData<InfiniteData<MessagePage>>(
+    messageKeys.list(WORKSPACE, channelId),
+  )?.pages[0].items
+}
+
 describe('useChannelSocket', () => {
   it('writes a received message into that channel’s cached history', () => {
     const queryClient = createTestQueryClient()
@@ -159,6 +196,54 @@ describe('useChannelSocket', () => {
       await joins.reply({ ok: false })
 
       expect(joinedChannel()).toBeNull()
+    })
+
+    it('keeps a message that arrives while the channel’s history first loads', async () => {
+      const queryClient = createTestQueryClient()
+      const history = holdHistoryFetch(queryClient, CHANNEL)
+      renderHookWithProviders(() => useChannelSocket('token', WORKSPACE, CHANNEL), { queryClient })
+      const socket = latestSocket()
+      act(() => socket.serverConnect())
+      const message = aMessage({ channelId: CHANNEL, body: 'the coffee has arrived' })
+
+      act(() => socket.serverEmit('message_received', message))
+      await history.answer(aMessagePage([]))
+
+      expect(historyItems(queryClient, CHANNEL)).toEqual([message])
+    })
+
+    it('keeps a message that arrives while the channel’s history is being refetched', async () => {
+      const queryClient = createTestQueryClient()
+      seedHistory(queryClient, CHANNEL)
+      const history = holdHistoryFetch(queryClient, CHANNEL)
+      renderHookWithProviders(() => useChannelSocket('token', WORKSPACE, CHANNEL), { queryClient })
+      const socket = latestSocket()
+      act(() => socket.serverConnect())
+      const message = aMessage({ channelId: CHANNEL, body: 'the coffee has arrived' })
+
+      act(() => socket.serverEmit('message_received', message))
+      await history.answer(aMessagePage([]))
+
+      expect(historyItems(queryClient, CHANNEL)).toEqual([message])
+    })
+
+    it('keeps an edit that arrives during a refetch over the older copy it returns', async () => {
+      const queryClient = createTestQueryClient()
+      const original = aMessage({ channelId: CHANNEL, body: 'standup at four' })
+      queryClient.setQueryData<InfiniteData<MessagePage>>(messageKeys.list(WORKSPACE, CHANNEL), {
+        pages: [aMessagePage([original])],
+        pageParams: [undefined],
+      })
+      const history = holdHistoryFetch(queryClient, CHANNEL)
+      renderHookWithProviders(() => useChannelSocket('token', WORKSPACE, CHANNEL), { queryClient })
+      const socket = latestSocket()
+      act(() => socket.serverConnect())
+      const edited = { ...original, body: 'standup at five', version: original.version + 1 }
+
+      act(() => socket.serverEmit('message_edited', edited))
+      await history.answer(aMessagePage([original]))
+
+      expect(historyItems(queryClient, CHANNEL)).toEqual([edited])
     })
 
     it('forgets the joined channel when the connection drops', async () => {

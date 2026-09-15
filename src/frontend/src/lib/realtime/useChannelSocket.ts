@@ -35,9 +35,16 @@
  * history with no cursor — and the real history would never load. The helpers
  * in `useMessages.ts` no-op on an absent entry; handlers key on **the event's**
  * `channelId`, so a background channel that *is* cached still updates.
+ *
+ * **An event that lands during a history fetch is applied again when the fetch
+ * does.** A fetch that resolves replaces the cached pages with what it read, and
+ * it read the channel before the event's change existed — so without this, a
+ * message arriving while the history loads or refetches vanishes until a reload.
+ * The first load is the same case: the event is dropped against the empty entry,
+ * then applied once the history is there to hold it.
  */
 
-import { useQueryClient } from '@tanstack/react-query'
+import { hashKey, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 
 import type { Message } from '../api/messaging'
@@ -53,6 +60,27 @@ interface JoinAck {
 function joinChannel(socket: Socket, channelId: string, onJoined: () => void): void {
   socket.emit('join_channel', channelId, (ack?: JoinAck) => {
     if (ack?.ok) onJoined()
+  })
+}
+
+/**
+ * Apply a message event once more, when a history fetch already in flight lands.
+ *
+ * That fetch read the channel before this event's change existed, and a fetch
+ * that resolves *replaces* the cached pages — so a message written into the
+ * cache while it was in flight is overwritten, and one that arrived during a
+ * first load (with nothing cached to write into) was never kept at all. Either
+ * way it is gone until a reload. Re-applying is safe: `upsertMessage` replaces
+ * by id, and the event is never older than what that fetch returned.
+ */
+function reapplyAfterFetch(queryClient: QueryClient, key: readonly unknown[], message: Message) {
+  const hash = hashKey(key)
+  const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+    if (event.type !== 'updated' || event.query.queryHash !== hash) return
+    if (event.query.state.fetchStatus !== 'idle') return
+
+    unsubscribe()
+    if (event.query.state.status === 'success') upsertMessage(queryClient, key, message)
   })
 }
 
@@ -104,7 +132,11 @@ export function useChannelSocket(
     }
 
     function onMessage(message: Message) {
-      upsertMessage(queryClient, messageKeys.list(workspaceId, message.channelId), message)
+      const key = messageKeys.list(workspaceId, message.channelId)
+      upsertMessage(queryClient, key, message)
+      if (queryClient.isFetching({ queryKey: key, exact: true }) > 0) {
+        reapplyAfterFetch(queryClient, key, message)
+      }
     }
 
     live.on('connect', onConnect)
