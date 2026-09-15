@@ -38,7 +38,7 @@ spec:
                 port:
                   name: http
           {{- end }}
-          {{- range list "/api/v1/channels" "/api/v1/messages" "/socket.io" }}
+          {{- range list "/api/v1/channels" "/api/v1/messages" "/api/v1/search" "/socket.io" }}
           - path: {{ . }}
             pathType: Prefix
             backend:

@@ -214,3 +214,40 @@ Results: `test.sh` lint passed, unit 102 passed, integration 287 passed.
 succeeded; a CLI sign-in through Dex returned a token that Auth and Messaging both
 accepted through the Ingress; a second `deploy.sh` upgraded cleanly and kept Auth's
 signing key; `deploy.sh down` removed the cluster and its registry.
+
+## Merged with main (2026-09-15)
+
+PR #2 (KEDA worker pools, WebSocket-only Socket.IO, NetworkPolicy) and PR #3 (message
+search) merged to `main` first. Only `README.md` and `charts/collabhub/values.yaml`
+conflicted, and both kept both sides — but PR #2 changed what the app chart demands of
+every environment, so a clean textual merge still left `deploy.sh` unable to install it.
+
+- **KEDA is required.** The chart refuses to render without `keda.sh/v1alpha1`. Decision:
+  install it rather than turn autoscaling off locally, so the ScaledObjects are exercised.
+  `deploy.sh infra` installs the `kedacore/keda` chart pinned by `KEDA_VERSION` in
+  `scripts/lib/common.sh`, matching the KEDA entry in `versions.md`.
+- **NetworkPolicy peers are required, and k3s enforces them.** `values-k3d.yaml` sets every
+  peer: Traefik in `kube-system` as the ingress controller, the local chart's pods by name
+  label for the rest, and Dex on 5556 for `oidcProvider`.
+- **New settings.** Messaging now needs `ELASTICSEARCH_URL`, and KEDA's
+  TriggerAuthentication needs a `REDIS_STREAMS_PASSWORD` key in the Worker secret; the local
+  chart supplies both.
+- **A new public route.** Search is `/api/v1/search`, which the Ingress allow-list did not
+  include.
+- **`test.sh` lint** now lints the defaults with NetworkPolicy and autoscaling off, lints the
+  k3d values with autoscaling off, and renders the k3d values with the KEDA API declared.
+- **A bug in PR #2's default, found by the deploy.** `REDIS_STREAMS_ADDRESS` is resolved by
+  KEDA's operator from its own namespace, so the bare `redis-streams:6379` failed with `no such
+  host`. `values-k3d.yaml` uses the fully qualified Service name, and the `values.yaml` comment
+  now says every environment must. After a fix like this on a live cluster, KEDA does not
+  re-check an unchanged ScaledObject until its backoff expires; restarting the operator made it
+  reconcile at once.
+- The Traefik/session-affinity caveat is gone: Socket.IO is WebSocket-only (register D30).
+
+Results on the merged branch: lint passed, unit 102 and integration 287 passed. `deploy.sh`
+installed KEDA and upgraded both releases. All pods Ready under enforced policies — and the
+frontend pod, whose policy allows no egress, could not even resolve a Service name. Sign-in
+through Dex worked. A message posted through the Ingress was indexed and found by
+`GET /api/v1/search/messages`; with the batch pool scaled to zero, a second message woke it
+through KEDA, was indexed, and was found the same way. Auth's signing key survived both
+upgrades.

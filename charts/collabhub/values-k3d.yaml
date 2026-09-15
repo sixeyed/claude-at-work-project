@@ -50,6 +50,9 @@ components:
     env:
       APP_ENV: local
       LOG_LEVEL: debug
+      # Fully qualified: KEDA's operator resolves this from its own namespace,
+      # `keda`, where a bare `redis-streams` does not exist.
+      REDIS_STREAMS_ADDRESS: redis-streams.collabhub.svc.cluster.local:6379
 
   frontend:
     replicaCount: 1

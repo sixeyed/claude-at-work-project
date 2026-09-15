@@ -195,6 +195,11 @@ components:
       # two settings, one instance — or KEDA scales on a different Redis than
       # the Worker reads. The TriggerAuthentication sets no `enableTLS`, so a
       # TLS-only R3 is not supported yet.
+      #
+      # Use a name KEDA can resolve. Its operator does the lookup, from its own
+      # namespace (usually `keda`), so a bare in-cluster Service name like the
+      # placeholder below only works if Redis is in KEDA's namespace — give the
+      # full `<service>.<namespace>.svc.cluster.local:6379` form instead.
       REDIS_STREAMS_ADDRESS: redis-streams:6379
     # Supplies REDIS_STREAMS_URL, REDIS_STREAMS_PASSWORD (read by KEDA),
     # ELASTICSEARCH_URL, OBJECT_STORE_*_KEY, SERVICE_TOKEN_URL and
