@@ -1,0 +1,29 @@
+{
+  "stage": "plan-reviewer",
+  "status": "running",
+  "step": 1,
+  "review": "",
+  "rounds": {
+    "plan": 1,
+    "test": 1,
+    "code": 1,
+    "acceptance": 1
+  },
+  "final": {
+    "plan": 3,
+    "test": 3,
+    "code": 3,
+    "acceptance": 3
+  },
+  "sendbacks": {
+    "plan": 0,
+    "test": 0,
+    "code": 0
+  },
+  "open_sendbacks": {},
+  "pending": {
+    "test": "",
+    "code": ""
+  },
+  "slack_thread": "1792568586.474639"
+}
