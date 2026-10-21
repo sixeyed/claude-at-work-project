@@ -102,6 +102,8 @@ describe('creating a channel from the chat shell', () => {
       const channels: Channel[] = []
       // The shell also loads the directory for its direct-messages section.
       auth.members([aWorkspaceMember({ displayName: 'Ada Lovelace' })])
+      // …and the user's preferences, for the clock.
+      auth.preferences({})
       messaging.get('/api/v1/channels', () => ({ items: [...channels], nextCursor: null }))
       messaging.post('/api/v1/channels', ({ body }) => {
         const created = aChannel({ name: body.name, kind: body.kind, myRole: 'admin' })

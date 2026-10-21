@@ -18,8 +18,15 @@ from auth.models import User, Workspace, WorkspaceMember
 from shared import uuid7
 
 
-def a_user(email: str = "ada@example.com") -> User:
-    return User(id=uuid7(), email=email, display_name="Ada Lovelace")
+def a_user(email: str = "ada@example.com", display_name: str | None = None) -> User:
+    """A user whose name is its own: display names are unique, ignoring case.
+
+    Built from the id rather than the email, because `ada@example.com` and
+    `ADA@EXAMPLE.COM` would share a name key and the email test below would then
+    pass on the wrong index.
+    """
+    user_id = uuid7()
+    return User(id=user_id, email=email, display_name=display_name or f"user {user_id.hex}")
 
 
 async def test_a_user_round_trips(sessions) -> None:
@@ -46,6 +53,22 @@ async def test_email_uniqueness_ignores_case(sessions) -> None:
     with pytest.raises(IntegrityError):
         async with sessions.begin() as session:
             session.add(a_user("ADA@EXAMPLE.COM"))
+
+
+async def test_display_names_are_unique_ignoring_case_and_form(sessions) -> None:
+    """The unique index is on the comparison key, so case and normal form can't dodge it."""
+    jose = "Jos\xe9"
+    async with sessions.begin() as session:
+        session.add(a_user("jose@example.com", jose))
+
+    for variant in ("JOS\xc9", "Jose" + chr(0x0301), "jos\xe9"):
+        with pytest.raises(IntegrityError):
+            async with sessions.begin() as session:
+                session.add(a_user(f"{uuid.uuid4().hex}@example.com", variant))
+
+    # The other side: a different name is fine beside it.
+    async with sessions.begin() as session:
+        session.add(a_user("josie@example.com", "Josie"))
 
 
 async def test_a_user_joins_a_workspace_once(sessions) -> None:

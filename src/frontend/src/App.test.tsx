@@ -43,6 +43,7 @@ function aReturningUser() {
   auth.refresh(PAIR)
   auth.me(PROFILE)
   auth.workspaces(WORKSPACES)
+  auth.preferences({})
   messaging.get('/api/v1/channels', { items: [], nextCursor: null })
 }
 
