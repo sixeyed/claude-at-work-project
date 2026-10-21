@@ -1,4 +1,4 @@
-# Red tests — gh-5, round 1
+# Red tests — gh-5, round 2 (round 1 text below; see Review responses at the end)
 
 BDD outside-in, as the plan recommends: one journey (`display_names.feature`), and everything under it
 at the lowest layer that proves it. Test files written or changed on the Python side and the SPA, plus
@@ -101,3 +101,7 @@ line of the failure, copied.
 - Special-case: `ChatLayout` workspace-effect cleanup calls `clearLastChannel()`; a test asserts `lastChannelId` is `null` after a switch.
 - `provision_user` is called directly by Auth tests with `(session, email=…, display_name=…, demo_workspace_name=None)`; it must flush the user inside the call (the race tests hold the transaction open after it returns).
 - Auth tests read `users.display_name_key`, `user_preferences(user_id, prefs, version, updated_at)` and the constraint name `uq_users_display_name_key`.
+
+## Review responses (round 2)
+1. **Fixed.** `SettingsPage.test.tsx › keeps a later choice when an earlier save fails`: added `await pause()` between the `waitFor(preferenceRequests() === 2)` and `expect(radio('Automatic'))`, so an unconditional rollback (cache back to 12h) reaches the DOM before the assertion and fails it. Wrong build it fails: `onError` that always restores its own snapshot. The file still fails to load at red (`./SettingsPage` missing), as before; the reviewer's sketch run showed wrong build red / correct build green with this line.
+- Left-for-later items (code-writer notes on commit-time conflicts and `onSettled` rollback) concern the build; no test change.

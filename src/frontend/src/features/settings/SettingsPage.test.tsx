@@ -380,6 +380,8 @@ describe('the Preferences section', () => {
     await release(first, undefined)
     await vi.waitFor(() => expect(preferenceRequests()).toHaveLength(2))
     // The first save failed; the choice made after it is still the one on screen.
+    // TanStack notifies observers on a timeout, so give a wrong rollback time to reach the DOM.
+    await pause()
     expect(radio('Automatic')).toBeChecked()
     expect(radio('12-hour')).not.toBeChecked()
 
