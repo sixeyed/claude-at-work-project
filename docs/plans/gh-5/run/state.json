@@ -1,11 +1,11 @@
 {
-  "stage": "test-reviewer",
+  "stage": "test-writer",
   "status": "running",
-  "step": 5,
-  "review": "",
+  "step": 6,
+  "review": "docs/plans/gh-5/reviews/test-reviewer-1.md",
   "rounds": {
     "plan": 2,
-    "test": 1,
+    "test": 2,
     "code": 1,
     "acceptance": 1
   },
