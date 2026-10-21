@@ -16,14 +16,14 @@ application computes** (canonical caseless form) under a unique index, so the ru
 place and the index settles every race. A `user_preferences` row per user holds `prefs jsonb`, merged
 in one SQL statement. The SPA adds `features/settings/` (the page, the profile and preferences
 queries), writes a rename into the session profile and every cached workspace directory from the
-mutation's own `onSuccess`, and passes the clock to the three time formatters through a context
-`ChatLayout` provides from the preferences query.
+mutation's own `onSuccess` — cancelling reads already in flight so none lands the old name over it —
+and passes the clock to the three time formatters through a context `ChatLayout` provides from the
+preferences query.
 
 **Tech Stack:** Python 3.12, FastAPI, SQLAlchemy 2 async, Alembic, pytest + testcontainers (Postgres,
 Redis, Dex) · React 19, TanStack Query 5.101, React Router, Vitest + MSW · pytest-bdd + Playwright.
 
-**Issue:** `docs/plans/gh-5/00-issue.md` — read it first. This plan argues from it and does not
-repeat it.
+**Issue:** `docs/plans/gh-5/00-issue.md` — read it first; this plan argues from it, not repeating it.
 
 **Worktree:** `/home/runner/work/claude-at-work-project/caw-gh-5`, branch `feature/gh-5`, from
 `main` at `957371e`.
@@ -56,21 +56,25 @@ Taken in this plan:
 | 15 | An IdP name that fails Req 1 (empty, refused characters, over 100) — **assumed** | `names.provisional`: normalise, drop refused characters, truncate to 100, else the email's local part treated the same, else `"user"`; then the suffix rule | Req 3 says sign-in never refuses over a name; it doesn't say how an unusable name is repaired. Changing it: one function |
 | 16 | A suffix that would pass 100 characters — **assumed** | The base is cut so `"{base} {n}"` is at most 100 | Otherwise Req 3 could create a name Req 1 refuses |
 | 17 | Stored names that fail Req 1 at migration time — **assumed** | Migration 0002 passes each normalised name through `names.provisional(name, email local part)` only when `names.check` refuses it, then dedupes | Req 4 says trim + NFC; it can't have meant to store `""` (a `"   "` name `PATCH` accepts today). Changing it: one branch; the data change is one-way either way |
+| 17a | Which names a suffix may not take | Before any suffix is chosen, `dedupe` **reserves** the key of every name that is no duplicate and of the oldest holder of every duplicate group; only then are the newer duplicates suffixed, oldest first, each skipping reserved and already-given keys | Req 4 renames "every duplicate except the oldest" — a name that was never a duplicate (`"Sam 2"`, newer than a duplicated `"sam"`) is never renamed. The alternative, assigning purely by age, renames it |
 | 18 | Re-saving your own name | 200, **no write**: `version` and `updated_at` unchanged | "changes nothing" (Req 1) read literally |
 | 19 | Messages | `"A display name is required."`, `"A display name can be at most 100 characters."`, `"A display name can't contain invisible or control characters."`; 409: `detail` and `errors.displayName` both `"That name is already taken."` | The issue fixes only the 409 text |
 | 20 | Preferences wire shape | A bare object of the stored, known keys (`{}` or `{"clock":"24h"}`); `PATCH` returns the merged result; `PATCH {}` writes nothing | "returns the stored keys" (Req 6). Unknown keys a row may hold are left out of the response — **assumed**; none can be written through the API |
-| 21 | The merge | `INSERT … ON CONFLICT (user_id) DO UPDATE SET prefs = (user_preferences.prefs \|\| :set) - :removed, version = version + 1, updated_at = now() RETURNING prefs` | One statement under the row lock: two tabs' different keys both survive, and the first-write insert race can't 500 |
+| 21 | The merge | `INSERT … ON CONFLICT (user_id) DO UPDATE SET prefs = (user_preferences.prefs \|\| :set) - :removed, version = user_preferences.version + 1, updated_at = now() RETURNING prefs` (both columns qualified: an unqualified one is ambiguous with `excluded`) | One statement under the row lock: two tabs' different keys both survive, and the first-write insert race can't 500 |
 | 22 | How the clock reaches the formatters | `ChatLayout` fetches preferences (`usePreferences`) and provides `ClockContext`; `MessageItem`, `ThreadSummary`, `SearchResult` read `useClock()` | Every page that shows a time is inside the shell; leaf components stay free of tokens and queries, and their existing tests (no context → Automatic) are untouched |
 | 23 | 12/24 hours | `hourCycle: 'h12'` / `'h23'`, not `hour12` | `hour12: false` can produce `h24` ("24:05") in some engines; `h23` cannot |
 | 24 | When Save is disabled — **assumed** | Value unchanged (`trim().normalize('NFC')` equals the stored name), empty after trimming, over 100 code points, or a save in flight. Everything else goes to the server, whose 400 renders on the field | The full rule lives once, in Python. JS `trim()` and Python `strip()` differ on a few code points; that only moves a button, never what is stored |
 | 25 | Return to the route after sign-in — **assumed** | `Protected` passes `location` to `/sign-in`; `signIn(provider, returnTo)` stores a safe same-origin path in `sessionStorage` (`collabhub.returnTo`); `/auth/callback` navigates to `takeReturnPath()` | The Paths table needs it and the SPA doesn't do it (see *Corrections*). Applies to every protected route. A second sessionStorage entry, a path only — doc 06 §4 updated. Changing it: three functions |
 | 26 | "Back to chat" target — **assumed** | `/c/{lastChannelId}` from the chat store (client state; `ChannelView` clears `activeChannelId` on unmount), else `/`; cleared on a workspace change | A channel id from the old workspace would open its 404 |
 | 27 | Where `/settings` renders — **assumed** | Inside the chat shell, so the sidebar's `current-user` stays visible | It is how "the sidebar shows the new name at once" is seen |
-| 28 | Cache keys | `['me', userId]` and `['user-preferences', userId]`, not workspace-scoped; Settings' observers use `refetchOnMount: 'always'` | Per user (Decided 3, 7); "reads from the server on every visit" (Req 8) |
+| 28 | Cache keys, and a fresh read | `['me', userId]` and `['user-preferences', userId]`, not workspace-scoped; Settings' observers use `refetchOnMount: 'always'`, and the Profile form renders only once `isFetchedAfterMount` (`queryObserver.js:328`) and the read succeeded — a profile cached by an earlier visit never prefills the field. A failed read shows `role="alert"` "Couldn't load your profile." and no form | Per user (Decided 3, 7); "reads from the server on every visit" (Req 8); a field is initialised once, so it must wait for this visit's read |
 | 29 | Clock save races | Writes are serialised (`scope: { id: 'user-preferences' }`, `mutationCache.js:30-75`). On error a mutation rolls back to its snapshot only if the cache still holds its own optimistic value, then invalidates the query | A failure must not undo a later choice; two failures end on the server's truth |
 | 30 | Unmount mid-save | Cache and session writes live in `useMutation`'s own `onSuccess` (`mutation.js:123`, runs whatever observes it), never in `mutate(…, { onSuccess })` (`mutationObserver.js:77`, skipped once unsubscribed) | Paths row "Leaving mid-save" |
+| 30a | A directory or profile read in flight when a rename lands | `applyRename`, in order and synchronously: `cancelQueries` on `['workspace-members']` and `['me', id]` (reverts at once — `retryer.js:29-34`, `query.js:267-273`; the cancelled response is discarded); `setQueriesData` with the new name; `invalidateQueries({ queryKey: ['workspace-members'], refetchType: 'all' })`, so every cached directory is re-read after the commit | Writing alone loses to a fetch answered before the commit (`setQueriesData` cancels nothing); `invalidateQueries` alone cancels only a query that already has data (`query.js:188`) and leaves the sidebar on the old name until it lands. Cost: one members request per cached workspace per rename |
+| 30b | A renewal or switch whose `GET /users/me` was answered before the rename | `updateProfile` bumps a module counter; `adopt()` notes it before its reads and, if it moved meanwhile and the profile read is the same user's, keeps the session's profile over the read | Else `adopt()` puts the old name back in the sidebar for up to a renewal (≤15 min), and the sidebar and own messages disagree (*Where the rules meet* row 3). A read started after the rename is adopted as it is — the guard can't freeze a name |
 | 31 | Migration code | `0002` imports `auth.names` | The issue requires "the same code as Req 1". Cost: a later edit to `names.py` changes what a fresh run of 0002 does — recorded in its docstring |
 | 32 | Register | D28 → 🟢 (issue); new **D46** 🟢 in Platform/Auth | — |
+| 33 | The journey's author step | `Then Grace sees "…" written by Alan Turing` — the vocabulary's bare form (`00-scenario-vocabulary.md:344`), its tail read as a display name by a `parsers.re` step in the new steps module only | The existing `written by Ada` binds in `test_message_steps.py` alone (per-module `scenarios`), so the two never meet |
 
 Nearest 🔴 entries, not touched: **D38** (whether a renewal that fails on the network signs out) —
 Decision 25 changes where sign-in *lands*, not renewal; **D13** (avatar bucket) — `avatarAsset` is
@@ -89,8 +93,7 @@ unchanged; **D18** (notifications) — not a preference here (Decided 8).
 - **"`provision_user` is the only place a name is created"** — confirmed: the only `User(` in
   `src/services/auth/auth` is `identities.py:101`, called only from `link_identity`
   (`identities.py:168`); `test_schema.py:22` inserts directly in tests.
-- **`hour12`/`hourCycle`** — `hourCycle` only (Decision 23); Vitest proves the output under the
-  suite's own locale and time zone (Task 3).
+- **`hour12`/`hourCycle`** — `hourCycle` only (Decision 23), proven in the suite's locale (Task 3).
 
 ## Test approach — recommendation to the test pair
 
@@ -114,15 +117,12 @@ browser is what another person's browser shows. Everything under it goes down th
 | `updateProfile`, return path | Vitest | `lib/auth/session.test.ts` (modify) |
 | `lastChannelId` | Vitest | `stores/chat.test.ts` (modify) |
 
-**What no test here covers:** that Grace's tab picks up the new name on focus/reconnect/5-minute
-staleness — that is the existing directory behaviour, proven by `useWorkspaceMembers.test.tsx`, and
-this plan doesn't change it. The `name` claim staying stale for ≤15 minutes (Where the rules meet
-row 4) is left as the issue leaves it; nothing reads it. Locales other than the one the suite runs
-in are not tested.
+**What no test here covers:** Grace's tab picking up the name on focus/reconnect/staleness (existing
+behaviour, `useWorkspaceMembers.test.tsx`, unchanged); the `name` claim staying stale ≤15 minutes
+(row 4, left as the issue leaves it); locales other than the suite's.
 
-**Baseline**, from `docs/test-report.md` at `2f1cc69acc5f`: Unit 1871 passed (auth 59, frontend
-503). Integration was recorded for `tools/delivery` only (48) and End-to-end is not recorded, so
-those two have no baseline; Task 9 records them. Counts below are "N or more".
+**Baseline**, `docs/test-report.md` at `2f1cc69acc5f`: Unit 1871 passed (auth 59, frontend 503).
+Integration (only `tools/delivery`, 48) and End-to-end have no baseline; Task 9 records them.
 
 ## Global constraints
 
@@ -134,8 +134,7 @@ those two have no baseline; Task 9 records them. Counts below are "N or more".
 - Ingress: `/api/v1/users` is already allowed (`charts/collabhub/templates/ingress.yaml:50`,
   checked); the preferences routes sit under it. No new environment variable. No chart change.
 - SPA: server state in TanStack Query only (D24); Vitest queries by role/label/text, never
-  `data-testid`; BDD selectors only in page objects.
-- Everything else is as CLAUDE.md says.
+  `data-testid`; BDD selectors only in page objects. Everything else is as CLAUDE.md says.
 
 ## File map
 
@@ -144,24 +143,18 @@ Paths shortened: `auth/` = `src/services/auth/`, SPA paths relative to `src/fron
 | File | Change | Responsibility | Task |
 |---|---|---|---|
 | `auth/tests/unit/test_names.py` | create | the name rules | 1 |
-| `auth/tests/integration/test_display_names.py` | create | rename, 409, races, first sign-in | 2 |
-| `auth/tests/integration/test_preferences.py` | create | preferences routes | 2 |
-| `auth/tests/integration/test_name_migration.py` | create | migration 0002 | 2 |
-| `auth/tests/integration/test_schema.py` | modify | distinct names in `a_user`; the unique index | 2 |
-| `auth/tests/integration/test_r1_unreachable.py` | modify | fail-open for both PATCHes | 2 |
-| `test/api.ts` | modify | `auth.updateMe`, `auth.preferences`, `auth.updatePreferences` stubs | 3 |
+| `auth/tests/integration/` `test_display_names.py` · `test_preferences.py` · `test_name_migration.py` | create | rename, 409, races, first sign-in · preferences routes · migration 0002 | 2 |
+| `auth/tests/integration/` `test_schema.py` · `test_r1_unreachable.py` | modify | distinct names in `a_user`, the unique index · fail-open for both PATCHes | 2 |
+| `test/api.ts` | modify | `auth.updateMe`, `auth.preferences`, `auth.updatePreferences`, `auth.meBy` stubs | 3 |
 | `features/settings/clock.test.ts` · `clockApplied.test.tsx` · `SettingsPage.test.tsx` · `useProfile.test.ts` | create | the SPA's red | 3 |
 | `App.settings.test.tsx` | create | routes and Paths rows | 3 |
 | `lib/auth/session.test.ts` · `stores/chat.test.ts` | modify | new tests | 3 |
-| `App.test.tsx` · `features/channels/ChatLayout.test.tsx` · `ChatLayout.attachments.test.tsx` | modify | add `auth.preferences({})` to signed-in arrangements — `ChatLayout` now fetches preferences | 3 |
+| `App.test.tsx` · `features/channels/ChatLayout.test.tsx` · `ChatLayout.attachments.test.tsx` · `CreateChannelDialog.test.tsx` | modify | add `auth.preferences({})` to signed-in arrangements — `ChatLayout` now fetches preferences | 3 |
 | `tests/bdd/features/display_names.feature` · `steps/test_display_name_steps.py` | create | the journey | 4 |
 | `tests/bdd/pages/chat_page.py` · `tests/bdd/conftest.py` | modify | settings methods; `alan_context`/`alan` | 4 |
-| `auth/auth/names.py` | create | the rules | 5 |
-| `auth/auth/models.py` | modify | `display_name_key`, `@validates`, `UserPreferences` | 5 |
-| `auth/auth/alembic/versions/0002_unique_display_names.py` | create | key, dedupe, index, `user_preferences` | 5 |
-| `auth/auth/migrations.py` | modify | `upgrade_to(dsn, revision)` | 5 |
-| `auth/auth/identities.py` | modify | `provision_user` suffixing | 6 |
-| `auth/auth/routers/users.py` · `schemas.py` | modify | rename rules, 409; request/response models | 6 |
+| `auth/auth/names.py` · `alembic/versions/0002_unique_display_names.py` | create | the rules · key, dedupe, index, `user_preferences` | 5 |
+| `auth/auth/models.py` · `migrations.py` | modify | `display_name_key`, `@validates`, `UserPreferences` · `upgrade_to(dsn, revision)` | 5 |
+| `auth/auth/identities.py` · `routers/users.py` · `schemas.py` | modify | `provision_user` suffixing · rename rules, 409 · request/response models | 6 |
 | `auth/auth/routers/preferences.py` · `preferences.py` · `main.py` | create · create · modify | preferences routes and SQL | 6 |
 | `lib/auth/api.ts` · `session.ts` · `storage.ts` | modify | client calls; `updateProfile`; return path | 7 |
 | `App.tsx` · `features/channels/WorkspaceSwitcher.tsx` · `ChatLayout.tsx` · `stores/chat.ts` | modify | route, link, `ClockContext`, `lastChannelId` | 7 |
@@ -169,11 +162,9 @@ Paths shortened: `auth/` = `src/services/auth/`, SPA paths relative to `src/fron
 | `features/channels/MessageItem.tsx` · `threads/ThreadSummary.tsx` · `search/SearchResult.tsx` | modify | `useClock()`; their D28 comments | 7 |
 | `docs/design/00-…` · `01-…` · `06-…` · `07-…` · two ADRs · `auth/api.http` | modify / create | the record | 8 |
 
-Deliberately unchanged: `auth/tests/integration/conftest.py`'s `TABLES` — `truncate` runs
-`TRUNCATE … CASCADE` (`testkit/db.py:27`), which reaches `user_preferences` through its foreign key
-to `users`, and listing a table that doesn't exist at red would error every Auth integration test.
-`tests/bdd/conftest.py`'s truncation: Auth's tables are never truncated, and the journey is written
-to survive that (Task 4). `sessions.py`, `tokens.py`: the `name` claim is left as is.
+Deliberately unchanged: the Auth conftest's `TABLES` — `TRUNCATE … CASCADE` (`testkit/db.py:27`)
+reaches `user_preferences` through its foreign key, and a table missing at red would error every Auth
+integration test; `tests/bdd/conftest.py`'s truncation (Task 4 survives it); the `name` claim.
 
 ## How this plan runs
 
@@ -184,8 +175,7 @@ to survive that (Task 4). `sessions.py`, `tokens.py`: the `name` claim is left a
 | GREEN — SPA | 7 | code-writer | Task 3 passes, `typecheck` clean |
 | Finish | 8–9 | code-writer | the record, then verification (the journey's first run) |
 
-One RED phase: the SPA's red needs no generated types (Auth's are hand-typed), so `tsc` stays red
-from Task 3 until Task 7 for the same reason as the tests.
+One RED phase: Auth's types are hand-typed, so `tsc` is red from Task 3 to Task 7 like the tests.
 
 ---
 
@@ -206,7 +196,7 @@ def candidates(base: str) -> Iterator[str]          # base, "base 2", "base 3", 
 def first_free(base: str, taken: Collection[str]) -> str   # taken holds keys
 def provisional(raw: str, fallback: str) -> str     # Decision 15; always passes check()
 @dataclass(frozen=True) class NameRow: id: UUID; created_at: datetime; display_name: str; email: str
-def dedupe(rows: Sequence[NameRow]) -> dict[UUID, str]   # every row's final name (Req 4, Decision 17)
+def dedupe(rows: Sequence[NameRow]) -> dict[UUID, str]   # every row's final name (Req 4, Decisions 17, 17a)
 ```
 
 Refused: general category in `{"Cc","Cf","Cs","Co","Cn","Zl","Zp"}`, or `Default_Ignorable_Code_Point`.
@@ -244,6 +234,7 @@ every test in the file needs it. Each gets a one-line docstring saying what brea
 | `test_dedupe_breaks_a_created_at_tie_on_id` | two rows at one instant: the lower id keeps the name |
 | `test_dedupe_sees_duplicates_only_after_normalising` | `"José"` (old) and `"José"` (new) → `"José"`, `"José 2"` |
 | `test_dedupe_skips_a_suffix_someone_already_holds` | `"Sam"`, `"Sam 2"`, then a newer `"sam"` → `"sam 3"`; `"Sam 2"` unchanged |
+| `test_dedupe_never_renames_a_newer_name_that_was_no_duplicate` | `"Sam"` (t0), `"sam"` (t1), `"Sam 2"` (t2) → `"Sam"`, `"sam 3"`, `"Sam 2"` — fails a build that suffixes by age before reserving (`"sam 2"`, then `"Sam 2 2"`) (Decision 17a) |
 | `test_dedupe_repairs_a_name_check_refuses` | `"   "` with email `zed@x` → `"zed"` (Decision 17) |
 | `test_setting_a_users_display_name_sets_its_key` | `User(id=…, email=…, display_name="José").display_name_key == "josé"`; assigning `"ADA"` makes it `"ada"` — no session |
 
@@ -312,19 +303,24 @@ fail on its assertion.
 | `test_preferences_need_a_token` | 401 both | 404 — routing runs before auth |
 
 `test_name_migration.py` — every test needs `upgrade_to`, so the file fails to load with
-`ImportError: cannot import name 'upgrade_to' from 'auth.migrations'`. Each test makes a database of
-its own at `0001` (`service_database(postgres_server, f"auth_m_{uuid.uuid4().hex[:8]}", lambda dsn:
-upgrade_to(dsn, "0001"))`), seeds `users` with SQL, then `upgrade_to(dsn, "head")`:
+`ImportError: cannot import name 'upgrade_to' from 'auth.migrations'`. Each test gets a database of
+its own at `0001` from a **synchronous, function-scoped fixture in the file**, `db_at_0001(postgres_server)
+-> str` — `service_database(postgres_server, f"auth_m_{uuid.uuid4().hex[:8]}", lambda dsn:
+upgrade_to(dsn, "0001"))` — because `service_database` calls `asyncio.run` (`testkit/databases.py:46-48`)
+and so can't run inside an `async def` test (`asyncio_mode = "auto"`); `postgres_dsn` is made the same
+way. The `async` test then seeds `users` with SQL and `await upgrade_to(dsn, "head")`:
 
 | Test | Proves |
 |---|---|
 | `test_the_migration_normalises_names_and_renames_duplicates` | `"Sam"` (oldest, **deleted**), `" sam"`, `"SAM"`, `"José"`, `"José"` → `"Sam"`, `"sam 2"`, `"SAM 3"`, `"José"`, `"José 2"`; keys set — a deleted account counts as the oldest holder |
+| `test_the_migration_leaves_a_newer_unique_name_alone` | `"Sam"` (t0), `"sam"` (t1), `"Sam 2"` (t2) → `"Sam"`, `"sam 3"`, `"Sam 2"` with its `version` unchanged (Decision 17a) |
 | `test_only_renamed_rows_get_a_new_version` | unchanged rows keep `version`; renamed and re-normalised ones are +1 |
 | `test_after_the_migration_a_duplicate_is_refused` | inserting `"SAM"` raises `IntegrityError` (`uq_users_display_name_key`) |
 
-`test_schema.py` (modify): `a_user(email)` gets a display name derived from the email, so
-`test_email_uniqueness_ignores_case` fails only on the email — today both users are `"Ada Lovelace"`,
-and after Task 5 it would pass on the name index. Add
+`test_schema.py` (modify): `a_user(email)` gets a display name from its own id
+(`f"user {user_id.hex}"`), never from the email — `ada@example.com` and `ADA@EXAMPLE.COM` would share
+a key — so `test_email_uniqueness_ignores_case` fails only on the email; today both users are
+`"Ada Lovelace"`, and after Task 5 it would pass on the name index. Add
 `test_display_names_are_unique_ignoring_case_and_form`: `"José"` then `"JOSÉ"` (other emails) →
 `IntegrityError`; `"José"` and `"Josie"` coexist. Red: `DID NOT RAISE`.
 
@@ -344,7 +340,7 @@ export function updateMe(accessToken: string, body: { displayName: string }): Pr
 export function preferences(accessToken: string): Promise<Preferences>
 export function updatePreferences(accessToken: string, patch: { clock: Clock | null }): Promise<Preferences>
 // lib/auth/session.ts
-export function updateProfile(profile: api.Profile): void   // signed in as profile.id → replace, notify; else no-op
+export function updateProfile(profile: api.Profile): void   // signed in as profile.id → replace, notify, and outlive an adopt() whose reads began earlier (Decision 30b); else no-op
 export async function signIn(provider = 'dex', returnTo?: string): Promise<void>
 export function takeReturnPath(): string                     // the stored path once, then '/'
 // lib/auth/storage.ts
@@ -375,8 +371,10 @@ export function SettingsPage(props: { accessToken: string; userId: string }): JS
 `timeOptions`: Automatic `{ hour: '2-digit', minute: '2-digit' }` (no `hourCycle` key), `'12h'` adds
 `hourCycle: 'h12'`, `'24h'` adds `hourCycle: 'h23'`. `dateTimeOptions`: Automatic
 `{ dateStyle: 'medium', timeStyle: 'short' }`, plus the same `hourCycle`. `applyRename`: calls
-`session.updateProfile`, sets `profileKeys.me`, and `setQueriesData({ queryKey: ['workspace-members'] })`
-replacing `user.displayName` for `profile.id` in every cached workspace.
+`session.updateProfile`; then, synchronously, Decision 30a — `cancelQueries` on `['workspace-members']`
+and `profileKeys.me(id)`, `setQueryData` on `profileKeys.me` and `setQueriesData` replacing
+`user.displayName` for `profile.id` in every cached workspace, then `invalidateQueries({ queryKey:
+['workspace-members'], refetchType: 'all' })`.
 
 **Markup** the tests query (Task 7 matches it): heading "Settings"; a "Profile" section with a textbox
 labelled "Display name", a "Save" button, a `role="status"` "Saved", and the field error in
@@ -389,10 +387,12 @@ labelled "Display name", a "Save" button, a `role="status"` "Saved", and the fie
 **Helpers** (`test/api.ts`): `auth.updateMe(reply: Profile | ((body) => Profile | Promise<Profile>))`,
 `auth.preferences(prefs: Preferences)`, `auth.updatePreferences(reply: Preferences | ((body) =>
 Preferences | Promise<Preferences>))`; a promise reply holds the request in flight, recorded on
-arrival, as `auth.membersBy` does. `Preferences` is a type import, so the helpers load at red and only
-`tsc` fails.
+arrival, as `auth.membersBy` does; `auth.meBy(reply: (call: number) => Profile | Promise<Profile>)`, the
+same for `GET /users/me`. `Preferences` is a type import, so the helpers load at red and only `tsc` fails.
 
-Fake only what is needed: `setPageAttention` (`test/page.ts`) for focus; time-dependent output uses an
+In `useProfile.test.ts` a cached directory is made the real way — `useWorkspaceMembers` mounted for the
+workspace (and unmounted for an inactive one) — never by `setQueryData` alone: a query with no
+`queryFn` can't be refetched, so Decision 30a's refetch would never go out. Fake only what is needed: `setPageAttention` (`test/page.ts`) for focus; time-dependent output uses an
 instant built in **local** time — `new Date(2026, 8, 15, 13, 5).toISOString()` — so "13:05" holds in
 any time zone.
 
@@ -400,15 +400,18 @@ any time zone.
 |---|---|---|
 | `clock.test.ts` — `gives today's options when Automatic` · `12-hour adds h12` · `24-hour adds h23` (both functions, exact objects) · `formats 13:05 on the 24-hour clock` · `formats 01:05 or 1:05, never 13, on the 12-hour clock` | Decision 23, Req 7 | `Failed to resolve import "./clock"` — every test needs it |
 | `clockApplied.test.tsx` — `MessageItem's time follows the clock` · `ThreadSummary's` · `SearchResult's` (each rendered inside `ClockContext.Provider` 24h then 12h) · `with no clock each formats exactly as before` (`toLocaleTimeString([], {hour,minute})` / `toLocaleString([], {dateStyle:'medium', timeStyle:'short'})`) | the three formatters (Req 7) | load failure on `../settings/clock` — a file of its own so no existing test is hidden |
-| `useProfile.test.ts` — `applyRename updates the session and every cached directory` (two workspaces cached, other members untouched) · `applyRename leaves another user's session alone` · `the rename lands after the form that started it has unmounted` (hold `updateMe`, `mutate`, `unmount()`, release → session profile and directory updated) | Req 5, *Where the rules meet* row 3, Paths "mid-save" (Decision 30) | load failure on `./useProfile` |
-| `SettingsPage.test.tsx` — `prefills from the server, not the session` (session says "Old", `GET /users/me` "New") · `Save is disabled while unchanged, including after spaces` · `a capitals-only change enables Save` · `Save is disabled when empty after trimming` · `100 emoji enable Save, 101 disable it` · `sends the name as typed and shows the stored form back` · `a 400 shows its message on the field and no cache is written` · `a 409 shows "That name is already taken." on the field` · `Saved appears after success and goes on the next edit` · `the stored clock is checked, Automatic when absent` · `choosing 24-hour sends {clock:"24h"} at once` · `choosing Automatic sends {clock:null}` · `a failed save puts the previous choice back and shows the error` · `a failure while a later choice is pending keeps the later choice` · `a later failure after an earlier success returns to the earlier choice` · `when both fail the clock is re-read from the server` · `the second choice is not sent before the first has answered` | Req 1, 7, 8; Decisions 24, 29 | load failure on `./SettingsPage` |
-| `App.settings.test.tsx` (fresh `App` per test, as `App.test.tsx:55-59`) — `clicking your name opens Settings inside the shell` · `a direct load of /settings shows the server's current name` (second `GET /users/me` answers a newer name than `adopt()`'s) · `every visit reads the profile and preferences again` · `Back to chat returns to the last channel` · `Back to chat goes to / when no channel was open` · `after a workspace switch Back to chat goes to /` · `a signed-out visit to /settings is remembered for sign-in` (stub `location.assign` as `session.test.ts:314-315`; `sessionStorage['collabhub.returnTo'] === '/settings'`) · `the callback returns to the remembered route` (verifier and return path in sessionStorage, `/auth/callback?code=…` → `/settings`) · `leaving mid-save still renames the sidebar and the directory` (hold `updateMe`, click Back to chat, release → `current-user` link shows the new name; the directory cache holds it) · `leaving with an unsaved edit drops it` · `a workspace switch on Settings keeps the field and the clock` (`session.changeWorkspace` from the same fresh module) · `a clock choice re-renders cached messages without refetching them` (on `/c/:id`, set `['user-preferences','user-ada']` — the literal key — to 24h: the time turns 24-hour, no second messages GET) · `the clock follows another tab's change on the next focus` (blur, server now 24h, focus → refetch → 24-hour) | Req 5, 7, 8; every Paths row but Grace's; Decisions 25–27 | assertions: `/settings` renders "No such page."; nothing written to sessionStorage; callback lands on `/` |
-| `session.test.ts` (add) — `updateProfile replaces the signed-in profile and notifies` · `updateProfile does nothing when signed out or for another user` · `signIn remembers a safe return path` · `signIn ignores an unsafe one` (param `//evil.example`, `https://evil.example`, `/\evil`, `/sign-in`) · `takeReturnPath gives the path once, then /` | Decision 25 | `session.updateProfile is not a function`, `takeReturnPath is not a function`; sessionStorage assertions — existing tests keep running |
+| `useProfile.test.ts` — `applyRename updates the session and every cached directory` (two workspaces cached, other members untouched) · `applyRename leaves another user's session alone` · `the rename lands after the form that started it has unmounted` (hold `updateMe`, `mutate`, `unmount()`, release → session profile and directory updated) · `a directory read answered before the rename can't put the old name back` (directory cached with "Old"; `membersBy` holds call 2 with "Old", started by an invalidation; `applyRename("New")`; release call 2 → the cache still says "New", and call 3, the refetch the rename starts, has gone out and lands "New") · `a directory read started after the rename lands as the server says` (other order: call 2 starts after `applyRename` and answers "Newer" → "Newer") · `a first directory load in flight is restarted` (no data yet; call 1 held with "Old"; `applyRename`; release → the directory ends on call 2's "New") · `a profile read in flight can't undo the rename` (`['me', id]` refetch held with "Old", `applyRename`, release → "New") | Req 5, *Where the rules meet* row 3, Paths "mid-save" (Decisions 30, 30a) — the held-read tests fail a build that only writes the caches | load failure on `./useProfile` |
+| `SettingsPage.test.tsx` — `prefills from the server, not the session` (session says "Old", `GET /users/me` "New") · `waits for this visit's read, not a cached profile` (`['me', id]` pre-seeded "Old", read held → no textbox; release "New" → the textbox's first value is "New") · `a failed profile read shows an error and no form` · `Save is disabled while unchanged, including after spaces` · `a capitals-only change enables Save` · `Save is disabled when empty after trimming` · `100 emoji enable Save, 101 disable it` · `sends the name as typed and shows the stored form back` · `a 400 shows its message on the field and no cache is written` · `a 409 shows "That name is already taken." on the field` · `Saved appears after success and goes on the next edit` · `the stored clock is checked, Automatic when absent` · `choosing 24-hour sends {clock:"24h"} at once` · `choosing Automatic sends {clock:null}` · `a failed save puts the previous choice back and shows the error` · `a failure while a later choice is pending keeps the later choice` · `a later failure after an earlier success returns to the earlier choice` · `when both fail the clock is re-read from the server` · `the second choice is not sent before the first has answered` | Req 1, 7, 8; Decisions 24, 29 | load failure on `./SettingsPage` |
+| `App.settings.test.tsx` (fresh `App` per test, as `App.test.tsx:55-59`) — `clicking your name opens Settings inside the shell` · `a direct load of /settings shows the server's current name` (second `GET /users/me` answers a newer name than `adopt()`'s) · `every visit reads the profile and preferences again` (visit 1 reads "A" and 12h; leave; the server now says "B" and 24h; visit 2 → the field's value is "B" and "24-hour" is checked) · `Back to chat returns to the last channel` · `Back to chat goes to / when no channel was open` · `after a workspace switch Back to chat goes to /` · `a signed-out visit to /settings is remembered for sign-in` (stub `location.assign` as `session.test.ts:314-315`; `sessionStorage['collabhub.returnTo'] === '/settings'`) · `the callback returns to the remembered route` (verifier and return path in sessionStorage, `/auth/callback?code=…` → `/settings`) · `leaving mid-save still renames the sidebar and the directory` (hold `updateMe`, click Back to chat, release → `current-user` link shows the new name; the directory cache holds it) · `leaving with an unsaved edit drops it` · `a workspace switch on Settings keeps the field and the clock` (`session.changeWorkspace` from the same fresh module) · `a clock choice re-renders cached messages without refetching them` (on `/c/:id`, set `['user-preferences','user-ada']` — the literal key — to 24h: the time turns 24-hour, no second messages GET) · `the clock follows another tab's change on the next focus` (blur, server now 24h, focus → refetch → 24-hour) | Req 5, 7, 8; every Paths row but Grace's; Decisions 25–27 | assertions: `/settings` renders "No such page."; nothing written to sessionStorage; callback lands on `/` |
+| `session.test.ts` (add) — `updateProfile replaces the signed-in profile and notifies` · `updateProfile does nothing when signed out or for another user` · `signIn remembers a safe return path` · `signIn ignores an unsafe one` (param `//evil.example`, `https://evil.example`, `/\evil`, `/sign-in`) · `takeReturnPath gives the path once, then /` · `a switch whose profile read began before updateProfile keeps the renamed profile` (`auth.meBy` holds the switch's read with "Old"; `changeWorkspace`; `updateProfile("New")`; release → `snapshot()` profile "New", workspace switched) · `a switch whose read begins after updateProfile adopts the server's profile` (`updateProfile("New")`, then a switch answering "Newer" → "Newer") | Decisions 25, 30b | `session.updateProfile is not a function`, `takeReturnPath is not a function`; sessionStorage assertions — existing tests keep running |
 | `chat.test.ts` (add) — `remembers the last channel after the active one is cleared` · `clearLastChannel forgets it` | Decision 26 | assertion: `lastChannelId` undefined |
 
 Ripple: `App.test.tsx` (`aReturningUser`), `ChatLayout.test.tsx` (`beforeEach`),
-`ChatLayout.attachments.test.tsx` gain `auth.preferences({})` beside `auth.me(…)`, so no test leans on
-an unstubbed request once `ChatLayout` fetches preferences. They still pass at red.
+`ChatLayout.attachments.test.tsx`, and `CreateChannelDialog.test.tsx`'s "from the chat shell" block
+(`:98-115`, which mounts `ChatLayout`) gain `auth.preferences({})`, so no test leans on an unstubbed
+request (`test/setup.ts:32`, `onUnhandledRequest: 'error'`) once `ChatLayout` fetches preferences. They
+still pass at red. These four are every test file that mounts `ChatLayout` or `App` (grep at `957371e`);
+the test-writer re-greps.
 
 ## Task 4: The journey (RED)
 
@@ -434,33 +437,31 @@ Feature: Display names
     Then Alan sees "Alan Turing" as his name
     When Grace opens CollabHub
     And Grace opens the "general" channel
-    Then Grace sees "the kettle is on" written by "Alan Turing"
+    Then Grace sees "the kettle is on" written by Alan Turing
 ```
 
 - `conftest.py`: `ALAN = "alan@collabhub.dev"`; `alan_context` (session scope,
   `_signed_in_context(…, ALAN)`) and `alan` (function scope, `_restore`) beside `ada`/`grace`.
 - Steps, `parsers.re` with `[^"]*` groups so no phrase swallows a quote: `Alan has sent "…" in "…"`
   (`alan.open()`, `open_channel`, `send_message_and_wait`), `Alan changes his display name to "…" in
-  Settings`, `Alan sees "…" as his name`, `Grace sees "…" written by "…"` (existing `has_author`).
+  Settings`, `Alan sees "…" as his name`, and `Grace sees "(?P<body>[^"]*)" written by (?P<name>.+)` —
+  the vocabulary's bare form, the tail a display name (Decision 33) — through the existing `has_author`.
   Reused verbatim: `Ada is signed in`, `Ada has created a public channel named "…"`, `Grace opens
   CollabHub`, `Grace opens the "…" channel`.
 - `ChatPage`: `open_settings()` (click `current-user`, expect `settings-page`),
   `change_display_name(name)` (fill `settings-display-name-input`; if `settings-display-name-save` is
   enabled, click it and expect `settings-saved`; if disabled the name is already `name`),
   `has_current_user(name)` (retrying `expect(...).to_have_text`).
-- **Reruns:** Auth's tables survive scenarios and `KEEP_STACK` runs; no other scenario uses Alan
-  (checked: no `ALAN` or `alan` in `tests/bdd`), so his name is never restored, and on a rerun Save is
-  disabled because the name is unchanged — the step's branch for that is why the scenario still passes.
-- Red: `--generate-missing` lists the four new steps; at e2e it fails at the rename step (no link, no
-  page). The journey first runs in Task 9.
+- **Reruns:** Auth's tables survive scenarios; no other scenario uses Alan (no `alan` in `tests/bdd`),
+  so on a rerun Save is disabled (name unchanged) and the step's branch for that keeps it passing.
+- Red: `--generate-missing` lists the four new steps; at e2e it fails at the rename step. First run: Task 9.
 
 ## Task 5: The rules, the key and the migration (GREEN)
 
 **Files:** `names.py`, `models.py`, `alembic/versions/0002_unique_display_names.py`, `migrations.py`
 
-- [ ] `names.py` to Task 1's interface. Run Task 1: all pass.
-- [ ] `User.display_name_key` (`String`, not null) with `Index("uq_users_display_name_key",
-  "display_name_key", unique=True)`, and:
+- [ ] `names.py` to Task 1's interface; Task 1 passes. `User.display_name_key` (`String`, not null),
+  `Index("uq_users_display_name_key", "display_name_key", unique=True)`, and:
 
 ```python
 @validates("display_name")
@@ -470,13 +471,12 @@ def _keep_key(self, _key: str, value: str) -> str:
     return value
 ```
 
-- [ ] `UserPreferences`: `user_id` PK + FK `users.id` (both Auth's), `prefs JSONB NOT NULL DEFAULT
-  '{}'`, `version`, `updated_at`.
+- [ ] `UserPreferences`: `user_id` PK + FK `users.id`, `prefs JSONB NOT NULL DEFAULT '{}'`, `version`, `updated_at`.
 - [ ] Migration `0002` (`down_revision = "0001"`), in order, all SQL bound:
   1. `ADD COLUMN display_name_key text NULL`;
   2. `SELECT id, created_at, display_name, email FROM users` — **every** row, deleted included (D46);
   3. normalise each name (`names.normalise`, then `provisional` if `check` refuses — Decision 17),
-     `names.dedupe`, and `UPDATE users SET display_name = :n, display_name_key = :k, version =
+     `names.dedupe` (reserving first — Decision 17a), and `UPDATE users SET display_name = :n, display_name_key = :k, version =
      version + 1, updated_at = now() WHERE id = :id` for rows whose name changed; set the key on the rest;
   4. `ALTER COLUMN display_name_key SET NOT NULL`; `CREATE UNIQUE INDEX uq_users_display_name_key`;
   5. `CREATE TABLE user_preferences`.
@@ -513,7 +513,7 @@ def _keep_key(self, _key: str, value: str) -> str:
 
 - [ ] `lib/auth/api.ts`: the three calls (`PATCH` with `Authorization`, through `request`).
 - [ ] `storage.ts`: `returnPath` (read/write/clear, key `collabhub.returnTo`) and `isSafeReturnPath`.
-  `session.ts`: `updateProfile`, `signIn(provider, returnTo)` writes only a safe path,
+  `session.ts`: `updateProfile` with `adopt()`'s guard (Decision 30b), `signIn(provider, returnTo)` writes only a safe path,
   `takeReturnPath()`; the module docstring notes the second sessionStorage entry.
 - [ ] `App.tsx`: `Protected` → `<Navigate to="/sign-in" replace state={{ from: pathname + search }} />`;
   `SignIn` passes `state.from` to `session.signIn`; `Callback` navigates to `session.takeReturnPath()`
@@ -524,8 +524,9 @@ def _keep_key(self, _key: str, value: str) -> str:
 - [ ] `WorkspaceSwitcher`: `current-user` becomes `<Link to="/settings">`.
 - [ ] `features/settings/`: `clock.ts`, `usePreferences.ts` (`useSetClock` per Decision 29, cache
   writes in the hook's own callbacks), `useProfile.ts` (`useRenameMe` calls `applyRename` from its own
-  `onSuccess` — Decision 30), `SettingsPage.tsx` to Task 3's markup; the Profile form renders once the
-  profile has loaded, and "Back to chat" goes to `/c/{lastChannelId}` or `/`.
+  `onSuccess` — Decision 30; `applyRename` per Decision 30a), `SettingsPage.tsx` to Task 3's markup; the
+  Profile form renders once this mount's read has succeeded (`isFetchedAfterMount`, Decision 28), and
+  "Back to chat" goes to `/c/{lastChannelId}` or `/`.
 - [ ] `MessageItem.tsx:68-70`, `ThreadSummary.tsx:16-18`, `SearchResult.tsx:22-24`: `formatTime` /
   `formatDateTime` with `useClock()`; their comments that cite D28 as open now say the clock preference.
 - [ ] Task 3 passes; `npm --prefix src/frontend run typecheck` clean.
@@ -538,18 +539,14 @@ def _keep_key(self, _key: str, value: str) -> str:
   it accepts and that the 409 names nobody.
 - [ ] ADRs with the `adr-writer` skill: `docs/adr/261021-user-preferences-in-auth.md` (D28) and
   `docs/adr/261021-display-names-unique-across-collabhub.md` (D46, with the key-over-`lower()` choice).
-- [ ] Doc 01 §3: the two preferences routes; `PATCH /users/me`'s trimming, refusals and 409. §4:
-  `display_name_key` and its index, `user_preferences`, and the first-sign-in suffix rule (with
-  Decisions 15–16).
-- [ ] Doc 06 §3: `/features/settings`; §4: the return path (Decision 25) beside the PKCE verifier;
-  §5.2 *Names*: the renamer's own tab updates at once; §9: the D28 paragraph becomes decided, the
-  clock built.
+- [ ] Doc 01 §3: the preferences routes; `PATCH /users/me`'s trimming, refusals, 409. §4:
+  `display_name_key` and its index, `user_preferences`, the first-sign-in suffix rule (Decisions 15–16).
+- [ ] Doc 06 §3 `/features/settings`; §4 the return path (Decision 25) beside the PKCE verifier; §5.2
+  *Names*: the renamer's own tab updates at once (Decisions 30a–b); §9: D28 decided, the clock built.
 - [ ] Conventions §5.4: the D46 exception — a display-name 409 may reveal a name exists in another
-  workspace and names nobody and no workspace.
-- [ ] `auth/api.http`: the preferences requests.
-- [ ] Sweep: `grep -rn "D28" src docs/design` and `grep -rn "Renames are not covered" docs` — every hit
-  says the new state; `grep -rn "display_name" src/services/auth/auth` — every write goes through the
-  model or the migration.
+  workspace, and names nobody and no workspace. `auth/api.http`: the preferences requests.
+- [ ] Sweep: `grep -rn "D28" src docs/design`, `grep -rn "Renames are not covered" docs` — every hit says
+  the new state; `grep -rn "display_name" src/services/auth/auth` — every write via the model or 0002.
 
 ## Task 9: Verification
 
@@ -558,11 +555,9 @@ def _keep_key(self, _key: str, value: str) -> str:
   above 1871; record the integration and e2e counts, which have no baseline.
 - [ ] `python3 .claude/hooks/checks/conventions.py $(git diff --name-only HEAD)` and
   `.claude/hooks/security.sh`; the CH009 waiver names every checker that fires on its line.
-- [ ] **First real run** on the Compose stack (`docker compose up -d --build`): rename Ada and watch her
-  sidebar and messages; try Grace's name in capitals from Alan's browser and read the 409 body; choose
-  24-hour and look at a message, a thread summary and a search result; reload `/settings`; open
-  `/settings` signed out. Fix anything found with a test, and record it below.
-- [ ] If a sibling branch merged meanwhile, merge `main` and rerun the above.
+- [ ] **First real run** (`docker compose up -d --build`): rename Ada, watch sidebar and messages; Grace's
+  name in capitals from Alan's browser, read the 409 body; 24-hour on a message, thread summary and
+  search result; reload `/settings`; open it signed out. Fix anything found with a test; record it below.
 - [ ] Fill in *Found while building*. Leave the worktree dirty and report.
 
 ## Found while building
@@ -572,27 +567,34 @@ found, each with the test that now pins it down. Empty until then.*
 
 ## Not in this plan
 
-- Live push of a rename; admin rename; workspace rename; confusables; any preference but `clock`;
-  generating Auth's OpenAPI types; an avatar editor (*Not in this issue*).
-- Refreshing the `name` claim on rename (*Where the rules meet* row 4).
-- Cross-tab coordination of the refresh cookie (doc 06 §4) — unchanged.
+- Everything under *Not in this issue*; refreshing the `name` claim on rename (*Where the rules meet*
+  row 4); cross-tab coordination of the refresh cookie (doc 06 §4).
 
 ## Self-review
 
-- **Req 1** → Tasks 1, 2 (`test_a_name_is_stored…`, `…refused…`, `…accepted…`, `…100…`,
-  `…saving the name you have…`), 3 (form states), 5, 6. **Req 2** → 1 (key), 2 (409, NFC collision,
-  capitals, deleted, both races), schema test, 5, 6. **Req 3** → 1 (`candidates`, `provisional`),
-  2 (suffix, two at once, race, unusable, never overwrites), 6. **Req 4** → 1 (`dedupe`), 2 (migration),
-  5. **Req 5** → 3 (`applyRename`, mid-save, App tests), 4, 7. **Req 6** → 2 (preferences), 5, 6.
-  **Req 7** → 3 (clock, applied, save/revert, cached re-render), 7. **Req 8** → 3 (App and page tests), 4, 7.
-- **Where the rules meet**: concurrency → `test_two_renames…`; rename vs first sign-in →
-  `test_a_rename_racing…` and `test_a_first_sign_in_racing…`; own view → `applyRename` tests; token →
-  *Not in this plan*; workspace name → `test_a_rename_leaves_the_workspace_name_alone`; clock and cache
-  → `a clock choice re-renders cached messages…`; two tabs → `test_a_patch_merges…`,
-  `test_two_first_patches…`.
-- **Paths**: direct load, signed out, mid-save, unsaved edit, workspace switch, second tab → named
-  `App.settings.test.tsx` tests; Grace → existing directory tests + the journey; deleted account →
-  `test_a_deleted_accounts_name_stays_taken`, `test_a_deleted_account_gets_404…`.
-- **Names:** `user_preferences`, `display_name_key`, `uq_users_display_name_key`, `collabhub.returnTo`,
-  `['user-preferences', userId]` used identically everywhere.
-- **Known ripple:** `test_schema.a_user`, and three SPA tests gaining a preferences stub — all RED work.
+- **Req 1** → Tasks 1, 2 (stored, refused, accepted, 100, re-save), 3, 5, 6. **Req 2** → 1, 2 (409, NFC,
+  capitals, deleted, races), schema, 5, 6. **Req 3** → 1, 2 (suffix, two at once, races, unusable, never
+  overwrites), 6. **Req 4** → 1 and 2 (`dedupe`, migration, newer unique holder), 5. **Req 5** → 3
+  (`applyRename`, held reads, `adopt()` guard, mid-save), 4, 7. **Req 6** → 2, 5, 6. **Req 7** → 3, 7.
+  **Req 8** → 3 (page, App, this visit's read), 4, 7.
+- **Where the rules meet**: concurrency → `test_two_renames…`; rename vs sign-in → both `…racing…`
+  tests; own view → `applyRename` and held-read tests, the switch tests in `session.test.ts`; token →
+  *Not in this plan*; workspace name → `…leaves_the_workspace_name_alone`; clock and cache → `a clock
+  choice re-renders…`; two tabs → `test_a_patch_merges…`, `test_two_first_patches…`.
+- **Paths**: every row but Grace's → named `App.settings.test.tsx` tests; Grace → directory tests + the
+  journey; deleted account → `…name_stays_taken`, `…gets_404…`.
+- **Names** (`user_preferences`, `display_name_key`, `uq_users_display_name_key`, `collabhub.returnTo`,
+  the two query keys) are used identically; **ripple**: `a_user` and four SPA test files — RED work.
+
+## Review responses
+
+Round 1 (`reviews/plan-reviewer-1.md`):
+
+1. Fixed — Decisions 30a (cancel, write, re-read; TanStack lines cited) and 30b (`adopt()` guard);
+   held-read tests in both orders in `useProfile.test.ts` and `session.test.ts`; `auth.meBy` helper.
+2. Fixed — Decision 17a's reservation rule; the newer-holder fixture at unit and in the migration test.
+3. Fixed — `CreateChannelDialog.test.tsx` in the ripple and file map; no other mount found.
+4. Fixed — a synchronous function-scoped fixture `db_at_0001`, as `postgres_dsn` is made.
+5. Fixed — `a_user` names each user from its own id. 6. Fixed — qualified in Decision 21.
+7. Fixed — `isFetchedAfterMount` (Decision 28); two tests assert the field's value; failed read tested.
+8. Fixed — the vocabulary's bare form via `parsers.re` (Decision 33).

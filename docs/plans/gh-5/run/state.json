@@ -1,8 +1,8 @@
 {
-  "stage": "plan-writer",
+  "stage": "plan-reviewer",
   "status": "running",
-  "step": 2,
-  "review": "docs/plans/gh-5/reviews/plan-reviewer-1.md",
+  "step": 3,
+  "review": "",
   "rounds": {
     "plan": 2,
     "test": 1,
