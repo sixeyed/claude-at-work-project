@@ -1,0 +1,20 @@
+01 plan-writer done [14.1m 111 turns $4.95 · opus · default · 1 refused]: I've written the plan for gh-5 (about 600 lines, self-reviewed); there are no open questions. It covers four pieces of work:
+- **Names:** a shared Auth name module trims, normalises and checks each name, and applies the "X 2" suffix rule. Uniqueness uses a comparison key that Auth computes itself, protected by a unique index. That key is used instead of the issue's suggested lower() index, which compares differently from the app (recorded under Corrections). Both concurrent-rename races are handled.
+- **Existing data:** a one-way migration renames existing duplicates.
+- **Preferences:** a `user_preferences` table, merged in a single SQL statement, decides D28 as the issue asks.
+- **SPA:** a new `/settings` page. The clock reaches message, thread-summary and search times through a context that `ChatLayout` provides.
+
+Test approach is BDD outside-in with one journey (Alan renames himself; Grace sees the new name on his message), because this is a new user-facing page whose real proof is what a second person's browser shows. Everything below the journey is pushed down to unit, integration and Vitest tests.
+
+Nine decisions are marked **assumed**:
+- name length counted in code points;
+- how an unusable IdP name is repaired;
+- cutting the base so a suffixed name stays within 100 characters;
+- repairing stored names that fail the rules when the migration runs;
+- unknown stored preference keys are left out of the response;
+- when Save is disabled;
+- returning to the starting route after sign-in, which the SPA doesn't do today (also under Corrections);
+- the "Back to chat" target;
+- `/settings` rendering inside the chat shell.
+
+One existing backend test (`test_schema.a_user`) and three SPA test files are changed as RED work.
