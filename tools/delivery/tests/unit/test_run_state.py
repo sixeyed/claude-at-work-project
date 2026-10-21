@@ -56,3 +56,19 @@ def test_a_run_the_bash_workflow_finished_is_done(tmp_path):
     (tmp_path / "state").write_text("STAGE=done\nSTATUS=done\nSTEP=7\n")
 
     assert State.load(tmp_path, max_rounds=3).status == "done"
+
+
+def test_the_slack_thread_is_saved_and_loaded(tmp_path):
+    state = State.fresh(max_rounds=3)
+    state.slack_thread = "1700000000.000100"
+
+    state.save(tmp_path)
+
+    assert State.load(tmp_path, max_rounds=3).slack_thread == "1700000000.000100"
+
+
+def test_a_state_saved_before_slack_loads_with_no_thread(tmp_path):
+    saved = {k: v for k, v in State.fresh(max_rounds=3).__dict__.items() if k != "slack_thread"}
+    (tmp_path / "state.json").write_text(json.dumps(saved))
+
+    assert State.load(tmp_path, max_rounds=3).slack_thread == ""

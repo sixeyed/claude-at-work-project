@@ -28,8 +28,21 @@ class Issue:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class PullRequest:
+    """An open pull request, as the backend holds it."""
+
+    number: int
+    url: str
+    draft: bool
+
+
 class Backend(Protocol):
     """Where issues live. Every method raises `BackendError` when it can't do its job."""
+
+    #: Whether a delivery's approval can end in a PR here. One that can't raises on every
+    #: PR method, saying how to open one by hand.
+    opens_pull_requests: bool
 
     def check(self) -> None:
         """Fails unless this backend can take a new issue — before anyone spends a grilling on it."""
@@ -44,3 +57,27 @@ class Backend(Protocol):
 
     def ensure_label(self, name: str, description: str, color: str) -> None:
         """Creates the label, or updates it if it exists. A backend with no labels does nothing."""
+
+    def find_pull_request(self, head: str) -> PullRequest | None:
+        """The open PR from branch `head`, if there is one."""
+
+    def open_pull_request(self, head: str, base: str, title: str, body: str) -> PullRequest: ...
+
+    def update_pull_request(
+        self,
+        number: int,
+        *,
+        title: str | None = None,
+        body: str | None = None,
+        draft: bool | None = None,
+    ) -> PullRequest:
+        """Changes what is given — title and body together, or draft and ready — and
+        returns the PR as the backend now holds it."""
+
+    def comment_on_pull_request(self, number: int, body: str) -> None: ...
+
+    def start_preview(self, number: int) -> None:
+        """Starts the PR's preview, which holds itself open for the review."""
+
+    def blob_url(self, sha: str, path: str) -> str:
+        """Where a file at a commit is served raw, so an image shows inline."""

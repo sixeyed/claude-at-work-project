@@ -720,3 +720,63 @@ def test_preview_refuses_what_it_owns(sb: Sandbox) -> None:
     clean = sb.deploy("preview", "url", BRANCH="t")
     assert clean.returncode == 0, clean.stderr
     assert f"APP_ORIGIN={APP_URL}" in clean.stdout
+
+
+# --- the preview's password (handoff 09, decision 10) -----------------------
+
+# Prints as `htpasswd -niBC 10 ""` does — a colon, the hash, a blank line — with a hash made
+# from the password it read on stdin, so a test can see which one reached it. Its args and
+# stdin are logged, one line each.
+FAKE_HTPASSWD = """#!/bin/bash
+read -r password
+printf '%s\\n' "$*" >>"$FAKE_HTPASSWD_LOG"
+printf '%s\\n' "$password" >>"$FAKE_HTPASSWD_LOG"
+printf ':$2y$10$fake.%s\\n\\n' "$password"
+"""
+
+
+def _fake_htpasswd(sb: Sandbox) -> Path:
+    fake = sb.bin / "htpasswd"
+    fake.write_text(FAKE_HTPASSWD)
+    fake.chmod(0o755)
+    log = sb.root / "fake-htpasswd"
+    log.touch()
+    return log
+
+
+def test_without_a_preview_password_dex_keeps_the_k3d_values_hash(sb: Sandbox) -> None:
+    log = _fake_htpasswd(sb)
+
+    done = sb.fn("preview_password_args", FAKE_HTPASSWD_LOG=str(log))
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout == ""
+    assert log.read_text() == ""
+
+
+def test_a_preview_password_reaches_dex_as_its_bcrypt_hash(sb: Sandbox) -> None:
+    log = _fake_htpasswd(sb)
+
+    done = sb.fn("preview_password_args", PREVIEW_PASSWORD="s3cret-Pw", FAKE_HTPASSWD_LOG=str(log))
+
+    assert done.returncode == 0, done.stderr
+    assert done.stdout.splitlines() == ["--set-string", "dex.passwordHash=$2y$10$fake.s3cret-Pw"]
+    # On stdin, never in argv, where `ps` would show it.
+    args, stdin = log.read_text().splitlines()
+    assert "s3cret-Pw" not in args
+    assert args.split() == ["-niBC", "10", ""] or args.split() == ["-niBC", "10"]
+    assert stdin == "s3cret-Pw"
+
+
+def test_a_preview_password_without_htpasswd_is_refused(sb: Sandbox) -> None:
+    minbin = sb.root / "minbin"
+    minbin.mkdir()
+    for tool in ["bash", "dirname", "git", "tr", "sed", "cat"]:
+        found = shutil.which(tool)
+        if found:
+            (minbin / tool).symlink_to(found)
+
+    done = sb.fn("preview_password_args", PATH=str(minbin), PREVIEW_PASSWORD="s3cret-Pw")
+
+    assert done.returncode != 0
+    assert "'htpasswd' is required" in done.stderr

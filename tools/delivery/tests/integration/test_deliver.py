@@ -205,6 +205,31 @@ def test_a_github_issue_is_delivered_under_its_key(repo, issue_3):
     ]
 
 
+def test_a_refused_command_is_counted_in_history_and_kept_beside_it(repo, remote, issue_3):
+    # A public repo's transcripts aren't kept, so what a stage was refused is the one clue
+    # to why it went without a tool: the count in history.log, the commands in refused.log.
+    class Refused(FakeAgent):
+        def __call__(self, args: list[str], cwd: Path) -> str:
+            out = json.loads(super().__call__(args, cwd))
+            if args[args.index("--agent") + 1] == "plan-writer":
+                out["permission_denials"] = [
+                    {"tool_name": "Bash", "tool_use_id": "a", "tool_input": {"command": c}}
+                    for c in ("git log; echo $?", 'git diff | grep -v "^$"')
+                ]
+            return json.dumps(out)
+
+    run(repo, issue_3, Refused())
+
+    show = "feature/gh-3:docs/plans/gh-3/run/"
+    history = git(remote, "show", f"{show}history.log").splitlines()
+    assert history[0].startswith("01 plan-writer done [")
+    assert "· 2 refused]" in history[0]
+    assert "refused" not in history[1]
+    assert git(remote, "show", f"{show}refused.log") == (
+        '01 plan-writer: git log; echo $?\n01 plan-writer: git diff | grep -v "^$"\n'
+    )
+
+
 def test_a_rerun_resumes_where_it_stopped_with_the_issue_fetched_again(repo, issue_3, gh_issue):
     run(repo, issue_3, FakeAgent())
     issue_3.answers["issue view"] = gh_issue(

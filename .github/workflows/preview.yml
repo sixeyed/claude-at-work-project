@@ -1,0 +1,221 @@
+# A delivery PR's preview, held open for its review (handoff 09, decisions 4, 8, 9, 15, 18).
+# It deploys the PR's branch with `scripts/deploy.sh preview up` on this runner, puts the
+# origin in one comment on the PR and in a `preview` status on its head commit, and waits —
+# until the PR is approved or closed, or the runner's six hours nearly run out — then takes
+# it down and says why in the same comment.
+#
+# deliver.yml dispatches it after every change it makes to its PR: a PR, push or edit made
+# with GITHUB_TOKEN starts no workflow. A person's push to the branch starts it through push,
+# and replaces the running preview: one concurrency group per PR. Not pull_request: a PR the
+# Actions bot opened gets a pull_request run held for a maintainer's approval, which would
+# replace a working preview if approved. Closing the PR needs no run of its own: the holding
+# preview sees it within a minute. Only a delivery's PR gets one — a feature/gh-N branch in
+# this repo with an open, non-draft PR; a fork's push never reaches this repo's workflows. With the SLACK_BOT_TOKEN
+# and SLACK_CHANNEL secrets the preview gets a random password, posted in the delivery's
+# Slack thread and nowhere else: this repo's logs, summaries and comments are public.
+#
+# Plan: docs/plans/ch09/10-delivery-pr-plan.md.
+name: preview
+run-name: "preview ${{ inputs.pr && format('PR #{0}', inputs.pr) || github.ref_name }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: The PR's number
+        required: true
+        type: number
+  push:
+    branches: ["feature/gh-*"]
+
+permissions:
+  contents: read
+  pull-requests: write
+  # The `preview` status on the PR's head commit, which shows among its checks.
+  statuses: write
+
+env:
+  K3D_VERSION: v5.9.0
+  CLOUDFLARED_VERSION: 2026.9.3
+  GH_TOKEN: ${{ github.token }}
+  # The one comment this workflow keeps on a PR, found by this first line.
+  MARKER: "<!-- collabhub-preview -->"
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      preview: ${{ steps.pr.outputs.preview }}
+      pr: ${{ steps.pr.outputs.pr }}
+      branch: ${{ steps.pr.outputs.branch }}
+      sha: ${{ steps.pr.outputs.sha }}
+      key: ${{ steps.pr.outputs.key }}
+    steps:
+      - name: Read the PR
+        id: pr
+        env:
+          NUMBER: ${{ inputs.pr }}
+          PUSHED: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          fields=number,state,isDraft,isCrossRepository,headRefName,headRefOid
+          if [ -n "$NUMBER" ]; then
+              pr="$(gh pr view "$NUMBER" --repo "$GITHUB_REPOSITORY" --json "$fields")"
+          else
+              pr="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$PUSHED" --state open \
+                  --json "$fields" --jq '.[0] // empty')"
+              [ -n "$pr" ] || { echo "$PUSHED has no open PR — no preview"; echo "preview=false" >>"$GITHUB_OUTPUT"; exit 0; }
+          fi
+          branch="$(jq -r .headRefName <<<"$pr")"
+          state="$(jq -r .state <<<"$pr")"
+          preview=false key=""
+          if [[ "$branch" =~ ^feature/(gh-[1-9][0-9]*)$ ]] && [ "$(jq -r .isCrossRepository <<<"$pr")" = false ] \
+              && [ "$state" = OPEN ] && [ "$(jq -r .isDraft <<<"$pr")" = false ]; then
+              key="${BASH_REMATCH[1]}"
+              preview=true
+          fi
+          echo "PR #$(jq -r .number <<<"$pr"): $branch, $state — preview=$preview"
+          {
+              echo "preview=$preview"
+              echo "pr=$(jq -r .number <<<"$pr")"
+              echo "branch=$branch"
+              echo "sha=$(jq -r .headRefOid <<<"$pr")"
+              echo "key=$key"
+          } >>"$GITHUB_OUTPUT"
+
+  preview:
+    needs: guard
+    if: needs.guard.outputs.preview == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    # Per PR, and known only once the guard has found it: a dispatch names the PR, a push
+    # only its branch.
+    concurrency:
+      group: preview-${{ needs.guard.outputs.pr }}
+      cancel-in-progress: true
+    env:
+      PR: ${{ needs.guard.outputs.pr }}
+      BRANCH: ${{ needs.guard.outputs.branch }}
+      SHA: ${{ needs.guard.outputs.sha }}
+      KEY: ${{ needs.guard.outputs.key }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Mark the preview deploying
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f context=preview -f state=pending \
+              -f description="deploying" -f target_url="$RUN_URL" >/dev/null
+
+      - name: Free disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup \
+              /opt/hostedtoolcache/CodeQL
+
+      # main's code holds the Slack token; the PR's code builds and deploys, in pr/.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.guard.outputs.branch }}
+          path: pr
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Install the tools a preview needs
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/k3d-io/k3d/main/install.sh \
+              | TAG="$K3D_VERSION" bash
+          sudo curl -fsSL -o /usr/local/bin/cloudflared \
+              "https://github.com/cloudflare/cloudflared/releases/download/$CLOUDFLARED_VERSION/cloudflared-linux-amd64"
+          sudo chmod +x /usr/local/bin/cloudflared
+          command -v htpasswd >/dev/null || sudo apt-get install -y -qq apache2-utils
+
+      - name: Deploy
+        id: deploy
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+        run: |
+          set -euo pipefail
+          # Random only when Slack can carry it to a person; else the shared `collabhub`.
+          password=""
+          if [ -n "$SLACK_BOT_TOKEN" ] && [ -n "$SLACK_CHANNEL" ]; then
+              password="$(openssl rand -base64 24 | tr -d '/+=\n' | cut -c1-24)"
+              echo "::add-mask::$password"
+          fi
+          # The deploy never sees the Slack token. Tried twice, as the runner's own preview is:
+          # a quick tunnel's hostname sometimes never resolves, and a new tunnel gets another.
+          for attempt in 1 2; do
+              if (cd pr && env -u SLACK_BOT_TOKEN -u SLACK_CHANNEL PREVIEW_PASSWORD="$password" \
+                  scripts/deploy.sh preview up) | tee "$RUNNER_TEMP/preview-up.log"; then
+                  break
+              fi
+              [ "$attempt" = 1 ] || exit 1
+              echo "::warning::preview up failed — trying once more"
+              sleep 30
+          done
+          origin="$(sed -n 's/^APP_ORIGIN=//p' "$RUNNER_TEMP/preview-up.log" | tail -n 1)"
+          [ -n "$origin" ] || { echo "::error::preview up printed no APP_ORIGIN"; exit 1; }
+          echo "origin=$origin" >>"$GITHUB_OUTPUT"
+
+          body="$MARKER
+          **Preview up** at $origin — \`$BRANCH\` at \`$(git -C pr rev-parse --short HEAD)\`.
+          Sign in as \`ada@collabhub.dev\` or \`grace@collabhub.dev\` with the preview password,
+          which is in the delivery's Slack thread (\`collabhub\` where Slack isn't set up).
+          It stays up until this PR is approved or closed, or for about six hours."
+          id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+              --jq "[.[] | select(.body | startswith(\"$MARKER\"))][0].id // empty")"
+          if [ -n "$id" ]; then
+              gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" -f body="$body" >/dev/null
+          else
+              gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
+          fi
+          echo "comment=${id:-new}" >>"$GITHUB_OUTPUT"
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f context=preview -f state=success \
+              -f description="up at $origin" -f target_url="$origin" >/dev/null
+
+          if [ -n "$password" ]; then
+              uv run --quiet --frozen delivery notify \
+                  --state "pr/docs/plans/$KEY/run/state.json" --broadcast \
+                  "Preview of PR #$PR ($KEY) up at $origin — sign in as ada@collabhub.dev with password \`$password\`"
+          fi
+
+      - name: Hold for the review
+        id: hold
+        run: |
+          set -euo pipefail
+          # Just under the job's six hours, leaving time to take it down.
+          deadline=$(( $(date +%s) + 345 * 60 ))
+          reason="timed out"
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+              sleep 60
+              pr="$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json state,reviewDecision)" || continue
+              if [ "$(jq -r .state <<<"$pr")" != OPEN ]; then reason="the PR was closed"; break; fi
+              if [ "$(jq -r .reviewDecision <<<"$pr")" = APPROVED ]; then reason="the PR was approved"; break; fi
+          done
+          echo "Taking the preview down: $reason"
+          echo "reason=$reason" >>"$GITHUB_OUTPUT"
+
+      - name: Take it down
+        if: always()
+        env:
+          REASON: ${{ steps.hold.outputs.reason }}
+          DEPLOYED: ${{ steps.deploy.outcome }}
+        run: |
+          (cd pr && scripts/deploy.sh preview down) || true
+          if [ "$DEPLOYED" = failure ]; then
+              gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f context=preview -f state=failure \
+                  -f description="the deploy failed" -f target_url="$RUN_URL" >/dev/null
+          fi
+          # Cancelled by a newer preview, which owns the comment now: leave it alone.
+          [ -n "$REASON" ] || exit 0
+          gh api "repos/$GITHUB_REPOSITORY/statuses/$SHA" -f context=preview -f state=success \
+              -f description="down — $REASON" -f target_url="$RUN_URL" >/dev/null
+          id="$(gh api "repos/$GITHUB_REPOSITORY/issues/$PR/comments" --paginate \
+              --jq "[.[] | select(.body | startswith(\"$MARKER\"))][0].id // empty")"
+          [ -z "$id" ] || gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$id" \
+              -f body="$MARKER
+          **Preview down** — $REASON." >/dev/null

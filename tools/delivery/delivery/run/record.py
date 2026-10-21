@@ -21,9 +21,9 @@ def jq_round(value: float, places: int) -> str:
     return str(int(rounded)) if rounded.is_integer() else repr(rounded)
 
 
-def step_stats(transcripts: Iterable[Path]) -> str:
+def step_totals(transcripts: Iterable[Path]) -> tuple[float, int, float] | None:
     """A step's minutes, turns and cost, over every run it took — a retry and a resume each
-    leave a transcript of their own beside the result."""
+    leave a transcript of their own beside the result. None when one can't be read."""
     runs = []
     try:
         for path in transcripts:
@@ -31,10 +31,49 @@ def step_stats(transcripts: Iterable[Path]) -> str:
             # An empty transcript is a crash that printed nothing: no run to count.
             runs += [json.loads(line) for line in text.splitlines() if line.strip()]
     except (OSError, json.JSONDecodeError):
-        return "no stats"
+        return None
     minutes = sum(r.get("duration_ms") or 0 for r in runs) / 60000
     turns = sum(r.get("num_turns") or 0 for r in runs)
     cost = sum(r.get("total_cost_usd") or 0 for r in runs)
+    return minutes, turns, cost
+
+
+#: How much of a refused command the record keeps: enough to see why it was refused.
+REFUSAL_WIDTH = 160
+
+
+def step_refusals(transcripts: Iterable[Path], *, hide: str = "") -> list[str]:
+    """What a step was refused, over every run it took, one short line each — the command
+    for Bash, the tool and its path for anything else. `hide` (the preview password) is
+    masked: the record is committed. A transcript that can't be read refused nothing."""
+    refused = []
+    for path in transcripts:
+        try:
+            found = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        denials = found.get("permission_denials") if isinstance(found, dict) else None
+        for denial in denials or []:
+            given = denial.get("tool_input") or {}
+            text = str(given.get("command") or "").strip() or " ".join(
+                part for part in (denial.get("tool_name"), given.get("file_path")) if part
+            )
+            if hide:
+                text = text.replace(hide, "***")
+            first, *rest = text.splitlines() or [""]
+            if rest:
+                first += " …"
+            if len(first) > REFUSAL_WIDTH:
+                first = first[: REFUSAL_WIDTH - 2] + " …"
+            refused.append(first)
+    return refused
+
+
+def step_stats(transcripts: Iterable[Path]) -> str:
+    totals = step_totals(transcripts)
+    if totals is None:
+        return "no stats"
+    minutes, turns, cost = totals
     return f"{jq_round(minutes, 1)}m {turns} turns ${jq_round(cost, 2)}"
 
 

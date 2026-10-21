@@ -16,7 +16,7 @@
 # it — in ../caw-issue-999-loop on feature/issue-999-loop, from HEAD, and removes
 # both after every scenario. The runner commits to that branch as it would to any
 # delivery's, so the scenarios check those commits; DELIVER_PUSH=0, so nothing is
-# fetched or pushed.
+# fetched or pushed, and DELIVER_PR=0, so no PR is opened.
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -79,7 +79,7 @@ scenario() {
     printf '%s\n' "$@" >"$FAKE_SCRIPT"
     printf '%s\n' "$NAME"
     BASE_SHA="$(git -C "$ROOT" rev-parse HEAD)"
-    PATH="$WORK/bin:$PATH" DELIVER_RUN=loop DELIVER_BASE=HEAD DELIVER_RETRY_WAIT=0 DELIVER_PUSH=0 \
+    PATH="$WORK/bin:$PATH" DELIVER_RUN=loop DELIVER_BASE=HEAD DELIVER_RETRY_WAIT=0 DELIVER_PUSH=0 DELIVER_PR=0 \
         "$ROOT/scripts/deliver.sh" --backend local issue-999 >"$FAKE_LOG.out" 2>&1
     status=$?
     [ "$status" = "$expected" ] || fail "exit $status, expected $expected — $(tail -n 3 "$FAKE_LOG.out" | tr '\n' ' ')"

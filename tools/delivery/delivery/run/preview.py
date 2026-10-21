@@ -26,8 +26,10 @@ def deploy_preview(
     retry_wait: float,
     sleep: Callable[[float], None],
     log: Callable[[str], None],
+    password: str = "",
 ) -> str:
-    """Deploys the branch's preview and returns the `Preview:` line's text."""
+    """Deploys the branch's preview and returns the `Preview:` line's text. A `password`
+    is Dex's for this preview; without one it keeps the k3d values' own."""
     rel = f"{evidence}/preview-up.log"
     path = worktree / rel
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -45,7 +47,10 @@ def deploy_preview(
                 code = subprocess.run(  # noqa: S603 — the repo's own script.
                     [deploy, "preview", "up"],
                     cwd=worktree,
-                    env=agent_env(os.environ),
+                    env={
+                        **agent_env(os.environ),
+                        **({"PREVIEW_PASSWORD": password} if password else {}),
+                    },
                     stdout=out,
                     stderr=subprocess.STDOUT,
                     check=False,

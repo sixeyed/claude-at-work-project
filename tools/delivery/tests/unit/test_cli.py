@@ -169,3 +169,78 @@ def test_check_fails_with_1_when_the_backend_is_not_usable(capsys, tmp_path):
 
     assert code == 1
     assert "docs/issues" in err
+
+
+# --- notify ----------------------------------------------------------------
+
+SLACK = {"SLACK_BOT_TOKEN": "xoxb-1", "SLACK_CHANNEL": "C0DELIVER"}
+
+
+class FakeSlack:
+    def __init__(self, ok: bool = True) -> None:
+        self.ok = ok
+        self.payloads: list[dict] = []
+
+    def __call__(self, url, headers, payload):
+        self.payloads.append(payload)
+        return {"ok": True, "ts": "2.2"} if self.ok else {"ok": False, "error": "not_in_channel"}
+
+
+def notify(capsys, root, *argv, env=SLACK, slack=None):
+    code = main(["notify", *argv], env=env, root=root, slack_transport=slack)
+    out, err = capsys.readouterr()
+    return code, out, err
+
+
+def test_notify_replies_in_the_thread_its_state_names(capsys, tmp_path):
+    state = tmp_path / "state.json"
+    state.write_text(json.dumps({"stage": "done", "slack_thread": "1.1"}))
+    slack = FakeSlack()
+
+    code, _, _ = notify(
+        capsys, tmp_path, "--state", str(state), "--broadcast", "Preview up", slack=slack
+    )
+
+    assert code == 0
+    assert slack.payloads == [
+        {
+            "channel": "C0DELIVER",
+            "text": "Preview up",
+            "thread_ts": "1.1",
+            "reply_broadcast": True,
+            "unfurl_links": False,
+            "unfurl_media": False,
+        }
+    ]
+
+
+@pytest.mark.parametrize("state", ['{"stage": "done"}', None])
+def test_notify_with_no_thread_posts_to_the_channel(capsys, tmp_path, state):
+    path = tmp_path / "state.json"
+    if state is not None:
+        path.write_text(state)
+    slack = FakeSlack()
+
+    code, _, _ = notify(capsys, tmp_path, "--state", str(path), "--broadcast", "Up", slack=slack)
+
+    assert code == 0
+    assert slack.payloads == [
+        {"channel": "C0DELIVER", "text": "Up", "unfurl_links": False, "unfurl_media": False}
+    ]
+
+
+def test_notify_without_slack_posts_nothing_and_says_so(capsys, tmp_path):
+    slack = FakeSlack()
+
+    code, _, err = notify(capsys, tmp_path, "Up", env={}, slack=slack)
+
+    assert code == 0
+    assert slack.payloads == []
+    assert "Slack" in err
+
+
+def test_a_failed_notify_is_reported_and_still_exits_0(capsys, tmp_path):
+    code, _, err = notify(capsys, tmp_path, "Up", slack=FakeSlack(ok=False))
+
+    assert code == 0
+    assert "not_in_channel" in err

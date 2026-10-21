@@ -274,7 +274,15 @@ cmd_preview_up() {
     APP_ORIGIN="$(cat "$PREVIEW_STATE/app.url")"
     OBJECT_STORE_ORIGIN="$(cat "$PREVIEW_STATE/s3.url")"
     resolve_origin
+    # PREVIEW_PASSWORD's hash goes to the deps chart only: helm_args is empty for a
+    # preview, which refuses Helm arguments of its own.
+    local password_args line
+    password_args="$(preview_password_args)"
+    while IFS= read -r line; do
+        [ -z "$line" ] || helm_args+=("$line")
+    done <<<"$password_args"
     cmd_infra
+    helm_args=()
     cmd_app
 
     log "preview $NAMESPACE is up"

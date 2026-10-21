@@ -4,7 +4,13 @@
 # is lost with the job. Run it again with the same key to resume: after answering
 # docs/plans/<key>/needs-human.md on the branch, or after a run that ran out of time.
 #
-# Plans: docs/plans/ch09/07-delivery-actions-handoff.md and 08-delivery-actions-plan.md.
+# An accepted delivery ends in a PR into main, its body the proof, and dispatches
+# preview.yml for it — a PR this workflow opens with GITHUB_TOKEN starts no workflow
+# itself. With the SLACK_BOT_TOKEN and SLACK_CHANNEL secrets the run reports to Slack, one
+# thread per delivery, and each preview gets a random password posted there.
+#
+# Plans: docs/plans/ch09/07-delivery-actions-handoff.md, 08-delivery-actions-plan.md and
+# 10-delivery-pr-plan.md.
 name: deliver
 run-name: deliver ${{ inputs.key }}${{ inputs.stub && ' (stub)' || '' }}${{ inputs.restart && ' (restart)' || '' }}
 
@@ -38,6 +44,9 @@ concurrency:
 permissions:
   contents: write
   issues: read
+  pull-requests: write
+  # To dispatch preview.yml for the PR.
+  actions: write
 
 env:
   CLAUDE_VERSION: 2.1.301
@@ -85,15 +94,15 @@ jobs:
               /opt/hostedtoolcache/CodeQL
           df -h / >"$RUNNER_TEMP/df-before.txt"
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Every branch and all history: the runner fetches, tracks and fast-forwards
           # the delivery's branch, and takes merge bases against main.
           fetch-depth: 0
 
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10.2.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -113,6 +122,9 @@ jobs:
               "https://github.com/cloudflare/cloudflared/releases/download/$CLOUDFLARED_VERSION/cloudflared-linux-amd64"
           sudo chmod +x /usr/local/bin/cloudflared
 
+          # A preview's own password is bcrypted for Dex with htpasswd.
+          command -v htpasswd >/dev/null || sudo apt-get install -y -qq apache2-utils
+
           # The security hook skips gitleaks when it is missing: install it, so a run
           # here checks what a run on a laptop does.
           curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS_VERSION/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
@@ -127,6 +139,7 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/stub"
           cp .claude/delivery/stub-claude "$RUNNER_TEMP/stub/claude"
+          cp .claude/delivery/stub-screenshot.png "$RUNNER_TEMP/stub/"
           echo "$RUNNER_TEMP/stub" >>"$GITHUB_PATH"
 
       - name: Commit as github-actions[bot]
@@ -148,6 +161,9 @@ jobs:
           RESTART: ${{ inputs.restart }}
           API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The runner keeps these to itself: no agent is given them.
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
         run: |
           # Only the secret that is set: claude reads an empty one as set.
           [ -z "$API_KEY" ] || export ANTHROPIC_API_KEY="$API_KEY"
@@ -175,7 +191,17 @@ jobs:
           plans="$WORKTREE/docs/plans/$KEY"
           {
               case "$STATUS" in
-                  0) echo "## ✅ $KEY is ready for review" ;;
+                  0) echo "## ✅ $KEY is ready for review"
+                     publish="$WORKTREE/build/delivery/publish.json"
+                     if [ -s "$publish" ] && jq -e .url "$publish" >/dev/null; then
+                         echo
+                         echo "PR: $(jq -r .url "$publish")"
+                     elif [ -s "$publish" ]; then
+                         echo
+                         echo "⚠️ Accepted, but the PR could not be opened: $(jq -r .error "$publish")"
+                         echo
+                         echo "Run this workflow again with the same key to open it."
+                     fi ;;
                   2) echo "## ⚠️ $KEY needs a human"
                      echo
                      echo "Answer the questions in \`docs/plans/$KEY/needs-human.md\` on [\`$branch\`]($REPO_URL/tree/$branch), then run this workflow again with the same key." ;;
@@ -227,7 +253,7 @@ jobs:
               git -C "$WORKTREE" bundle create "$RUNNER_TEMP/$KEY.bundle" "feature/$KEY" ^origin/main || true
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ${{ inputs.key }}-branch
@@ -235,7 +261,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: ${{ inputs.key }}-acceptance
@@ -245,7 +271,7 @@ jobs:
 
       # Each stage's full transcript holds every tool call and its output, and Actions
       # masks secrets in logs, not in files. A public repo's artifacts are anyone's.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && github.event.repository.private
         with:
           name: ${{ inputs.key }}-transcripts

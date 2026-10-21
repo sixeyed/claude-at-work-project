@@ -7,10 +7,14 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from delivery.errors import BackendError
-from delivery.model import Issue
+from delivery.model import Issue, PullRequest
 
 ISSUES = Path("docs/issues")
 KEY = re.compile(r"issue-([0-9]+)")
+#: A local issue's branch goes to the forge, where a person opens its PR.
+NO_PULL_REQUESTS = (
+    "the local backend opens no pull request — open it by hand from the proof, with `tea pr create`"
+)
 #: `# Issue 8 — Better mobile experience`: the heading every local issue opens with.
 HEADING = re.compile(r"^# Issue [0-9]+ — (.+)$", re.MULTILINE)
 
@@ -18,6 +22,8 @@ HEADING = re.compile(r"^# Issue [0-9]+ — (.+)$", re.MULTILINE)
 class LocalBackend:
     """Issues as files in the repo. Keys are `issue-N`, so every plan, branch and
     worktree made before backends existed keeps its name."""
+
+    opens_pull_requests = False
 
     def __init__(self, root: Path) -> None:
         self.root = root
@@ -55,6 +61,31 @@ class LocalBackend:
 
     def ensure_label(self, name: str, description: str, color: str) -> None:
         """Nothing to do: local issues carry no labels."""
+
+    def find_pull_request(self, head: str) -> PullRequest | None:
+        raise BackendError(NO_PULL_REQUESTS)
+
+    def open_pull_request(self, head: str, base: str, title: str, body: str) -> PullRequest:
+        raise BackendError(NO_PULL_REQUESTS)
+
+    def update_pull_request(
+        self,
+        number: int,
+        *,
+        title: str | None = None,
+        body: str | None = None,
+        draft: bool | None = None,
+    ) -> PullRequest:
+        raise BackendError(NO_PULL_REQUESTS)
+
+    def comment_on_pull_request(self, number: int, body: str) -> None:
+        raise BackendError(NO_PULL_REQUESTS)
+
+    def start_preview(self, number: int) -> None:
+        raise BackendError(NO_PULL_REQUESTS)
+
+    def blob_url(self, sha: str, path: str) -> str:
+        raise BackendError(NO_PULL_REQUESTS)
 
     def _write(self, number: int, title: str, body: str) -> Issue:
         body = body.strip("\n") + "\n"

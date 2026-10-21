@@ -105,9 +105,13 @@ takes one tool call a turn takes three times as long as it needs to.
   it into a command you aren't allowed. So does the worktree's absolute path in place of
   a relative one — `npm --prefix /Users/…/caw-<key>/src/frontend test` matches no
   rule; `npm --prefix src/frontend test` does — and so does dropping the `--prefix`. The
-  refusal names no rule, so it reads like a lost permission; it never is. A file change
-  is Edit or Write, never a `python3` or `sed` script in Bash. A pipe into
-  `tail` or `grep` is fine. A writer
+  refusal names no rule, so it reads like a lost permission; it never is — run the
+  command again bare, exactly as *Running tests* lists it. Only if that is refused too
+  is something broken, and then you stop for a human: a review or a verdict that should
+  rest on a run never rests on reading in its place. A file change is Edit or Write, never a `python3` or
+  `sed` script in Bash. A plain pipe into `tail`, `head`, `grep` or `sed -n` is fine, but
+  a `$` anywhere in the command — `echo $?`, `$(…)`, even a regex such as `grep -v "^$"`
+  — or a `;` makes it one you aren't allowed. A writer
   takes a file out of the tree with `rm <path from the worktree root>`, one path a call.
 - **Installed dependencies start out missing.** A new worktree has no `node_modules/` or
   `.venv/` of its own. A stage that only reads finds the primary checkout with

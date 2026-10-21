@@ -13,9 +13,13 @@ parsing that page server-side.
 
 from __future__ import annotations
 
+import os
+
 from playwright.sync_api import Page, expect
 
-PASSWORD = "collabhub"
+# Every seeded user's password. A delivery's preview on a public tunnel has its own, which the
+# smoke packs are given as SMOKE_PASSWORD; the Compose stacks and k3d keep `collabhub`.
+PASSWORD = os.environ.get("SMOKE_PASSWORD") or "collabhub"
 
 
 class SignInPage:

@@ -36,6 +36,9 @@ class State:
     open_sendbacks: dict[str, str] = field(default_factory=dict)
     #: A reviewer's review, written as it sent work back, waiting for its own writer.
     pending: dict[str, str] = field(default_factory=dict)
+    #: The delivery's Slack thread — its parent message's `ts` — so a resumed run, on any
+    #: machine, replies in it. Empty without Slack.
+    slack_thread: str = ""
 
     @classmethod
     def fresh(cls, max_rounds: int) -> State:

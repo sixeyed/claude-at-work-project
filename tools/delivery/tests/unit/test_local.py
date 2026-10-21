@@ -113,3 +113,26 @@ def test_ensure_label_does_nothing_locally(issues_root):
     LocalBackend(issues_root).ensure_label("delivery", "Written for delivery", "0e8a16")
 
     assert sorted((issues_root / "docs/issues").iterdir()) == before
+
+
+# --- pull requests ---------------------------------------------------------
+
+
+def test_it_opens_no_pull_requests(issues_root):
+    assert LocalBackend(issues_root).opens_pull_requests is False
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda b: b.find_pull_request("feature/issue-8"),
+        lambda b: b.open_pull_request("feature/issue-8", "main", "T", "B"),
+        lambda b: b.update_pull_request(1, draft=True),
+        lambda b: b.comment_on_pull_request(1, "B"),
+        lambda b: b.start_preview(1),
+        lambda b: b.blob_url("abc", "x.png"),
+    ],
+)
+def test_every_pull_request_call_says_to_open_one_by_hand(issues_root, call):
+    with pytest.raises(BackendError, match="tea pr create"):
+        call(LocalBackend(issues_root))

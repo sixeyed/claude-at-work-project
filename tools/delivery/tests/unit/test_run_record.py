@@ -6,7 +6,13 @@ from __future__ import annotations
 import json
 
 from delivery.run.machine import HumanStop
-from delivery.run.record import needs_human_entry, ran_with, step_stats, touched_between
+from delivery.run.record import (
+    needs_human_entry,
+    ran_with,
+    step_refusals,
+    step_stats,
+    touched_between,
+)
 
 
 def transcript(path, minutes=1.0, turns=3, cost=0.5):
@@ -43,6 +49,48 @@ def test_a_transcript_that_is_not_json_means_no_stats(tmp_path):
     bad.write_text("{oops")
 
     assert step_stats([bad]) == "no stats"
+
+
+def refusing(path, *commands, tools=()):
+    denials = [
+        {"tool_name": "Bash", "tool_use_id": "t", "tool_input": {"command": c}} for c in commands
+    ] + [{"tool_name": t, "tool_use_id": "t", "tool_input": {"file_path": "x.md"}} for t in tools]
+    path.write_text(json.dumps({"num_turns": 3, "permission_denials": denials}))
+    return path
+
+
+def test_a_steps_refusals_are_every_one_in_every_run_it_took(tmp_path):
+    files = [
+        refusing(tmp_path / "08-test-reviewer.out-of-turns.json", 'npm test | grep -v "^$"'),
+        refusing(tmp_path / "08-test-reviewer.json", "git log; echo $?", tools=("WebFetch",)),
+    ]
+
+    assert step_refusals(files) == ['npm test | grep -v "^$"', "git log; echo $?", "WebFetch x.md"]
+
+
+def test_a_refused_command_is_kept_to_one_short_line(tmp_path):
+    files = [refusing(tmp_path / "05-x.json", "cat >> a.md <<'EOF'\nbody\nEOF", "ls " + "a" * 300)]
+
+    first, second = step_refusals(files)
+
+    assert first == "cat >> a.md <<'EOF' …"
+    assert len(second) <= 160
+    assert second.endswith("…")
+
+
+def test_the_preview_password_never_reaches_the_record(tmp_path):
+    files = [refusing(tmp_path / "14-x.json", "curl -u ada:s3cret-pw https://p")]
+
+    assert step_refusals(files, hide="s3cret-pw") == ["curl -u ada:*** https://p"]
+
+
+def test_a_transcript_that_cannot_be_read_refused_nothing(tmp_path):
+    bad = tmp_path / "01-x.json"
+    bad.write_text("{oops")
+    empty = tmp_path / "01-x.failed.json"
+    empty.write_text("")
+
+    assert step_refusals([bad, empty]) == []
 
 
 def test_ran_with_names_the_agents_own_model_when_none_is_passed(tmp_path):

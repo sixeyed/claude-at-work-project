@@ -37,81 +37,62 @@ runner and the workflow do now.
 
 ## Decided
 
+Decisions 1–4 were the user's going in; 5–27 were settled in a grilling session on 2026-10-19.
+
 | # | Decision |
 |---|---|
 | 1 | **The approval opens the PR.** An `approved` acceptance pass ends with a PR from `feature/<key>` into `main`, opened in the same run, after the `accepted` commit is pushed. |
 | 2 | **The acceptance-reviewer writes it.** The PR's title and body are the acceptance-reviewer's, built from its proof, with the proof's evidence attached and the run's artifacts linked. |
-| 3 | **Screenshots live in the branch's history for as long as the PR does.** The runner commits the screenshots the proof cites under `docs/plans/<key>/proof/`, then deletes them in the very next commit, and pushes both. The PR body links each one at the commit that added it (`…/blob/<sha>/…?raw=true`), so they show inline. The PR's diff has no images. A squash merge brings none into `main`; a plain merge keeps them in history but not in the tree. Once the branch is deleted, those commits go with it. No evidence branch, nothing to clean up. |
+| 3 | **Screenshots live in the branch's history for as long as the PR does.** The runner commits the screenshots the proof cites under `docs/plans/<key>/proof/`, then deletes them in the very next commit, and pushes both. The PR body links each one at the commit that added it (`…/blob/<sha>/…?raw=true`), so they show inline. The PR's diff has no images. A squash merge brings none into `main`; a plain or rebase merge would put both commits in `main`'s history, so the repo is squash-only (decision 17). Deleting the branch doesn't delete the commits: GitHub keeps every PR's head at `refs/pull/<n>/head`, which no clone fetches by default, so the PR's links keep working after the branch is gone. No evidence branch, nothing to clean up. |
 | 4 | **The preview a reviewer tries runs on a hosted runner, held open for the review.** A new `.github/workflows/preview.yml` deploys the PR's branch with `scripts/deploy.sh preview up`, posts the origin to the PR, and then waits. We assume a PR is reviewed well within a hosted runner's 6 hours. The job ends when the PR is approved or closed, or just before its time limit, whichever comes first. A push to the PR starts a new preview job and cancels the old one (one concurrency group per PR, `cancel-in-progress: true`), so a closed event stops the waiting job the same way. The proof's *Try it* section points at the PR's preview, not the acceptance run's tunnel, which dies with `deliver.yml`. |
-
-## Open — put these to the user
-
-1. **Who calls `gh`.** Today no agent calls `delivery` or `gh`, or reads a URL (handoff 05's
-   three rules), and the runner, not an agent, commits and pushes (ADR). Two readings of
-   decision 2:
-   - **The agent writes, the runner opens** (recommended): the acceptance-reviewer writes
-     `docs/plans/<key>/05-pr.md` (title line, then body) beside its proof, and the runner
-     opens or updates the PR through the backend after the push. The agent keeps no
-     network tools, the write check keeps holding it to its files, and the same file
-     opens a forge PR. This is handoff 03 item 1's recommendation.
-   - **The agent opens it**: `Bash(gh pr create --body-file *)` in its tools. Simpler on
-     GitHub, but the agent needs `GH_TOKEN`, knows the backend, and a locally run delivery
-     against forge needs `tea` in its tools too.
-2. **How the delivery's own PR starts its preview.** GitHub starts no workflow for an event
-   caused by `GITHUB_TOKEN`, so it can't recurse: a PR that `deliver.yml` opens with its
-   own token fires no `pull_request` workflow. A person's push to the PR still fires one. Two
-   ways around it:
-   - **`deliver.yml` dispatches the preview itself** (recommended): `gh workflow run
-     preview.yml -f pr=<n>` right after it opens the PR. `workflow_dispatch` is the one event
-     `GITHUB_TOKEN` may start. No new secret is needed, and `preview.yml` takes both
-     triggers.
-   - **Open the PR with a GitHub App token**, so `pull_request` fires as it does for a person.
-     Cleaner events, but it means an App and its private key in the repo's secrets.
-3. **The proof's screenshot links.** Today they are relative (`../../../build/acceptance/…`).
-   With decision 3, either the agent names the screenshots it cites and the runner rewrites
-   the links in the PR body to the commit's raw URLs (recommended: the agent never knows a
-   SHA or a URL), or the proof links `proof/<file>` and the body is lifted as is.
-4. **When the PR opens, and as what.** Only at `approved`, as a ready PR (recommended), or a draft
-   PR from the first checkpoint that each stage updates, ready at approval. A draft
-   from the start shows progress on GitHub, but it means a PR body for every stage to keep up.
-5. **A rerun with a PR already open.** Update its title and body (recommended), never open a
-   second one; a send-back after acceptance can't happen today, because accepted ends the run.
-6. **The body's shape.** Lift the proof whole, with the links rewritten and `## The run` collapsed in
-   `<details>` (handoff 03 item 4), or a shorter body that links the proof on the branch.
-   `Closes #N` for a `gh-` key, so the merge closes the issue.
-7. **Forge.** `issue-` keys deliver locally and push to `forge` (Forgejo). Does the PR
-   step open forge PRs too, through `tea` in a `local` adaptor, or is it GitHub-only for now
-   with the body file left for a person?
-8. **Stage labels and `needs_human` on the issue** (handoff 05, open items 1–2) are the same
-   kind of work — the runner telling GitHub where a run is. They could come in this slice,
-   or stay out of it.
+| 5 | **The agent writes, the runner opens.** No agent calls `gh` or knows the backend. The runner opens or updates the PR through new `Backend` methods — find by head branch, open, update — after the push. `github.py` uses `gh pr`; `local.py` does nothing but say so. |
+| 6 | **The proof is the PR body; there is no `05-pr.md`.** The runner builds the body from `04-proof.md` mechanically: screenshot links rewritten to the commit that holds them, `## The run` collapsed in `<details>`, `Closes #N` for the issue and a one-line "squash merge this PR" note appended. Every word of it is still the agent's. |
+| 7 | **Screenshot links.** The agent never sees a SHA or a URL. The runner copies exactly the screenshots the proof cites into `docs/plans/<key>/proof/`, commits them, removes them in the next commit, and rewrites each link in the PR body to the raw URL at the commit that added them. A cited file that doesn't exist fails the PR step, never silently drops. The screenshot commits are made only when a PR will be opened. |
+| 8 | **The delivery's PR starts its preview by dispatch.** A PR, push or edit made with `GITHUB_TOKEN` fires no `pull_request` workflow, so the runner runs `preview.yml` by `workflow_dispatch` (`-f pr=<n>`) after every change it makes to the PR. `preview.yml` takes both triggers and one concurrency group per PR, `preview-<n>`. No GitHub App. |
+| 9 | **Only delivery PRs get a preview.** `preview.yml` deploys a PR only when its head is in this repo (never a fork) and its branch is `feature/gh-*`, and skips a draft. The public repo's forks can't spend our runners or put their code on a public tunnel. |
+| 10 | **The preview password is random only when Slack can deliver it.** `ch09` is public, so its run logs, job summaries and artifacts are public too: a password printed there is no secret. With `SLACK_BOT_TOKEN` and `SLACK_CHANNEL` set, each preview gets a random password, posted to the delivery's Slack thread and nowhere else; without them — any laptop run, or Actions with no Slack secrets — it stays `collabhub`. A laptop run never generates one. The password reaches Dex as the deps chart's existing `dex.passwordHash` value, bcrypted by `deploy.sh preview up` from `PREVIEW_PASSWORD`. It is never written to disk, the state, the proof or the PR. |
+| 11 | **Both previews use it.** The acceptance run's own preview gets the random password too; the agent's environment carries it as `SMOKE_PASSWORD`, which the smoke packs read (default `collabhub`), and the runner posts it to the run's thread with the origin. |
+| 12 | **The PR opens only at `approved`, as a ready PR.** No draft from the first checkpoint. |
+| 13 | **A rerun never opens a second PR.** It finds the open PR by head branch and updates its title and body. A `--restart` with a PR open turns it back into a draft and comments that a redelivery is running; the approval marks it ready again. `preview.yml` skips drafts, so a half-built branch is never previewed. |
+| 14 | **A PR failure is not a failed delivery.** The push succeeded and the branch is accepted: the run exits 0, the job summary says ⚠️ with the error, and a rerun of the accepted key does only what the publish step still owes — the screenshot commits if missing, then the PR, then the dispatch. Each is idempotent, found from git and the backend rather than stored. `DELIVER_PR=0` turns the step off; `loop-test.sh` sets it. |
+| 15 | **The preview ends** when `reviewDecision` is `APPROVED`, when the PR is closed or merged, or at about 5¾ hours, polled every 60 s. One sticky PR comment, found by a marker and edited in place, shows the origin while it is up and *preview down — approved / closed / timed out* after. |
+| 16 | **Slack, in this slice.** The runner posts to one thread per delivery run with a bot token (`chat:write`, `chat.postMessage` and `chat.update`); the thread's `ts` is kept in `state.json`, so a resumed run, on any machine, replies in the same thread. The parent message is edited to the latest status. Each stage posts when it starts (stage, round, model) and ends (verdict, duration, cost, the agent's summary cut to ~300 characters, a link to its review file at the checkpoint); a stop, a failure, out of time and the PR opened post too, the PR one broadcast to the channel. A failed post is logged and never fails a run. The channel is a private `#deliveries`. |
+| 17 | **`ch09` is squash-only, with `delete_branch_on_merge` on** — the condition decision 3 depends on. A person changes the setting. |
+| 18 | **`preview.yml` posts in the delivery's thread**, the `ts` read from `docs/plans/<key>/run/state.json` on the PR's branch, broadcast to the channel; with no `ts`, a new top-level message. |
+| 19 | **Reviewer findings by severity stay out of the result schema.** A stage's Slack message carries its summary; reviewers lead their summaries with the blocking findings. |
+| 20 | **Forge stays manual.** GitHub only; the `local` backend opens no PR. |
+| 21 | **Stage labels and `needs_human` on the issue stay out** — handoff 05's open items 1–2 carry over. |
+| 22 | **The Node 24 action majors** (`checkout`, `setup-node`, `upload-artifact`, `setup-uv`) come in this slice; `preview.yml` starts on them. |
+| 23 | **Two ADRs:** *Delivery opens its PR, with its evidence in the branch's history* (decisions 1–7, 12–14, 17, the `refs/pull` correction) and *Delivery reports to Slack, which carries the preview password* (10, 11, 16, 18). |
 
 ## What it will need, roughly
 
-1. **Backend, test first:** `open_pull_request` / `update_pull_request` (and `find` by head
-   branch) on the `Backend` protocol; `github.py` through `gh pr create|edit|list --json`;
-   `local.py` a no-op, or `tea` (open item 7). Unit tests against a fake runner, as the
-   existing adaptor tests do.
-2. **Runner:** after the `accepted` push, open or update the PR from the agent's file;
-   a PR failure after a good push is reported but isn't a failed delivery. `DELIVER_PR=0` to
-   turn it off; `loop-test.sh` sets it, as it sets `DELIVER_PUSH=0`.
-3. **Screenshots (decision 3):** the runner's add-then-remove commits after the `accepted`
-   one, and the links rewritten to them in the PR body. Test it against a bare repo, as the
-   checkpoint tests do: the PR's net diff has no images, and the linked SHA holds each one.
-4. **The acceptance-reviewer:** the PR file (or tool), the screenshots it cites, its write scope
-   in `rules.py` and the fixture together, and the stub's approved pass writing the file.
-5. **`deliver.yml`:** `pull-requests: write` (and `actions: write` to dispatch the preview); the repo
-   setting *Allow GitHub Actions to create and approve pull requests* on `ch09`; the PR URL in the
-   job summary.
-6. **`preview.yml` (decision 4):** the same setup as `deliver.yml`, minus `claude`. It runs
-   `preview up`, comments the origin on the PR, polls the PR's review state and stops when
-   it is approved or closed, or at about 5¾ hours, then runs `preview down`. Concurrency is
-   per PR, so a push replaces the preview. A stub delivery's PR is enough to prove it.
-7. **Record:** CLAUDE.md's *Delivery workflow* paragraph ("a tested feature ready for
-   review" becomes a PR); the `delivery.run` docstring; an ADR for the PR step and where
-   evidence lives.
-8. **Proof:** a stub dispatch on `ch09` that opens a PR, whose preview comes up and posts its origin.
-   A second dispatch updates the PR. Closing the PR takes the preview down. Then one real run.
+1. **Backend, test first:** `find_pull_request(head)`, `open_pull_request`, `update_pull_request`
+   (title, body, draft or ready), `comment_on_pull_request`, `start_preview(pr)` and `blob_url(sha, path)`
+   on the `Backend` protocol; `github.py` through `gh pr …`, `gh workflow run` and the repo URL;
+   `local.py` does nothing and says why. Unit tests against the fake `gh`, as the existing adaptor
+   tests do.
+2. **The publish step, pure first:** the screenshots a proof cites, the PR body from the proof, the
+   title. Then the runner: after the `accepted` push, the screenshot commits, the PR, the dispatch;
+   on a rerun of a done delivery, whatever of those is owed; on `--restart`, the draft.
+3. **Slack:** a notifier with a fake transport under test, the message shapes as pure functions, the
+   thread `ts` in the state, and a `delivery notify` command `preview.yml` posts through.
+4. **The password:** `deploy.sh preview up` takes `PREVIEW_PASSWORD`; the smoke packs read
+   `SMOKE_PASSWORD`; the runner makes one only when Slack is configured.
+5. **The acceptance-reviewer:** *Try it* points at the PR's preview comment and the preview
+   password; nothing about URLs or SHAs.
+6. **Workflows:** `deliver.yml` gets `pull-requests: write`, `actions: write`, the Slack secrets, the
+   PR's URL or error in its summary and the Node 24 majors; `preview.yml` as decisions 4, 8, 9, 15, 18.
+7. **Record:** CLAUDE.md's *Delivery workflow* paragraph, the `delivery.run` docstring,
+   `.env.example`, two ADRs.
+8. **Proof:** a stub dispatch on `ch09` that opens a PR, whose preview comes up, posts its origin to
+   the PR and its password to Slack; a second dispatch updates the PR; closing the PR takes the
+   preview down. Then one real run.
+
+**For a person:** the Slack app and its two secrets on `ch09`; *Allow GitHub Actions to create and
+approve pull requests* on `ch09`; squash-only and `delete_branch_on_merge` on `ch09`.
+
+The plan is `10-delivery-pr-plan.md`.
 
 ## Carried over
 

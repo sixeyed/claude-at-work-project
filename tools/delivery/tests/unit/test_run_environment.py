@@ -25,3 +25,11 @@ def test_an_environment_without_one_is_unchanged():
     env = {"PATH": "/usr/bin", "DELIVER_MODEL": "haiku"}
 
     assert agent_env(env) == env
+
+
+def test_the_slack_token_stays_with_the_runner():
+    # The runner posts; no agent or script needs Slack, and a token in an agent's
+    # environment is one a tool call can print.
+    env = {"PATH": "/usr/bin", "SLACK_BOT_TOKEN": "xoxb-1", "SLACK_CHANNEL": "C0DELIVER"}
+
+    assert agent_env(env) == {"PATH": "/usr/bin"}

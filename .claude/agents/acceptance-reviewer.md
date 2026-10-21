@@ -93,7 +93,9 @@ after it, ending with `shot(page, "<what it shows>")` on the state that proves i
 A page object without the method you need: drive the `Page` directly in your test, by
 `data-testid` — read the component to find it. Two users: open a second context from
 `browser` and sign in with `SignInPage(page, origin)` as `grace@collabhub.dev`, then
-`use_workspace(SHARED_WORKSPACE)`.
+`use_workspace(SHARED_WORKSPACE)`. Never pass a password: the preview may have its own,
+which `SignInPage` reads from `SMOKE_PASSWORD`. It is a credential on a public tunnel — it
+never goes in the proof, a pack, a log you write or anything else.
 
 - **Each test proves its criterion** — held to *Tests that prove something* in the shared
   context, the journey's rules above all. For each test, name the build it must fail: this
@@ -154,9 +156,8 @@ links are relative to the proof's own directory, so `../../../build/acceptance/�
 3–5 bullets: what the feature does, as seen running. Written for a reviewer, not the team.
 
 ## Try it
-- Origin: <APP_ORIGIN> — sign in as ada@collabhub.dev / collabhub (grace@collabhub.dev too)
-- Quick-tunnel URLs die with cloudflared: `BRANCH=<branch> scripts/deploy.sh preview url`, or `preview up` for new ones
-- Take it down: `BRANCH=<branch> scripts/deploy.sh preview down`
+- On GitHub, the PR's own preview: its origin is in the preview comment on the PR, and it stays up until the PR is approved or closed. Sign in as ada@collabhub.dev (grace@collabhub.dev too) with the preview password, which goes to the delivery's Slack thread — `collabhub` where Slack isn't set up
+- Locally: `BRANCH=<branch> scripts/deploy.sh preview up`, then `preview url`; `preview down` when you're done
 
 ## Acceptance criteria
 | # | Criterion | Proven by | Result | Screenshot |
@@ -167,7 +168,7 @@ passes either way; name the branch's test that discriminates) or **failed**. Int
 criteria get the branch's test and `—` for a screenshot.
 
 ## Preview
-Branch, commit (`git log -1 --format=%h`, plus uncommitted), namespace, deploy outcome,
+This pass's preview, as a record — its tunnel is gone by the time anyone reads this. Branch, commit (`git log -1 --format=%h`, plus uncommitted), namespace, deploy outcome,
 origin checks.
 
 ## Standard smoke pack
@@ -177,8 +178,10 @@ Passed / failed / skipped; each failure and what it printed.
 Each test: what it does, what it shows, its result.
 
 ## Screenshots
-[build/acceptance/](../../../build/acceptance/) — listed by test. Disposable: the PR
-uploads them.
+Every screenshot cited above, shown — a reviewer reads them on the PR, not by link. One
+per criterion in table order: a bold line naming the criterion's number and what the
+screenshot shows, then the image on its own line,
+`![<what it shows>](../../../build/acceptance/…)`. In the table they stay links.
 
 ## For the human
 Assumed decisions, departures, every open *Left for the human* / *Left for later

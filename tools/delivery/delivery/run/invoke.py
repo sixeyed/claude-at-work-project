@@ -58,11 +58,17 @@ MISSING = (
 MISSING_TURNS = 20
 
 
+#: What no agent or script the runner starts is given.
+RUNNER_ONLY = frozenset({"SLACK_BOT_TOKEN", "SLACK_CHANNEL"})
+
+
 def agent_env(env: Mapping[str, str]) -> dict[str, str]:
     """The environment an agent or the deploy script runs in: the caller's, minus the
     virtualenv `uv run` started this runner in. That one is the primary checkout's — its
     editable installs are main's code, not the branch's — and the worktree has its own.
-    Only an active virtualenv's own `bin` comes off PATH, never anything else."""
+    Only an active virtualenv's own `bin` comes off PATH, never anything else. Slack stays
+    with the runner, which does all the posting: a token an agent holds, a tool can print."""
+    env = {k: v for k, v in env.items() if k not in RUNNER_ONLY}
     venv = env.get("VIRTUAL_ENV")
     if not venv:
         return dict(env)

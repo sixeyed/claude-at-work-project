@@ -190,3 +190,16 @@ preview_stop_tunnels() {
     done
     return 0
 }
+
+# The Helm arguments that give a preview's Dex its own password: PREVIEW_PASSWORD, bcrypted,
+# as the deps chart's dex.passwordHash, one argument a line. Nothing without it — the k3d
+# values' shared `collabhub` stands. The password goes to htpasswd on stdin, never in argv,
+# where `ps` would show it. (Handoff 09, decision 10: random only when Slack can carry it.)
+preview_password_args() {
+    [ -n "${PREVIEW_PASSWORD:-}" ] || return 0
+    require_cmd htpasswd
+    local hash
+    hash="$(printf '%s\n' "$PREVIEW_PASSWORD" | htpasswd -niBC 10 "" | tr -d ':\n')"
+    [ -n "$hash" ] || die "htpasswd gave no hash for PREVIEW_PASSWORD"
+    printf '%s\n' --set-string "dex.passwordHash=$hash"
+}

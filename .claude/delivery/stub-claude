@@ -65,6 +65,14 @@ case "$verdict" in
         f="$(field 'Write your review to')"
         [ -n "$f" ] || f="$(field Proof)"
         [ -z "$f" ] || leave "$f"
+        # The workflow's stub: an approving proof cites a screenshot, as a real one does, so
+        # a stubbed run proves the screenshot commits and the PR's inline image.
+        if [ -z "${FAKE_SCRIPT:-}" ] && [ "$f" = "$(field Proof)" ] && [ -n "$f" ]; then
+            evidence="$(field Evidence)"
+            mkdir -p "${evidence}stub"
+            cp "$(dirname "$0")/stub-screenshot.png" "${evidence}stub/screenshot.png"
+            printf '\n![the stub'"'"'s screenshot](../../../%sstub/screenshot.png)\n' "$evidence" >>"$f"
+        fi
         ;;
     approved_bare) ;;
     stray) leave src/stray.txt && leave "$(field Proof)" ;;

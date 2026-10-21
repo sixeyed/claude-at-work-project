@@ -7,7 +7,7 @@ import json
 import pytest
 from delivery.errors import BackendError
 from delivery.github import BODY_LIMIT, GitHubBackend
-from delivery.model import Issue
+from delivery.model import Issue, PullRequest
 
 REPO_URL = "https://github.com/sixeyed/claude-at-work-project"
 REPO = "github.com/sixeyed/claude-at-work-project"
@@ -187,3 +187,106 @@ def test_ensure_label_creates_or_updates_it(backend, gh):
         "0e8a16",
         "--force",
     ]
+
+
+# --- pull requests ---------------------------------------------------------
+
+
+def gh_pr(number: int = 12, draft: bool = False) -> str:
+    """`gh pr view --json number,url,isDraft` output."""
+    return json.dumps({"number": number, "url": f"{REPO_URL}/pull/{number}", "isDraft": draft})
+
+
+def test_it_opens_pull_requests(backend):
+    assert backend.opens_pull_requests is True
+
+
+def test_finding_a_pull_request_asks_for_open_ones_by_head_branch(backend, gh):
+    gh.answers["pr list"] = json.dumps(
+        [{"number": 12, "url": f"{REPO_URL}/pull/12", "isDraft": True}]
+    )
+
+    found = backend.find_pull_request("feature/gh-3")
+
+    args, _ = gh.call("pr list")
+    assert args == [
+        "gh", "pr", "list", "--repo", REPO, "--head", "feature/gh-3",
+        "--state", "open", "--json", "number,url,isDraft",
+    ]  # fmt: skip
+    assert found == PullRequest(number=12, url=f"{REPO_URL}/pull/12", draft=True)
+
+
+def test_no_open_pull_request_is_none(backend, gh):
+    gh.answers["pr list"] = "[]"
+
+    assert backend.find_pull_request("feature/gh-3") is None
+
+
+def test_a_pull_request_is_opened_with_its_body_on_stdin_and_read_back(backend, gh):
+    gh.answers["pr create"] = f"{REPO_URL}/pull/12\n"
+    gh.answers["pr view"] = gh_pr(12)
+
+    opened = backend.open_pull_request("feature/gh-3", "main", "Display names (gh-3)", "The body")
+
+    args, stdin = gh.call("pr create")
+    assert args == [
+        "gh", "pr", "create", "--repo", REPO, "--head", "feature/gh-3", "--base", "main",
+        "--title", "Display names (gh-3)", "--body-file", "-",
+    ]  # fmt: skip
+    assert stdin == "The body"
+    view, _ = gh.call("pr view")
+    assert view == ["gh", "pr", "view", "12", "--repo", REPO, "--json", "number,url,isDraft"]
+    assert opened == PullRequest(number=12, url=f"{REPO_URL}/pull/12", draft=False)
+
+
+def test_a_body_over_the_limit_is_refused_before_gh_is_asked(backend, gh):
+    with pytest.raises(BackendError, match=str(BODY_LIMIT)):
+        backend.open_pull_request("feature/gh-3", "main", "T", "x" * (BODY_LIMIT + 1))
+
+    assert gh.calls == []
+
+
+def test_updating_a_pull_request_edits_its_title_and_body(backend, gh):
+    gh.answers["pr view"] = gh_pr(12)
+
+    backend.update_pull_request(12, title="New title", body="New body")
+
+    args, stdin = gh.call("pr edit")
+    assert args == [
+        "gh", "pr", "edit", "12", "--repo", REPO, "--title", "New title", "--body-file", "-",
+    ]  # fmt: skip
+    assert stdin == "New body"
+    assert not [c for c in gh.calls if c[0][1:3] == ["pr", "ready"]]
+
+
+@pytest.mark.parametrize(("draft", "undo"), [(True, ["--undo"]), (False, [])])
+def test_a_pull_request_is_made_a_draft_or_ready(backend, gh, draft, undo):
+    gh.answers["pr view"] = gh_pr(12, draft=draft)
+
+    updated = backend.update_pull_request(12, draft=draft)
+
+    args, _ = gh.call("pr ready")
+    assert args == ["gh", "pr", "ready", "12", "--repo", REPO, *undo]
+    assert not [c for c in gh.calls if c[0][1:3] == ["pr", "edit"]]
+    assert updated.draft is draft
+
+
+def test_a_comment_goes_on_the_pull_request_by_stdin(backend, gh):
+    backend.comment_on_pull_request(12, "A redelivery is running.")
+
+    args, stdin = gh.call("pr comment")
+    assert args == ["gh", "pr", "comment", "12", "--repo", REPO, "--body-file", "-"]
+    assert stdin == "A redelivery is running."
+
+
+def test_the_preview_is_started_by_dispatching_its_workflow(backend, gh):
+    backend.start_preview(12)
+
+    args, _ = gh.call("workflow run")
+    assert args == ["gh", "workflow", "run", "preview.yml", "--repo", REPO, "-f", "pr=12"]
+
+
+def test_a_file_at_a_commit_is_linked_raw_so_an_image_shows_inline(backend):
+    url = backend.blob_url("abc123", "docs/plans/gh-3/proof/feature/sign-in.png")
+
+    assert url == f"{REPO_URL}/blob/abc123/docs/plans/gh-3/proof/feature/sign-in.png?raw=true"

@@ -1,6 +1,6 @@
-"""Take one issue to a tested feature ready for review, with the delivery agents in
-.claude/agents/ doing the work. The runner commits the branch — never an agent — and
-pushes it, so a delivery outlives the machine it ran on.
+"""Take one issue to a tested feature ready for review — on GitHub, a pull request — with the
+delivery agents in .claude/agents/ doing the work. The runner commits the branch — never an
+agent — and pushes it, so a delivery outlives the machine it ran on.
 
     scripts/deliver.sh issue-8                   start, or carry on from where it stopped
     scripts/deliver.sh issue-8 --restart         forget progress and start at plan-writer
@@ -34,6 +34,25 @@ report, a send-back file, a proof of its own — is asked for it once in the sam
 with a few turns, before the state machine fails the run over it. A sketch in build/sketch/ is removed when its stage ends:
 no stage builds from another's probe. A push the remote rejects stops the run with exit 1,
 naming both commits. DELIVER_PUSH=0 commits without fetching or pushing.
+
+An accepted delivery whose backend opens pull requests — GitHub — and whose branch is pushed
+ends in one, from feature/<key> into DELIVER_BASE. Its title is the issue's, with the key;
+its body is the proof, with `## The run` folded away and `Closes #N` added. The screenshots
+the proof cites, from build/acceptance/, are committed under docs/plans/<key>/proof/ —
+`proof screenshots` — and removed in the next commit — `proof screenshots removed` — so the
+PR's diff has none, and the body links each at the commit that holds it, where it shows
+inline. Then the PR's preview is dispatched (.github/workflows/preview.yml), which holds it
+open for the review. A rerun finds the PR by its branch and updates it, never opening a
+second; a rerun of an accepted delivery does only what this step still owes. A PR that
+can't be opened doesn't fail the delivery: the run exits 0, says why, and records it in
+build/delivery/publish.json. --restart turns an open PR back into a draft until the
+approval. DELIVER_PR=0 opens none; a local issue never gets one.
+
+With SLACK_BOT_TOKEN and SLACK_CHANNEL the run reports to Slack — one thread per delivery,
+kept in the run's state, a reply as each stage starts and ends, at a stop, a failure, out of
+time and the PR — and each preview gets a random password for Dex, posted there and nowhere
+else; the acceptance stage gets it as SMOKE_PASSWORD, no agent the Slack token. Without them nothing is
+posted and the password is the shared `collabhub`. A failed post never fails a run.
 
 A run can have a deadline, DELIVER_DEADLINE: no stage starts with less than
 DELIVER_DEADLINE_MARGIN minutes left, so a run on a hosted runner ends at a checkpoint
@@ -124,21 +143,31 @@ the agent exists.
   DELIVER_DEADLINE         epoch seconds: no stage starts after DELIVER_DEADLINE less the
                            margin. Default: none
   DELIVER_DEADLINE_MARGIN  minutes — the longest stage and a deploy. Default: 75
+  DELIVER_PR               0 opens no PR at the approval. Default: 1
+  SLACK_BOT_TOKEN          a Slack bot token (chat:write); with SLACK_CHANNEL, the run
+                           reports to Slack and previews get their own password
+  SLACK_CHANNEL            the channel's ID, C…
   DELIVER_PERMISSION_MODE  default: dontAsk — anything a stage is not allowed (rules.TOOLS)
-                           is refused, never prompted for
+                           is refused, never prompted for; each refusal is counted in its
+                           history.log line and written out in run/refused.log
 
 Exit status: 0 done · 1 error · 2 needs a human, or bad configuration · 3 paused at an
 unbuilt stage · 4 out of time. Progress (state.json), history.log — each stage's verdict,
-time, turns and cost — and the send-back snapshots are in docs/plans/<key>/run/, committed
+time, turns and cost — refused.log, and the send-back snapshots are in docs/plans/<key>/run/, committed
 with the branch; every agent's full JSON result is in build/delivery/ in the worktree,
-never committed. The proof is in docs/plans/<key>/04-proof.md, its evidence in build/acceptance/.
+never committed. The proof is in docs/plans/<key>/04-proof.md, its evidence in build/acceptance/, and what
+became of the PR in build/delivery/publish.json.
 A run the bash deliver.sh started and didn't finish can't be resumed here.
 """
 
 from __future__ import annotations
 
+import contextlib
+import dataclasses
+import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -148,7 +177,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from delivery.errors import BackendError, ConfigError, RunError
-from delivery.model import Backend
+from delivery.model import Backend, Issue
 from delivery.resolve import BackendConfig
 from delivery.run import preflight as checks
 from delivery.run.clock import out_of_time
@@ -182,8 +211,27 @@ from delivery.run.keys import (
     render_issue,
     worktree_for,
 )
-from delivery.run.machine import HumanStop, advance, has_writer, missing_outputs, pair_of
+from delivery.run.machine import (
+    HumanStop,
+    advance,
+    has_writer,
+    missing_outputs,
+    pair_of,
+    review_path,
+    sendback_path,
+    writer_output,
+)
+from delivery.run.notify import (
+    NullNotifier,
+    SlackNotifier,
+    Transport,
+    notifier_from,
+    stage_ended,
+    stage_started,
+    thread_title,
+)
 from delivery.run.preview import deploy_preview
+from delivery.run.publish import cited_screenshots, pr_body, pr_title
 from delivery.run.record import (
     content_hash,
     load_snapshot,
@@ -191,7 +239,9 @@ from delivery.run.record import (
     ran_with,
     save_snapshot,
     snapshot,
+    step_refusals,
     step_stats,
+    step_totals,
     touched_between,
 )
 from delivery.run.rules import (
@@ -233,6 +283,7 @@ def deliver(
     runs: Callable[[list[str]], bool] = checks.runs_quietly,
     sleep: Callable[[float], None] = time.sleep,
     clock: Callable[[], float] = time.time,
+    slack_transport: Transport | None = None,
 ) -> int:
     """Runs a delivery and returns its exit status. `root` is the checkout running it."""
     try:
@@ -245,6 +296,9 @@ def deliver(
             return 1
         issue = backend.get(key)
         run = Delivery.open(key, settings, root)
+        run.issue = issue
+        run.backend = backend
+        run.slack = notifier_from(settings.env, transport=slack_transport, log=log)
         source = Source(config.kind, config.url, issue.number)
         return run.go(restart, render_issue(issue), source, agent=agent, sleep=sleep, clock=clock)
     except ConfigError as e:
@@ -290,6 +344,10 @@ class Ran:
     status: str
     round: int
     summary: str
+    #: The file the stage left — its plan, report, review, send-back or proof — if any.
+    file: str = ""
+    minutes: float = 0.0
+    cost: float = 0.0
 
 
 @dataclass
@@ -306,6 +364,12 @@ class Delivery:
     #: Where checkpoints are pushed; empty when DELIVER_PUSH=0.
     remote: str = ""
     last: Ran | None = None
+    issue: Issue | None = None
+    backend: Backend | None = None
+    slack: NullNotifier | SlackNotifier = dataclasses.field(default_factory=NullNotifier)
+    #: Dex's password for this run's previews: random only when Slack can carry it to a
+    #: person (handoff 09, decision 10). Never written anywhere.
+    password: str = ""
 
     @property
     def run_dir(self) -> Path:
@@ -404,6 +468,16 @@ class Delivery:
         if self.remote:
             push(self.worktree, self.remote, self.branch)
 
+    @property
+    def publishing(self) -> bool:
+        """Whether the approval ends in a PR: the backend opens them, and the branch is pushed."""
+        return bool(
+            self.settings.pr
+            and self.remote
+            and self.backend is not None
+            and self.backend.opens_pull_requests
+        )
+
     def round_of(self, state: State, stage: str) -> int:
         return state.rounds[pair_of(stage)] if stage != "done" else 0
 
@@ -421,10 +495,11 @@ class Delivery:
     ) -> int:
         if restart:
             State.forget(self.run_dir)
+            if self.publishing:
+                self.back_to_draft()
         state = State.load(self.run_dir, self.settings.max_rounds)
         if state.status == "done":
-            log(f"{self.key} is already done — see {self.worktree}. --restart to plan it again")
-            return 0
+            return self.already_done(state)
         guard_source(self.worktree / self.paths.source, source)
         # The issue travels with its plan, as a design doc does. Fetched every run, so an
         # issue edited to answer a question reaches the agents that read it.
@@ -432,22 +507,25 @@ class Delivery:
         if state.status == "needs_human":
             log(f"Resuming at {state.stage} with the answers in {self.paths.answers}")
         state.status = "running"
+        self.open_thread(state, "running")
         state.save(self.run_dir)
+        if self.slack.enabled:
+            self.password = secrets.token_urlsafe(18)
         try:
             stopped = self.loop(state, agent, sleep, clock)
-        except PushRejectedError:
+        except PushRejectedError as e:
+            self.tell_failure(state, str(e))
             raise
         except RunError as e:
             # A stopped run's state and evidence must outlive the machine too.
             stage = state.stage
             self.commit(failed_message(self.key, stage, self.round_of(state, stage), str(e)))
+            self.tell_failure(state, str(e))
             raise
         if stopped is not None:
             return stopped
 
-        state.status = "done"
-        state.save(self.run_dir)
-        self.commit(accepted_message(self.key, self.last.summary if self.last else ""))
+        self.accept(state)
         where = f", pushed to {self.remote}" if self.remote else ""
         log(f"{self.key} is ready for review: {self.worktree}, branch {self.branch}{where}")
         log(
@@ -458,6 +536,24 @@ class Delivery:
         for line in (self.run_dir / "history.log").read_text().splitlines():
             print(re.sub(r"^([0-9]+ [a-z-]+ [a-z_]+ \[[^]]*\]).*", r"  \1", line), file=sys.stderr)  # noqa: T201
         return 0
+
+    def already_done(self, state: State) -> int:
+        log(f"{self.key} is already done — see {self.worktree}. --restart to plan it again")
+        if self.publishing:
+            # Whatever the approval's publish step didn't finish: each part is found from git
+            # and the backend, so this does only what is owed.
+            self.open_thread(state, "accepted")
+            self.publish(state)
+        return 0
+
+    def accept(self, state: State) -> None:
+        state.status = "done"
+        state.save(self.run_dir)
+        self.commit(accepted_message(self.key, self.last.summary if self.last else ""))
+        self.report()
+        self.retitle(state, "accepted")
+        if self.publishing:
+            self.publish(state)
 
     def loop(
         self,
@@ -474,6 +570,8 @@ class Delivery:
                     f" {self.settings.deadline_margin} minutes to the deadline, so"
                     f" {state.stage} doesn't start"
                 )
+                self.tell(f"⏸ out of time before {state.stage} — run again to continue")
+                self.retitle(state, f"out of time before {state.stage}")
                 return 4
             stopped = self.step(state, agent, sleep)
             if stopped is not None:
@@ -484,6 +582,7 @@ class Delivery:
                 self.commit(
                     checkpoint_message(self.key, ran.stage, ran.status, ran.round, ran.summary)
                 )
+                self.report()
         return None
 
     def step(self, state: State, agent: AgentRunner, sleep: Callable[[float], None]) -> int | None:
@@ -496,6 +595,8 @@ class Delivery:
         state.step += 1
         preview, proof_before = "", ""
         if not has_writer(stage):
+            # The longest wait in a run: say so before it, not after.
+            self.tell(f"⏳ {stage} · deploying the preview")
             preview = deploy_preview(
                 self.worktree,
                 evidence=self.paths.evidence,
@@ -504,16 +605,42 @@ class Delivery:
                 retry_wait=self.settings.retry_wait,
                 sleep=sleep,
                 log=log,
+                password=self.password,
             )
+            if self.password and preview.startswith("up at "):
+                origin = preview[len("up at ") :].split(" — ")[0]
+                self.tell(
+                    f"Preview of {self.branch} up at {origin} — sign in as ada@collabhub.dev"
+                    f" with password `{self.password}`"
+                )
             # The proof as it stood before this pass: an approval must leave its own.
             proof_before = content_hash(self.worktree / self.paths.proof)
         model = model_for(stage, state, self.settings)
         effort = effort_for(stage, state, self.settings)
         round_ = state.rounds[pair_of(stage)]
-        result = self.run_stage(stage, state, model, effort, preview, agent, sleep, proof_before)
+        self.tell(stage_started(stage, round_, self.ran_with(stage, model, effort)))
+        # Only the stage with a preview signs in to it: every other stage's e2e signs in to
+        # the Compose test stack, whose Dex keeps `collabhub`.
+        with smoke_password("" if has_writer(stage) else self.password):
+            result = self.run_stage(
+                stage, state, model, effort, preview, agent, sleep, proof_before
+            )
         status, summary = str(result["status"]), str(result.get("summary", ""))
-        self.last = Ran(stage, status, round_, summary)
+        minutes, _, cost = step_totals(
+            sorted(self.transcripts.glob(f"{state.step:02d}-*.json"))
+        ) or (0.0, 0, 0.0)
+        own = self.own_file(stage, status, state)
+        self.last = Ran(stage, status, round_, summary, own, minutes, cost)
         stats = f"{self.stats(state.step)} · {self.ran_with(stage, model, effort)}"
+        # What a stage was refused is the one clue to why it went without a tool: a public
+        # repo's transcripts aren't kept.
+        refused = step_refusals(
+            sorted(self.transcripts.glob(f"{state.step:02d}-*.json")), hide=self.password
+        )
+        if refused:
+            stats += f" · {len(refused)} refused"
+            with (self.run_dir / "refused.log").open("a") as log_file:
+                log_file.writelines(f"{state.step:02d} {stage}: {r}\n" for r in refused)
         with (self.run_dir / "history.log").open("a") as history:
             history.write(f"{state.step:02d} {stage} {status} [{stats}]: {summary}\n")
         log(f"{stage}: {status} [{stats}] — {summary}")
@@ -686,7 +813,202 @@ class Delivery:
         ran = self.last
         if ran:
             self.commit(stop_message(self.key, ran.stage, ran.round, ran.summary))
+            self.report()
+            self.retitle(state, f"needs a human at {ran.stage}")
         log(
             f"Needs a human: answer the questions in {self.worktree / self.paths.answers}, then run this again"
         )
         return 2
+
+    # --- the PR (handoff 09) --------------------------------------------------------
+
+    def publish(self, state: State) -> None:
+        """Opens or updates the PR and starts its preview. A failure here leaves an accepted
+        delivery accepted: it is reported, recorded for the job summary, and a rerun of the
+        same key does what is owed."""
+        record: dict[str, str]
+        try:
+            url = self.open_or_update_pr()
+        except (BackendError, RunError, OSError) as e:
+            if isinstance(e, PushRejectedError):
+                raise
+            error(f"{self.key} is accepted, but its PR could not be opened: {e}")
+            self.tell(f"⚠️ accepted, but the PR could not be opened: {e}")
+            record = {"error": str(e)}
+        else:
+            log(f"PR: {url}")
+            self.tell(f"PR for {self.key}: {url}", broadcast=True)
+            record = {"url": url}
+        (self.transcripts / "publish.json").write_text(json.dumps(record) + "\n")
+
+    def open_or_update_pr(self) -> str:
+        assert self.backend is not None  # noqa: S101 — set by deliver().
+        assert self.issue is not None  # noqa: S101
+        proof_file = self.worktree / self.paths.proof
+        if not proof_file.is_file():
+            raise RunError(f"there is no {self.paths.proof} to open the PR from")
+        proof = proof_file.read_text()
+        shots = cited_screenshots(proof)
+        added = self.screenshot_commits(shots)
+        links = {s: self.backend.blob_url(added, f"{self.proof_dir}/{s}") for s in shots}
+        body = pr_body(proof, issue_number=self.issue.number, links=links)
+        title = pr_title(self.issue.title, self.key)
+        pr = self.backend.find_pull_request(self.branch)
+        if pr is None:
+            pr = self.backend.open_pull_request(self.branch, self.settings.base, title, body)
+        else:
+            pr = self.backend.update_pull_request(pr.number, title=title, body=body)
+            if pr.draft:
+                pr = self.backend.update_pull_request(pr.number, draft=False)
+        # A PR, push or edit made with GITHUB_TOKEN starts no workflow: start its preview.
+        self.backend.start_preview(pr.number)
+        return pr.url
+
+    @property
+    def proof_dir(self) -> str:
+        return f"{self.paths.plan_dir}/proof"
+
+    def screenshot_commits(self, shots: list[str]) -> str:
+        """The commit that holds the screenshots the proof cites, made — then removed in the
+        next commit — if this approval hasn't made it yet. "" when there are none."""
+        if not shots:
+            return ""
+        added, removed = self.commits_since_accepted()
+        if not added:
+            missing = [s for s in shots if not (self.worktree / self.paths.evidence / s).is_file()]
+            if missing:
+                raise RunError(
+                    "the proof cites screenshots that aren't there: "
+                    + ", ".join(f"{self.paths.evidence}/{s}" for s in missing)
+                )
+            for shot in shots:
+                target = self.worktree / self.proof_dir / shot
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(self.worktree / self.paths.evidence / shot, target)
+            self.commit(f"delivery({self.key}): proof screenshots\n")
+            added = git("-C", str(self.worktree), "rev-parse", "HEAD")
+        if not removed:
+            shutil.rmtree(self.worktree / self.proof_dir, ignore_errors=True)
+            self.commit(f"delivery({self.key}): proof screenshots removed\n")
+        return added
+
+    def commits_since_accepted(self) -> tuple[str, str]:
+        """The screenshot commits after the last `accepted`: (added, removed), "" if not made."""
+        added = removed = ""
+        log_ = git("-C", str(self.worktree), "log", "--format=%H %s", f"{self.base}..HEAD")
+        for line in log_.splitlines():
+            sha, _, subject = line.partition(" ")
+            if subject == f"delivery({self.key}): accepted":
+                break
+            if subject == f"delivery({self.key}): proof screenshots removed":
+                removed = removed or sha
+            elif subject == f"delivery({self.key}): proof screenshots":
+                added = added or sha
+        return added, removed
+
+    def back_to_draft(self) -> None:
+        """A redelivery: its open PR goes back to a draft until the approval, so nothing
+        half-built is previewed or merged."""
+        assert self.backend is not None  # noqa: S101 — set by deliver().
+        try:
+            pr = self.backend.find_pull_request(self.branch)
+            if pr is None:
+                return
+            if not pr.draft:
+                self.backend.update_pull_request(pr.number, draft=True)
+            self.backend.comment_on_pull_request(
+                pr.number,
+                f"A redelivery of {self.key} is running from the plan: this PR is a draft"
+                " until it is accepted again.",
+            )
+        except BackendError as e:
+            error(f"could not make {self.branch}'s PR a draft: {e}")
+
+    # --- Slack (handoff 09) ----------------------------------------------------------
+
+    def open_thread(self, state: State, status: str) -> None:
+        """The delivery's thread: started on its first run, retitled on every other."""
+        if not self.slack.enabled:
+            return
+        if state.slack_thread:
+            self.retitle(state, status)
+            return
+        state.slack_thread = self.slack.post(self.title_text(status))
+        state.save(self.run_dir)
+
+    def retitle(self, state: State, status: str) -> None:
+        if state.slack_thread:
+            self.slack.edit(state.slack_thread, self.title_text(status))
+
+    def title_text(self, status: str) -> str:
+        env = self.settings.env
+        run_url = ""
+        if env.get("GITHUB_RUN_ID"):
+            run_url = (
+                f"{env.get('GITHUB_SERVER_URL', 'https://github.com')}/"
+                f"{env.get('GITHUB_REPOSITORY', '')}/actions/runs/{env['GITHUB_RUN_ID']}"
+            )
+        title = self.issue.title if self.issue else ""
+        return thread_title(self.key, title, status, run_url=run_url)
+
+    def tell(self, text: str, *, broadcast: bool = False) -> None:
+        """A reply in the delivery's thread; nothing without Slack."""
+        if not self.slack.enabled:
+            return
+        state = State.load(self.run_dir, self.settings.max_rounds)
+        self.slack.post(text, thread=state.slack_thread, broadcast=broadcast)
+
+    def tell_failure(self, state: State, reason: str) -> None:
+        self.tell(f"✗ failed at {state.stage}: {reason}")
+        self.retitle(state, f"failed at {state.stage}")
+
+    def report(self) -> None:
+        """The stage that ran last, once its checkpoint holds its file."""
+        ran = self.last
+        if ran is None or not self.slack.enabled:
+            return
+        link = ""
+        if ran.file and self.publishing and self.backend is not None:
+            sha = git("-C", str(self.worktree), "rev-parse", "HEAD")
+            # The file as GitHub renders it, not raw.
+            link = self.backend.blob_url(sha, ran.file).removesuffix("?raw=true")
+        self.tell(
+            stage_ended(
+                ran.stage,
+                ran.status,
+                minutes=ran.minutes,
+                cost=ran.cost,
+                summary=ran.summary,
+                link=link,
+            )
+        )
+
+    def own_file(self, stage: str, status: str, state: State) -> str:
+        """The file a stage's verdict left — before the state moves on and its round with it."""
+        if status == "done":
+            return writer_output(stage, self.paths) or ""
+        if status == "needs_human":
+            return self.paths.answers
+        if status == "send_back":
+            return sendback_path(stage, state, self.paths)
+        if has_writer(stage):
+            return review_path(stage, state, self.paths)
+        return self.paths.proof
+
+
+@contextlib.contextmanager
+def smoke_password(password: str):
+    """The smoke packs' password, in the environment the acceptance stage's agent and its
+    scripts inherit, for as long as that stage lasts — never on disk."""
+    if not password:
+        yield
+        return
+    before = os.environ.get("SMOKE_PASSWORD")
+    os.environ["SMOKE_PASSWORD"] = password
+    try:
+        yield
+    finally:
+        if before is None:
+            os.environ.pop("SMOKE_PASSWORD", None)
+        else:
+            os.environ["SMOKE_PASSWORD"] = before

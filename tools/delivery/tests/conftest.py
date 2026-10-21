@@ -28,15 +28,18 @@ class FakeGh:
     """Stands in for the `gh` CLI: answers by subcommand, records every call.
 
     `answers` maps the first two words after `gh` (`"issue view"`) to stdout,
-    or to an exception (a `BackendError`) to raise as a failing `gh` would.
+    or to an exception (a `BackendError`) to raise as a failing `gh` would — or to a list
+    of those, answered in turn, the last one for every call after it.
     """
 
-    answers: dict[str, str | Exception] = field(default_factory=dict)
+    answers: dict[str, str | Exception | list[str | Exception]] = field(default_factory=dict)
     calls: list[tuple[list[str], str | None]] = field(default_factory=list)
 
     def __call__(self, args: list[str], input: str | None = None) -> str:  # noqa: A002
         self.calls.append((list(args), input))
         answer = self.answers.get(" ".join(args[1:3]), "")
+        if isinstance(answer, list):
+            answer = answer.pop(0) if len(answer) > 1 else answer[0]
         if isinstance(answer, Exception):
             raise answer
         return answer

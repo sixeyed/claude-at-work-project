@@ -37,6 +37,9 @@ class Settings:
     remote: str = ""
     #: False commits without fetching or pushing — the loop test, or a machine with no remote.
     push: bool = True
+    #: False opens no PR at the approval; one opens only where the backend opens them and
+    #: the branch is pushed.
+    pr: bool = True
     #: Epoch seconds: no stage starts with less than `deadline_margin` minutes left.
     deadline: int | None = None
     deadline_margin: int = 75
@@ -57,6 +60,9 @@ class Settings:
         push = env.get("DELIVER_PUSH", "") or "1"
         if push not in ("0", "1"):
             raise ConfigError("DELIVER_PUSH must be 0 or 1")
+        pr = env.get("DELIVER_PR", "") or "1"
+        if pr not in ("0", "1"):
+            raise ConfigError("DELIVER_PR must be 0 or 1")
         deadline = env.get("DELIVER_DEADLINE", "")
         return cls(
             max_rounds=positive(env, "DELIVER_MAX_ROUNDS", "3"),
@@ -76,6 +82,7 @@ class Settings:
             deploy_sh=env.get("DELIVER_DEPLOY_SH", "") or "scripts/deploy.sh",
             remote=remote,
             push=push == "1",
+            pr=pr == "1",
             deadline=positive(env, "DELIVER_DEADLINE", deadline) if deadline else None,
             deadline_margin=positive(env, "DELIVER_DEADLINE_MARGIN", "75"),
             env=dict(env),
