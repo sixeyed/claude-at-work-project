@@ -19,9 +19,13 @@
  *   way the refresh token was not: it is single-use, lives for the seconds
  *   between leaving and returning, is useless without the matching authorization
  *   code, and is deleted before that code is spent.
+ * - **The return path** is a second `sessionStorage` entry for the same reason: it
+ *   is the route a signed-out visitor asked for, and it too must survive the
+ *   redirect. Not a secret, but untrusted on the way back — see `isSafeReturnPath`.
  */
 
 const VERIFIER_KEY = 'collabhub.pkceVerifier'
+const RETURN_KEY = 'collabhub.returnTo'
 
 function read(key: string): string | null {
   try {
@@ -58,4 +62,27 @@ export const pkceVerifier = {
   read: () => read(VERIFIER_KEY),
   write: (verifier: string) => write(VERIFIER_KEY, verifier),
   clear: () => clear(VERIFIER_KEY),
+}
+
+/**
+ * Whether `path` is somewhere sign-in may send the browser back to.
+ *
+ * The path comes from `sessionStorage`, which any script on the origin can write,
+ * and ends up in a navigation — so only a same-origin path qualifies. `//host` and
+ * `/\host` are protocol-relative to a browser, and `/sign-in` and `/auth/…` would
+ * loop straight back into the flow that just finished.
+ */
+export function isSafeReturnPath(path: string): boolean {
+  if (!path.startsWith('/') || path.startsWith('//') || path.startsWith('/\\')) return false
+  return !path.startsWith('/sign-in') && !path.startsWith('/auth/')
+}
+
+/**
+ * The route a signed-out visitor was heading for, held across the same redirect
+ * the PKCE verifier survives. A path only — no token, no secret — and read once.
+ */
+export const returnPath = {
+  read: () => read(RETURN_KEY),
+  write: (path: string) => write(RETURN_KEY, path),
+  clear: () => clear(RETURN_KEY),
 }

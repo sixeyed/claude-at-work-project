@@ -24,8 +24,10 @@ from sqlalchemy import (
     func,
     text,
 )
-from sqlalchemy.dialects.postgresql import CITEXT, TIMESTAMP, UUID
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.dialects.postgresql import CITEXT, JSONB, TIMESTAMP, UUID
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
+
+from auth import names
 
 # Every timestamp on the platform is UTC `timestamptz` (Conventions §3).
 Timestamp = TIMESTAMP(timezone=True)
@@ -36,11 +38,21 @@ class Base(DeclarativeBase):
 
 
 class User(Base):
+    """An account. `display_name_key` is the comparison form of the name (D46).
+
+    The key is computed by the application, never the database, and kept in step
+    by the validator below; the unique index on it is what makes names unique
+    across CollabHub — deleted accounts included, so a deleted user's name stays
+    taken.
+    """
+
     __tablename__ = "users"
+    __table_args__ = (Index("uq_users_display_name_key", "display_name_key", unique=True),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
     email: Mapped[str] = mapped_column(CITEXT, nullable=False, unique=True)
     display_name: Mapped[str] = mapped_column(String, nullable=False)
+    display_name_key: Mapped[str] = mapped_column(String, nullable=False)
     avatar_asset: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False, server_default="active")
     created_at: Mapped[datetime] = mapped_column(
@@ -51,6 +63,33 @@ class User(Base):
     )
     deleted_at: Mapped[datetime | None] = mapped_column(Timestamp, nullable=True)
     version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+
+    @validates("display_name")
+    def _keep_key(self, _key: str, value: str) -> str:
+        # Every ORM write of a name goes through here, so the key can't drift (Decision 12).
+        self.display_name_key = names.name_key(value)
+        return value
+
+
+class UserPreferences(Base):
+    """A user's preferences, one row each, created on first write (D28).
+
+    `prefs` is merged key by key in one SQL statement (`auth.preferences.merge`),
+    and the keys it may hold are validated by the API, not by the database.
+    """
+
+    __tablename__ = "user_preferences"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), primary_key=True
+    )
+    prefs: Mapped[dict[str, object]] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb")
+    )
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    updated_at: Mapped[datetime] = mapped_column(
+        Timestamp, nullable=False, server_default=func.now()
+    )
 
 
 class ExternalIdentity(Base):

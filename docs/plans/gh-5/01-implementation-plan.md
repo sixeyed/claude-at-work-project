@@ -562,8 +562,36 @@ def _keep_key(self, _key: str, value: str) -> str:
 
 ## Found while building
 
-*Filled in by the code-writer: every deviation from this plan, and every bug the first real run
-found, each with the test that now pins it down. Empty until then.*
+Code-writer, round 1. Every plan task built; every red test went green on the first run of its
+layer, and the journey passed on its first e2e run. Deviations:
+
+- **`useSetClock` skips the cache write and the re-read while another save is queued**
+  (`isMutating` counts the mutation being settled, so "alone" is `<= 1`). Decision 29 says an
+  error rolls back "only if the cache still holds its own optimistic value, then invalidates";
+  invalidating while a later save is pending can land a read that predates it and flicker the
+  screen. Pinned by `SettingsPage.test.tsx` › `keeps a later choice when an earlier save fails`
+  and `does not send the second choice…`. A success likewise writes the server's answer only when
+  alone.
+- **`UpdatePreferencesRequest` sets its own `model_config`** (`alias_generator=to_camel,
+  extra="forbid"`) instead of inheriting `CamelRequest`'s, because pydantic merges configs only by
+  key and the base has none to extend; same effect as the plan. Pinned by
+  `test_an_unknown_key_is_400…`.
+- **`update_me` also checks the key before writing** (a pre-check for the quick 409) and keeps the
+  commit-time `IntegrityError` mapping as the authority, only for `uq_users_display_name_key` — any
+  other integrity error is re-raised. Pinned by `test_two_renames_to_one_name_at_once_one_wins` and
+  `test_a_rename_racing_an_uncommitted_first_sign_in`.
+- **A body that carries nothing** (`PATCH /users/me {}`) now writes nothing either — before it bumped
+  `version`. No test; follows from Decision 18's "no write when nothing changes".
+- **`takeReturnPath` re-checks `isSafeReturnPath` on read**, since the stored value is untrusted
+  `sessionStorage`. `signIn` clears any earlier stored path when given none or an unsafe one.
+  Pinned by the `signIn ignores an unsafe one` cases.
+- **`PreferencesSection` radios are never disabled while the read loads**, because the tests click
+  one straight after the profile field appears; until the read lands "Automatic" shows checked.
+- **The hooks' formatter strips an import added before its first use**, so imports were added after
+  the code using them. No effect on the result.
+- No bug was found by the e2e run or the unit/integration runs; nothing beyond the above needed a
+  new test. **Not run by this stage:** the plan's by-hand "first real run" in two browsers (see the
+  green report, *Left for the human*).
 
 ## Not in this plan
 

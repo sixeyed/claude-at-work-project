@@ -57,9 +57,9 @@ once**, in `useMessages`'s `select`, which copies before reversing because
 
 **Tailwind v4 through `@tailwindcss/vite`, with no config files** (register
 D26). The theme is `@theme` tokens in `src/index.css`. **Light palette only**,
-because there is nowhere to store a theme choice — there is no user-preferences
-feature anywhere in the design (D28 🔴). Use the tokens and never a literal
-colour: that is what keeps a dark palette cheap if D28 ever lands.
+because no theme has been built yet — per-user preferences exist now (D28, Auth's
+`user_preferences`; the clock is the first), but a theme is not among them. Use the
+tokens and never a literal colour: that is what keeps a dark palette cheap when one is.
 
 **`data-testid` attributes are part of the contract.** They exist for the
 acceptance suite in `tests/bdd/`, where every selector lives in a page object.

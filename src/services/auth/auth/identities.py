@@ -12,8 +12,10 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy import Select, func, select, text, tuple_
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from auth import names
 from auth.models import ExternalIdentity, User, Workspace, WorkspaceMember
 from shared import Page, PageRequest, build_page, uuid7
 
@@ -83,6 +85,39 @@ async def ensure_demo_workspace(session: AsyncSession, name: str) -> Workspace:
     return workspace
 
 
+async def _name_is_taken(session: AsyncSession, key: str) -> bool:
+    # conventions: ok — a deleted account's name stays taken (D46), so no deleted_at filter.
+    result = await session.execute(select(User.id).where(User.display_name_key == key))
+    return result.first() is not None
+
+
+async def _insert_user(session: AsyncSession, *, email: str, display_name: str) -> User:
+    """Insert the user under the first free name, flushed before returning.
+
+    Sign-in never refuses over a name (Req 3): the IdP's is repaired if unusable
+    (`names.provisional`) and suffixed (`X 2`) until it is free. A look at the
+    table cannot see another transaction's uncommitted row, so the unique index
+    is the authority: the insert runs in a SAVEPOINT, and when it fails the next
+    candidate is tried only if that name has now been taken. Any other conflict —
+    the email, from two first sign-ins at once — is raised as it always was.
+    """
+    base = names.provisional(display_name, email.split("@")[0])
+    for candidate in names.candidates(base):
+        if await _name_is_taken(session, names.name_key(candidate)):
+            continue
+        user = User(id=uuid7(), email=email, display_name=candidate)
+        try:
+            async with session.begin_nested():
+                session.add(user)
+                await session.flush()
+        except IntegrityError:
+            if await _name_is_taken(session, names.name_key(candidate)):
+                continue
+            raise
+        return user
+    raise AssertionError("names.candidates is endless")  # pragma: no cover
+
+
 async def provision_user(
     session: AsyncSession, *, email: str, display_name: str, demo_workspace_name: str | None
 ) -> User:
@@ -98,11 +133,9 @@ async def provision_user(
     if user is not None:
         return user
 
-    user = User(id=uuid7(), email=email, display_name=display_name)
-    session.add(user)
-    await session.flush()
+    user = await _insert_user(session, email=email, display_name=display_name)
 
-    own = Workspace(id=uuid7(), name=f"{display_name}'s Workspace")
+    own = Workspace(id=uuid7(), name=f"{user.display_name}'s Workspace")
     session.add(own)
     await session.flush()
     session.add(WorkspaceMember(workspace_id=own.id, user_id=user.id, role=OWNER))

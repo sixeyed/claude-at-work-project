@@ -20,6 +20,8 @@ import { useChannelSocket } from '../../lib/realtime/useChannelSocket'
 import { useAttachmentStore } from '../../stores/attachments'
 import { useChatStore } from '../../stores/chat'
 import { SearchBox } from '../search/SearchBox'
+import { ClockContext } from '../settings/clock'
+import { usePreferences } from '../settings/usePreferences'
 import { cancelAll } from '../attachments/uploads'
 import { ChannelList } from './ChannelList'
 import { CreateChannelDialog } from './CreateChannelDialog'
@@ -47,14 +49,21 @@ export function ChatLayout({ current, children }: Props) {
   // must not carry on and a chip from it must not be offered in the new. The
   // cleanup runs when the workspace changes and when the shell goes away
   // (sign-out unmounts it); a reload loses chips by itself, they are in memory.
+  // Likewise "the last channel", which Settings offers a way back to: an id from
+  // the old workspace would open its 404.
   const workspaceId = current.activeWorkspaceId
   useEffect(
     () => () => {
       cancelAll()
       useAttachmentStore.getState().reset()
+      useChatStore.getState().clearLastChannel()
     },
     [workspaceId],
   )
+
+  // The clock preference, offered to every time on screen through a context so a
+  // choice re-renders cached messages without refetching them (register D28).
+  const preferences = usePreferences(current.accessToken, current.profile.id)
 
   const socket = useChannelSocket(
     current.accessToken,
@@ -67,6 +76,7 @@ export function ChatLayout({ current, children }: Props) {
 
   return (
     <SocketProvider socket={socket}>
+      <ClockContext.Provider value={preferences.data?.clock}>
       <div className="grid h-full grid-cols-[16rem_1fr]">
         <aside className="flex flex-col border-r border-border bg-surface-sunken">
           <SearchBox workspaceId={current.activeWorkspaceId} />
@@ -117,6 +127,7 @@ export function ChatLayout({ current, children }: Props) {
 
         <main className="h-full overflow-y-auto bg-surface">{children}</main>
       </div>
+      </ClockContext.Provider>
     </SocketProvider>
   )
 }

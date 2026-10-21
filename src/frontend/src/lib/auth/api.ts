@@ -97,6 +97,48 @@ export function me(accessToken: string): Promise<Profile> {
   return request<Profile>('/api/v1/users/me', { headers: authorized(accessToken) })
 }
 
+/**
+ * Rename yourself. The server trims and composes the name, so what comes back is
+ * the stored form, not necessarily what was sent. A refused name is a 400 with
+ * `errors.displayName`; a taken one is a 409 with the same field.
+ */
+export function updateMe(accessToken: string, body: { displayName: string }): Promise<Profile> {
+  return request<Profile>('/api/v1/users/me', {
+    method: 'PATCH',
+    headers: authorized(accessToken),
+    body: JSON.stringify(body),
+  })
+}
+
+/** The clock a user reads times on; absent means the browser's own locale decides. */
+export type Clock = '12h' | '24h'
+
+/**
+ * A user's stored preferences, `{}` when none are set (register D28). Per user,
+ * not per workspace: the same answer in every workspace they belong to.
+ */
+export interface Preferences {
+  clock?: Clock
+}
+
+export function preferences(accessToken: string): Promise<Preferences> {
+  return request<Preferences>('/api/v1/users/me/preferences', {
+    headers: authorized(accessToken),
+  })
+}
+
+/** Merge into the stored preferences; `null` removes a key. Returns the merged result. */
+export function updatePreferences(
+  accessToken: string,
+  patch: { clock: Clock | null },
+): Promise<Preferences> {
+  return request<Preferences>('/api/v1/users/me/preferences', {
+    method: 'PATCH',
+    headers: authorized(accessToken),
+    body: JSON.stringify(patch),
+  })
+}
+
 export function workspaces(accessToken: string): Promise<{ items: Workspace[] }> {
   return request<{ items: Workspace[] }>('/api/v1/workspaces', { headers: authorized(accessToken) })
 }

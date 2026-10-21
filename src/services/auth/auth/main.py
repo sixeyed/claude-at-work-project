@@ -26,6 +26,7 @@ from auth.loginflow import LoginFlowStore
 from auth.oidc import build_clients
 from auth.routers import auth as auth_routes
 from auth.routers import federation as federation_routes
+from auth.routers import preferences as preference_routes
 from auth.routers import users as user_routes
 from auth.routers import wellknown as wellknown_routes
 from auth.routers import workspaces as workspace_routes
@@ -117,6 +118,7 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(federation_routes.router)
     app.include_router(auth_routes.router)
     app.include_router(user_routes.router)
+    app.include_router(preference_routes.router)
     app.include_router(workspace_routes.router)
 
     if not oidc_clients:

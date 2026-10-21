@@ -194,6 +194,56 @@ Content-Type: {{json}}
   "avatarAsset": null
 }
 
+### A name someone else holds, ignoring case — and a deleted account's name stays
+# taken. Expect 409 "That name is already taken." which names nobody (register D46).
+PATCH {{host}}/api/v1/users/me
+Authorization: Bearer {{accessToken}}
+Content-Type: {{json}}
+
+{
+  "displayName": "GRACE"
+}
+
+### A name made of an invisible character. Expect 400 on `displayName`.
+PATCH {{host}}/api/v1/users/me
+Authorization: Bearer {{accessToken}}
+Content-Type: {{json}}
+
+{
+  "displayName": "Ada​"
+}
+
+### Your preferences — `{}` until you set one, and reading never creates a row.
+GET {{host}}/api/v1/users/me/preferences
+Authorization: Bearer {{accessToken}}
+
+### Choose the 24-hour clock. The keys carried are merged; returns the merged result.
+PATCH {{host}}/api/v1/users/me/preferences
+Authorization: Bearer {{accessToken}}
+Content-Type: {{json}}
+
+{
+  "clock": "24h"
+}
+
+### `null` removes a key (back to the browser's own locale).
+PATCH {{host}}/api/v1/users/me/preferences
+Authorization: Bearer {{accessToken}}
+Content-Type: {{json}}
+
+{
+  "clock": null
+}
+
+### An unknown key. Expect 400 on `theme` — keys are validated, not stored blindly.
+PATCH {{host}}/api/v1/users/me/preferences
+Authorization: Bearer {{accessToken}}
+Content-Type: {{json}}
+
+{
+  "theme": "dark"
+}
+
 ### Someone else's public profile — name and avatar, never their email. Only
 # visible if you share a workspace with them, or a workspace-scoped token would
 # be a directory of every tenant. Paste a user id from the members list below.

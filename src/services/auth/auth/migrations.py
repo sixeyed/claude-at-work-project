@@ -30,17 +30,26 @@ def alembic_config(dsn: str) -> Config:
     return config
 
 
-def _upgrade(connection: Connection, dsn: str) -> None:
+def _upgrade(connection: Connection, dsn: str, revision: str) -> None:
     config = alembic_config(dsn)
     config.attributes["connection"] = connection
-    command.upgrade(config, "head")
+    command.upgrade(config, revision)
 
 
 async def upgrade_to_head(dsn: str) -> None:
     """Bring the database at `dsn` up to the latest revision."""
+    await upgrade_to(dsn, "head")
+
+
+async def upgrade_to(dsn: str, revision: str) -> None:
+    """Bring the database at `dsn` up to `revision`.
+
+    Exists so a test can stop at an earlier revision, seed rows the way the old
+    schema allowed them, and then take the data through the migration under test.
+    """
     engine = create_async_engine(dsn)
     try:
         async with engine.begin() as connection:
-            await connection.run_sync(_upgrade, dsn)
+            await connection.run_sync(_upgrade, dsn, revision)
     finally:
         await engine.dispose()

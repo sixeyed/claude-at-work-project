@@ -7,12 +7,11 @@
  * workspace renders as a shortened id rather than a blank, because a row with
  * no label in it looks like a bug.
  *
- * The timestamp renders through `<time dateTime>` with the browser's own
- * locale formatting, and **not** a stored preference: there is no
- * user-preferences feature anywhere in the design (register D28 🔴), which is
- * the same reason the palette is light-only. The `dateTime` attribute is the
- * machine-readable half, and it is what the acceptance suite asserts on so the
- * test does not depend on the locale of whoever runs it.
+ * The timestamp renders through `<time dateTime>` in the browser's own locale,
+ * with the hour cycle the user's clock preference asks for (register D28; none
+ * set means the locale's own). The `dateTime` attribute is the machine-readable
+ * half, and it is what the acceptance suite asserts on so the test does not
+ * depend on the locale of whoever runs it.
  *
  * **Hiding a control is a courtesy, not authorization.** The server decides who
  * may edit and who may delete, and the integration tests are what prove it.
@@ -30,6 +29,7 @@
 import { type ReactNode, useState } from 'react'
 
 import type { Message } from '../../lib/api/messaging'
+import { formatTime, useClock } from '../settings/clock'
 import { ThreadSummary } from '../threads/ThreadSummary'
 import { MessageEditor } from './MessageEditor'
 import { ReactionBar } from './ReactionBar'
@@ -65,10 +65,6 @@ interface Props {
   attachments?: ReactNode
 }
 
-function timeOfDay(iso: string): string {
-  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
 export function MessageItem({
   message,
   authorName,
@@ -84,6 +80,7 @@ export function MessageItem({
   attachments,
 }: Props) {
   const [editing, setEditing] = useState(false)
+  const clock = useClock()
 
   const deleted = message.deletedAt !== null
   // Sent, not yet confirmed. The `temp:` id *is* the marker — there is no
@@ -126,7 +123,7 @@ export function MessageItem({
           dateTime={message.createdAt}
           className="text-xs text-ink-muted"
         >
-          {timeOfDay(message.createdAt)}
+          {formatTime(message.createdAt, clock)}
         </time>
 
         {!deleted && message.editedAt && (
