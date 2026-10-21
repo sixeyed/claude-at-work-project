@@ -3,3 +3,4 @@
 03 test-writer done [1m 3 turns $0.5 · sonnet · default]: fake
 04 test-reviewer approved [1m 3 turns $0.5 · sonnet · default]: fake
 05 code-writer done [1m 3 turns $0.5 · sonnet · default]: fake
+06 code-reviewer approved [1m 3 turns $0.5 · opus · default]: fake
