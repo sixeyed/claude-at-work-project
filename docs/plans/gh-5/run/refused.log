@@ -1,2 +1,3 @@
 01 plan-writer: ls ../claude-at-work-project/src/frontend/node_modules/@tanstack/ 2>&1; grep -n '"version"' ../claude-at-work-project/src/frontend/node_modules/@tanstack/quer …
 02 plan-reviewer: cd /home/runner/work/claude-at-work-project/caw-gh-5 && git worktree list | head -3; git branch -a --no-merged main 2>/dev/null | head
+04 plan-reviewer: ls /home/runner/work/claude-at-work-project/claude-at-work-project/src/frontend/node_modules/@tanstack/query-core/build/modern/ | head -50
