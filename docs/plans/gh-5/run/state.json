@@ -1,7 +1,7 @@
 {
-  "stage": "plan-reviewer",
+  "stage": "test-writer",
   "status": "running",
-  "step": 1,
+  "step": 2,
   "review": "",
   "rounds": {
     "plan": 1,
