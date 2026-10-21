@@ -227,6 +227,11 @@ Refresh tokens are **not** workspace-scoped. Switching workspaces exchanges the 
 token plus a target workspace ID for a new access token, reusing the rotating-refresh
 machinery in §5.1.
 
+**A deliberate exception to the 404 rule (register D46).** Display names are unique across
+CollabHub, so a `409 "That name is already taken."` on `PATCH /users/me` reveals that the name
+exists — possibly in a workspace the caller is not in. It is accepted: the response names nobody (no
+id, email or workspace), and the alternative is two people sharing a name.
+
 A Socket.IO connection inherits the workspace of the token that opened it. On switch, the
 client must drop and re-establish its `/messaging` and `/canvas` connections — a live
 connection must never continue serving a different workspace.

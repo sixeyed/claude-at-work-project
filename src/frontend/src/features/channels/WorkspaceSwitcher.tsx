@@ -8,6 +8,8 @@
  * see `useChannels`.
  */
 
+import { Link } from 'react-router-dom'
+
 import * as session from '../../lib/auth/session'
 import type { Session } from '../../lib/auth/session'
 
@@ -23,9 +25,14 @@ export function WorkspaceSwitcher({ current }: Props) {
       <p data-testid="workspace-name" className="text-sm font-semibold text-ink">
         {active?.name ?? 'No workspace'}
       </p>
-      <p data-testid="current-user" className="text-xs text-ink-muted">
+      {/* Your name is the way into Settings, where you can change it. */}
+      <Link
+        to="/settings"
+        data-testid="current-user"
+        className="block text-xs text-ink-muted hover:underline"
+      >
         {current.profile.displayName}
-      </p>
+      </Link>
 
       {current.workspaces.length > 1 && (
         <ul data-testid="workspace-switcher" className="mt-2 flex flex-col gap-1">

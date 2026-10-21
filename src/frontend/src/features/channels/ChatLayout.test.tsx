@@ -67,6 +67,7 @@ function SignedInShell() {
 beforeEach(async () => {
   auth.me(PROFILE)
   auth.workspaces(WORKSPACES)
+  auth.preferences({})
   auth.refresh(pair(HOME))
   await session.restore()
   auth.switchWorkspace(pair(AWAY))

@@ -17,7 +17,14 @@
 import { http, HttpResponse, type DefaultBodyType } from 'msw'
 import { setupServer } from 'msw/node'
 
-import type { Profile, TokenPair, Workspace, WorkspaceMember } from '../lib/auth/api'
+import type {
+  Clock,
+  Preferences,
+  Profile,
+  TokenPair,
+  Workspace,
+  WorkspaceMember,
+} from '../lib/auth/api'
 import { ASSET_URL, AUTH_URL, MESSAGING_URL } from '../lib/config'
 import type { components as AssetComponents } from '../types/asset'
 import type { paths } from '../types/messaging'
@@ -309,7 +316,57 @@ function authJson<T extends DefaultBodyType>(method: Method, path: string, reply
   )
 }
 
+/** A refusal a reply function returns instead of a body: the RFC 7807 answer with `status`. */
+export class Refused {
+  status: number
+  body: ProblemBody
+  constructor(status: number, body: ProblemBody = {}) {
+    this.status = status
+    this.body = body
+  }
+}
+
+type AuthReply<Body, Out> =
+  | Out
+  | ((body: Body) => Out | Refused | Promise<Out | Refused>)
+
+/**
+ * A JSON answer that may be computed from the request and held in flight: the
+ * request is recorded on arrival, before the reply is awaited. A function reply
+ * may return `Refused` to answer with a problem instead.
+ */
+function authReply<Body, Out>(method: Method, path: string, reply: AuthReply<Body, Out>): void {
+  server.use(
+    http[method](AUTH_URL + path, async ({ request }) => {
+      const body = (await record(request)) as Body
+      const answer =
+        typeof reply === 'function'
+          ? await (reply as (b: Body) => Out | Refused | Promise<Out | Refused>)(body)
+          : reply
+      if (answer instanceof Refused) return problemResponse(answer.status, answer.body)
+      return HttpResponse.json(answer as DefaultBodyType)
+    }),
+  )
+}
+
 export const auth = {
+  /** `PATCH /users/me`; a promise reply holds the request in flight. */
+  updateMe: (reply: AuthReply<{ displayName: string }, Profile>): void =>
+    authReply('patch', '/api/v1/users/me', reply),
+  /** `GET /users/me/preferences`; a function is asked on every request. */
+  preferences: (reply: Preferences | (() => Preferences | Promise<Preferences>)): void =>
+    authReply<undefined, Preferences>('get', '/api/v1/users/me/preferences', reply),
+  /** `PATCH /users/me/preferences`; a promise reply holds it, `Refused` fails it. */
+  updatePreferences: (reply: AuthReply<{ clock: Clock | null }, Preferences>): void =>
+    authReply('patch', '/api/v1/users/me/preferences', reply),
+  /**
+   * `GET /users/me`, answered per call. `call` counts from 1 and restarts when this
+   * is called again; a promise reply holds that read in flight.
+   */
+  meBy(reply: (call: number) => Profile | Promise<Profile>): void {
+    let calls = 0
+    authReply<undefined, Profile>('get', '/api/v1/users/me', () => reply(++calls))
+  },
   /** The workspace directory `useWorkspaceMembers` reads, as one page. */
   members(members: WorkspaceMember[]): void {
     authJson('get', '/api/v1/workspaces/:workspaceId/members', { items: members, nextCursor: null })

@@ -7,6 +7,9 @@
  * `useSyncExternalStore` wants, so whichever library wins can replace this file
  * without touching a component.
  *
+ * `sessionStorage` holds two entries across the sign-in redirect, both in
+ * `storage.ts`: the PKCE verifier and the route the visitor was heading for.
+ *
  * Two things are deliberate:
  *
  * - **The access token never leaves memory**, and the refresh token never enters
@@ -18,7 +21,7 @@
  */
 
 import * as api from './api'
-import { pkceVerifier } from './storage'
+import { isSafeReturnPath, pkceVerifier, returnPath } from './storage'
 import { challengeFor, createVerifier } from './pkce'
 
 /** Renew this long before expiry, so a slow request cannot straddle it. */
@@ -73,13 +76,41 @@ export function snapshot(): State {
   return state
 }
 
+/** Counts `updateProfile` calls, so `adopt` can tell a rename landed during its reads. */
+let profileUpdates = 0
+
+/**
+ * Replace the signed-in user's profile with a newer one, e.g. after a rename.
+ *
+ * A no-op unless signed in as `profile.id`. It also outlives an `adopt()` whose
+ * reads began earlier (see there): otherwise a renewal or switch answered before
+ * the rename would put the old name back in the sidebar for up to a renewal.
+ */
+export function updateProfile(profile: api.Profile): void {
+  if (state.status !== 'signedIn' || state.session.profile.id !== profile.id) return
+
+  profileUpdates += 1
+  set({ status: 'signedIn', session: { ...state.session, profile } })
+}
+
 async function adopt(pair: api.TokenPair): Promise<void> {
   // Nothing to store: the refresh cookie was set by the response that carried
   // this access token, and the browser will send it back unprompted.
-  const [profile, workspaceList] = await Promise.all([
+  const updatesBefore = profileUpdates
+  const [read, workspaceList] = await Promise.all([
     api.me(pair.accessToken),
     api.workspaces(pair.accessToken),
   ])
+
+  // A profile read answered before a rename that landed meanwhile carries the old
+  // name: keep the session's. A read begun after the rename is adopted as it is, so
+  // this can't freeze a name.
+  const current = state
+  const renamedMeanwhile =
+    updatesBefore !== profileUpdates &&
+    current.status === 'signedIn' &&
+    current.session.profile.id === read.id
+  const profile = renamedMeanwhile ? current.session.profile : read
 
   set({
     status: 'signedIn',
@@ -155,11 +186,25 @@ export async function restore(): Promise<void> {
   await renew()
 }
 
-/** Begin a login. Navigates away, so nothing after this runs. */
-export async function signIn(provider = 'dex'): Promise<void> {
+/**
+ * Begin a login. Navigates away, so nothing after this runs.
+ *
+ * `returnTo` is the route the visitor was heading for; it is remembered across the
+ * redirect only if it is a safe same-origin path, and any earlier one is dropped.
+ */
+export async function signIn(provider = 'dex', returnTo?: string): Promise<void> {
   const verifier = createVerifier()
   pkceVerifier.write(verifier)
+  if (returnTo !== undefined && isSafeReturnPath(returnTo)) returnPath.write(returnTo)
+  else returnPath.clear()
   window.location.assign(api.loginUrl(provider, await challengeFor(verifier)))
+}
+
+/** The route to land on after sign-in: the one remembered, once, else `/`. */
+export function takeReturnPath(): string {
+  const path = returnPath.read()
+  returnPath.clear()
+  return path !== null && isSafeReturnPath(path) ? path : '/'
 }
 
 /**

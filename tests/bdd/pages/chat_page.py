@@ -85,6 +85,36 @@ class ChatPage:
         self.page.locator(f'[data-testid="workspace-option"][data-workspace-name="{name}"]').click()
         expect(self.page.get_by_test_id("workspace-name")).to_have_text(name)
 
+    # --- settings ---------------------------------------------------------
+
+    def open_settings(self) -> None:
+        """Click your name in the sidebar and wait until the Settings page is up."""
+        self.page.get_by_test_id("current-user").click()
+        expect(self.page.get_by_test_id("settings-page")).to_be_visible()
+
+    def change_display_name(self, name: str) -> None:
+        """Type a new display name on Settings, save it, and wait for "Saved".
+
+        The field appears once this visit's read of the profile has landed, so
+        waiting for it is waiting for the real name. A name the account already
+        holds leaves Save disabled (unchanged), so there is nothing to click and
+        nothing to wait for: that is what keeps a rerun against a kept stack, where
+        Alan already has the name, passing.
+        """
+        field = self.page.get_by_test_id("settings-display-name-input")
+        expect(field).to_be_visible()
+        if field.input_value() == name:
+            return
+        field.fill(name)
+        save = self.page.get_by_test_id("settings-display-name-save")
+        expect(save).to_be_enabled()
+        save.click()
+        expect(self.page.get_by_test_id("settings-saved")).to_be_visible()
+
+    def has_current_user(self, name: str) -> bool:
+        """Whether the sidebar names the signed-in user `name`, waiting for it to."""
+        return _holds(lambda: expect(self.page.get_by_test_id("current-user")).to_have_text(name))
+
     # --- reading ----------------------------------------------------------
 
     def workspace_name(self) -> str:

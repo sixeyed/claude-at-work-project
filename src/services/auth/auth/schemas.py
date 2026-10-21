@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Self
+from typing import Literal, Self
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, model_validator
 from pydantic.alias_generators import to_camel
 
 
@@ -127,10 +127,33 @@ class PublicUserResponse(CamelModel):
 
 
 class UpdateUserRequest(CamelRequest):
-    """A profile edit. Absent fields are left alone; `null` clears the avatar."""
+    """A profile edit. Absent fields are left alone; `null` clears the avatar.
 
-    display_name: str | None = Field(default=None, min_length=1, max_length=100)
+    The display name carries no length bounds here: they would run on the value as
+    typed, and the limit is on the trimmed, composed form that `auth.names.clean`
+    checks (a name padded with spaces to 102 characters is a valid 100).
+    """
+
+    display_name: str | None = None
     avatar_asset: uuid.UUID | None = None
+
+
+class PreferencesResponse(CamelModel):
+    """The stored, known preferences — `{}` when none are set (D28)."""
+
+    clock: Literal["12h", "24h"] | None = None
+
+
+class UpdatePreferencesRequest(CamelRequest):
+    """A preferences edit: the keys carried are merged, `null` removes one.
+
+    `extra="forbid"` makes an unknown key a 400 on that key. Which keys were
+    carried is read from `model_fields_set`, since `None` means "remove".
+    """
+
+    model_config = ConfigDict(alias_generator=to_camel, extra="forbid")
+
+    clock: Literal["12h", "24h"] | None = None
 
 
 class AddMemberRequest(CamelRequest):

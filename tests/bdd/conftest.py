@@ -51,6 +51,8 @@ from bdd.pages.sign_in_page import SignInPage
 
 ADA = "ada@collabhub.dev"
 GRACE = "grace@collabhub.dev"
+#: Used by `display_names.feature` alone, so that renaming him needs no undoing.
+ALAN = "alan@collabhub.dev"
 
 #: The workspace both users work in. Each account also owns a personal one, and
 #: two people in two personal workspaces cannot see each other's channels —
@@ -278,6 +280,11 @@ def grace_context(browser: Browser, base_url: str, stack_ready: None) -> Iterato
     yield from _signed_in_context(browser, base_url, GRACE)
 
 
+@pytest.fixture(scope="session")
+def alan_context(browser: Browser, base_url: str, stack_ready: None) -> Iterator[BrowserContext]:
+    yield from _signed_in_context(browser, base_url, ALAN)
+
+
 def _restore(context: BrowserContext, page) -> None:
     """Undo anything a scenario did to the *context* rather than to the page.
 
@@ -304,6 +311,13 @@ def grace(grace_context: BrowserContext, base_url: str) -> Iterator[ChatPage]:
     page = grace_context.new_page()
     yield ChatPage(page, base_url)
     _restore(grace_context, page)
+
+
+@pytest.fixture
+def alan(alan_context: BrowserContext, base_url: str) -> Iterator[ChatPage]:
+    page = alan_context.new_page()
+    yield ChatPage(page, base_url)
+    _restore(alan_context, page)
 
 
 @pytest.fixture

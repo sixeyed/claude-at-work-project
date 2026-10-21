@@ -14,6 +14,7 @@ type SessionModule = typeof import('./session')
 const HOME = 'workspace-home'
 const AWAY = 'workspace-away'
 const VERIFIER_KEY = 'collabhub.pkceVerifier'
+const RETURN_KEY = 'collabhub.returnTo'
 
 const PROFILE: Profile = {
   id: 'user-ada',
@@ -323,5 +324,123 @@ describe('signIn', () => {
     expect(target.searchParams.get('codeChallengeMethod')).toBe('S256')
     expect(target.searchParams.get('codeChallenge')).toMatch(/^[A-Za-z0-9_-]{43}$/)
     vi.unstubAllGlobals()
+  })
+
+  it('remembers a safe return path, for the callback to go back to', async () => {
+    const assign = vi.fn()
+    vi.stubGlobal('location', { ...window.location, assign })
+
+    await session.signIn('dex', '/settings')
+
+    expect(window.sessionStorage.getItem(RETURN_KEY)).toBe('/settings')
+    expect(assign).toHaveBeenCalledTimes(1)
+
+    await session.signIn('dex', '/c/abc?message=m1')
+    expect(window.sessionStorage.getItem(RETURN_KEY)).toBe('/c/abc?message=m1')
+    vi.unstubAllGlobals()
+  })
+
+  it.each(['//evil.example', 'https://evil.example', '/\\evil', '/sign-in', '/auth/callback?code=x'])(
+    'ignores an unsafe return path (%s) and still signs in',
+    async (path) => {
+      const assign = vi.fn()
+      vi.stubGlobal('location', { ...window.location, assign })
+
+      await session.signIn('dex', path)
+
+      expect(window.sessionStorage.getItem(RETURN_KEY)).toBeNull()
+      expect(assign).toHaveBeenCalledTimes(1)
+      vi.unstubAllGlobals()
+    },
+  )
+
+})
+
+describe('takeReturnPath', () => {
+  it('gives the stored path once, then /', () => {
+    window.sessionStorage.setItem(RETURN_KEY, '/settings')
+
+    expect(session.takeReturnPath()).toBe('/settings')
+    expect(window.sessionStorage.getItem(RETURN_KEY)).toBeNull()
+    expect(session.takeReturnPath()).toBe('/')
+  })
+
+  it('gives / when nothing was remembered', () => {
+    expect(session.takeReturnPath()).toBe('/')
+  })
+})
+
+describe('updateProfile', () => {
+  const RENAMED: Profile = { ...PROFILE, displayName: 'Ada New' }
+
+  it('replaces the signed-in profile and tells listeners', async () => {
+    auth.refresh(pair(HOME))
+    await session.restore()
+    const listener = vi.fn()
+    session.subscribe(listener)
+
+    session.updateProfile(RENAMED)
+
+    const current = signedInSession(session)
+    expect(current.profile).toEqual(RENAMED)
+    expect(current.accessToken).toBe(tokenFor(HOME))
+    expect(current.workspaces).toEqual(WORKSPACES)
+    expect(current.activeWorkspaceId).toBe(HOME)
+    expect(listener).toHaveBeenCalledTimes(1)
+  })
+
+  it('does nothing when signed out, or for another user', async () => {
+    const listener = vi.fn()
+    session.subscribe(listener)
+
+    session.updateProfile(RENAMED)
+    expect(session.snapshot()).toEqual({ status: 'loading' })
+
+    auth.refresh(pair(HOME))
+    await session.restore()
+    listener.mockClear()
+    session.updateProfile({ ...RENAMED, id: 'user-grace', displayName: 'Gracie' })
+
+    expect(signedInSession(session).profile).toEqual(PROFILE)
+    expect(listener).not.toHaveBeenCalled()
+  })
+
+  it('outlives a switch whose profile read began before it', async () => {
+    auth.refresh(pair(HOME))
+    await session.restore()
+    auth.switchWorkspace(pair(AWAY))
+    let release!: (profile: Profile) => void
+    const held = new Promise<Profile>((resolve) => {
+      release = resolve
+    })
+    auth.meBy(() => held)
+    const reads = () =>
+      requests().filter((r) => r.method === 'GET' && r.url.pathname === '/api/v1/users/me').length
+    const before = reads()
+
+    const switching = session.changeWorkspace(AWAY)
+    await vi.waitFor(() => expect(reads()).toBe(before + 1))
+    session.updateProfile(RENAMED)
+    release(PROFILE)
+    await switching
+
+    // The read was answered before the rename and says "Ada Lovelace".
+    const current = signedInSession(session)
+    expect(current.activeWorkspaceId).toBe(AWAY)
+    expect(current.profile.displayName).toBe('Ada New')
+  })
+
+  it('does not freeze the name: a switch whose read begins after it adopts the server’s', async () => {
+    auth.refresh(pair(HOME))
+    await session.restore()
+    session.updateProfile(RENAMED)
+    auth.switchWorkspace(pair(AWAY))
+    auth.me({ ...PROFILE, displayName: 'Ada Newer' })
+
+    await session.changeWorkspace(AWAY)
+
+    const current = signedInSession(session)
+    expect(current.activeWorkspaceId).toBe(AWAY)
+    expect(current.profile.displayName).toBe('Ada Newer')
   })
 })

@@ -39,6 +39,32 @@ describe('the chat store', () => {
     expect(useChatStore.getState().drafts).toEqual({ general: 'for the channel' })
   })
 
+  it('remembers the last channel after the active one is cleared', () => {
+    const { setActiveChannel } = useChatStore.getState()
+    expect(useChatStore.getState().lastChannelId).toBeNull()
+
+    setActiveChannel('channel-1')
+    setActiveChannel(null)
+
+    expect(useChatStore.getState().activeChannelId).toBeNull()
+    expect(useChatStore.getState().lastChannelId).toBe('channel-1')
+
+    setActiveChannel('channel-2')
+    expect(useChatStore.getState().lastChannelId).toBe('channel-2')
+  })
+
+  it('forgets the last channel when told to, and clears nothing else', () => {
+    const { setActiveChannel, setDraft, clearLastChannel } = useChatStore.getState()
+    setActiveChannel('channel-1')
+    setDraft('channel-1', 'half a thought')
+
+    clearLastChannel()
+
+    expect(useChatStore.getState().lastChannelId).toBeNull()
+    expect(useChatStore.getState().activeChannelId).toBe('channel-1')
+    expect(useChatStore.getState().drafts).toEqual({ 'channel-1': 'half a thought' })
+  })
+
   it('records the connection status', () => {
     useChatStore.getState().setConnectionStatus('connected')
 

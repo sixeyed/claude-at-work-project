@@ -59,7 +59,9 @@ Base path `/api/v1`. Token endpoints and JWKS are unauthenticated; all others re
 | POST | `/auth/logout` | Bearer | Revoke the `jti` and the cookie's refresh token; clear the cookie. |
 | GET | `/auth/userinfo` | Bearer | Claims for the current token. |
 | GET | `/users/me` | Bearer | Current user profile. |
-| PATCH | `/users/me` | Bearer | Update own profile (display name, avatar ref). |
+| PATCH | `/users/me` | Bearer | Update own profile (display name, avatar ref). The name is trimmed and NFC-normalised, 1–100 code points, with control/format/invisible characters refused (400 on `displayName`); saving the name you have writes nothing; a name held by anyone else — deleted accounts included — is a 409 `"That name is already taken."` that names nobody (register D46). |
+| GET | `/users/me/preferences` | Bearer | Own preferences: `{}` or `{"clock": "12h"\|"24h"}`. Never creates a row; 404 for a deleted account (register D28). |
+| PATCH | `/users/me/preferences` | Bearer | Merge the keys carried; `null` removes one; an unknown key or bad value is a 400 on that key; `{}` writes nothing. Returns the merged result. Fails open when R1 is down. |
 | GET | `/users/{id}` | Bearer | Public profile of a user (name, avatar). |
 | GET | `/workspaces/{id}/members` | Bearer (member) | List members + roles. |
 | POST | `/workspaces/{id}/members` | Bearer (admin) | Invite/add member. |
@@ -208,6 +210,33 @@ CREATE INDEX ix_refresh_user ON refresh_tokens (user_id) WHERE revoked_at IS NUL
 ```
 
 SQLAlchemy models map one-to-one to these tables; Alembic owns the migration history.
+
+**Added 2026-10-21 (gh-5, register D46 and D28).** `users.display_name_key text NOT NULL` holds
+`NFC(NFD(display_name).casefold())`, computed by the application (`auth.names.name_key`, set by a
+`@validates` on the model), under `CREATE UNIQUE INDEX uq_users_display_name_key`. It is not
+filtered by `deleted_at`: a deleted account's name stays taken. A SQL `lower()` index was rejected
+because Postgres's `lower()` depends on `LC_CTYPE` and is not case folding.
+
+```sql
+CREATE TABLE user_preferences (
+    user_id     uuid PRIMARY KEY REFERENCES users(id),
+    prefs       jsonb NOT NULL DEFAULT '{}',   -- keys validated by the API: {"clock": "12h"|"24h"}
+    version     integer NOT NULL DEFAULT 0,
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+```
+
+One row per user, created by the first `PATCH`. Merged in one statement
+(`INSERT … ON CONFLICT (user_id) DO UPDATE SET prefs = (user_preferences.prefs || :set) - :removed`).
+
+**First sign-in and names.** `provision_user` repairs an unusable IdP name (drop refused characters,
+cut to 100, else the email's local part, else `user`), then takes the first free of `X`, `X 2`,
+`X 3` … — the base cut so the result fits in 100. The insert runs in a SAVEPOINT: if the unique
+index refuses it, the next candidate is tried only when that name has now been taken, otherwise the
+error (an email race) is raised as before. A sign-in never overwrites an existing name, and a rename
+never touches the workspace named after it. Migration `0002` applied the same rules to existing
+rows: names normalised, then every duplicate but the oldest renamed `X 2`, `X 3` …, never renaming a
+name that was no duplicate to make room.
 
 `refresh_tokens.workspace_id` was added during implementation and is not in the original
 table above. Refresh tokens are not workspace-*scoped* — the holder may switch at any time
