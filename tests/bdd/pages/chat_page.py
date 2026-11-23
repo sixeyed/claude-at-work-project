@@ -26,7 +26,7 @@ import time
 from collections.abc import Callable
 from pathlib import Path
 
-from playwright.sync_api import Locator, Page, expect
+from playwright.sync_api import BrowserContext, Locator, Page, expect
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 #: How long `appears_once` keeps checking the count after it first reads 1.
@@ -74,13 +74,43 @@ _CORNERS_HIT_THE_MENU = """(menu) => {
 }"""
 
 
+#: Evaluated in the page: what scrolls sideways. The document if its scroll width
+#: exceeds its width, and every element whose computed `overflow-x` is `auto` or
+#: `scroll` with content wider than its box. (An `overflow-y-auto` scroller
+#: computes `overflow-x: auto`, so `<main>` and the message list are checked, not
+#: only the page.) Each is described by tag and `data-testid`.
+_SIDEWAYS_SCROLLERS = """() => {
+  const out = []
+  const describe = (el) =>
+    el.tagName.toLowerCase() + (el.dataset && el.dataset.testid ? `[${el.dataset.testid}]` : '')
+  const doc = document.documentElement
+  if (doc.scrollWidth > doc.clientWidth) out.push('document')
+  for (const el of document.querySelectorAll('*')) {
+    const overflowX = getComputedStyle(el).overflowX
+    if ((overflowX === 'auto' || overflowX === 'scroll') && el.scrollWidth > el.clientWidth + 1) {
+      out.push(describe(el))
+    }
+  }
+  return out
+}"""
+
+#: The viewport Req 6 names.
+_NARROWEST = {"width": 360, "height": 740}
+
+
 class ChatPage:
-    def __init__(self, page: Page, base_url: str, touch: bool = False) -> None:
+    def __init__(self, page: Page, base_url: str, touch: bool = False, phone: bool = False) -> None:
         self.page = page
         self.base_url = base_url
         #: True for a context made with `has_touch`: presses are taps, because
         #: `Locator.tap()` throws without it and a touchscreen has no click.
         self.touch = touch
+        #: True for a context under 768px wide, where the sidebar is a drawer behind
+        #: ☰: whatever needs the sidebar opens it first.
+        self.phone = phone
+        #: The message list's `scrollTop` when the last thread was opened, so
+        #: `is_where_left` can say whether Back returned to it.
+        self._left_at: float | None = None
 
     def _press(self, locator: Locator) -> None:
         """Tap on a touch device, click on any other."""
@@ -88,6 +118,19 @@ class ChatPage:
             locator.tap()
         else:
             locator.click()
+
+    def _ensure_drawer_open(self) -> None:
+        """On a phone, open the sidebar drawer if it is not showing. Elsewhere, nothing.
+
+        A navigation made from the drawer closes it, so every step that needs the
+        sidebar asks for it again rather than assuming the last one left it open.
+        """
+        if not self.phone:
+            return
+        sidebar = self.page.get_by_test_id("sidebar")
+        if not sidebar.is_visible():
+            self._press(self.page.get_by_test_id("drawer-open"))
+            expect(sidebar).to_be_visible()
 
     def _open_actions(self, item: Locator) -> Locator:
         """Open a message's "⋯" menu and return the menu, shown in full.
@@ -150,6 +193,7 @@ class ChatPage:
 
     def open_settings(self) -> None:
         """Click your name in the sidebar and wait until the Settings page is up."""
+        self._ensure_drawer_open()
         self.page.get_by_test_id("current-user").click()
         expect(self.page.get_by_test_id("settings-page")).to_be_visible()
 
@@ -209,12 +253,22 @@ class ChatPage:
         return _holds(lambda: expect(self._channel_item(name)).to_have_count(0))
 
     def open_channel(self, name: str) -> None:
-        """Click a channel in the sidebar and wait until it is the open one."""
+        """Click a channel in the sidebar and wait until it is the open one.
+
+        On a phone the channel is picked from the drawer, and the navigation must
+        close it: the drawer hidden is part of arriving.
+        """
         self._settle()
-        self._channel_item(name).click()
+        if self.phone:
+            self._ensure_drawer_open()
+            self._press(self._channel_item(name))
+        else:
+            self._channel_item(name).click()
         expect(
             self.page.locator(f"[data-testid='channel-view'][data-channel-name='{name}']")
         ).to_be_visible()
+        if self.phone:
+            expect(self.page.get_by_test_id("sidebar")).to_be_hidden()
 
     def current_channel_id(self) -> str:
         """The id out of the address bar.
@@ -277,6 +331,7 @@ class ChatPage:
     # --- creating ---------------------------------------------------------
 
     def create_channel(self, name: str, kind: str = "public") -> None:
+        self._ensure_drawer_open()
         self.page.get_by_test_id("create-channel-kind").select_option(kind)
         self.page.get_by_test_id("create-channel-name").fill(name)
         self.page.get_by_test_id("create-channel-submit").click()
@@ -450,6 +505,9 @@ class ChatPage:
         "⋯" opens the actions at every width, so it is opened first, never hovered.
         """
         menu = self._open_actions(self._channel_item_for(body))
+        # Where the list is as the thread opens, for `is_where_left`: on a phone the
+        # thread covers it, and Back has to bring it back to exactly here.
+        self._left_at = self.page.get_by_test_id("message-list").evaluate("(el) => el.scrollTop")
         self._press(menu.get_by_test_id("thread-open"))
         self.page.get_by_test_id("thread-composer-input").fill(reply)
         self.page.get_by_test_id("thread-composer-send").click()
@@ -473,6 +531,42 @@ class ChatPage:
         """Open a thread from the root's reply summary, as someone who didn't write it would."""
         self._channel_item_for(body).get_by_test_id("thread-summary").click()
         expect(self.page.get_by_test_id("thread-panel")).to_be_visible()
+
+    def go_back(self) -> None:
+        """Press the browser's Back, and wait for the thread it closes to be gone."""
+        self.page.go_back()
+        expect(self.page.get_by_test_id("thread-panel")).to_have_count(0)
+
+    def is_where_left(self, name: str) -> bool:
+        """Whether the named channel's list is back at the scroll position it was left at.
+
+        First proves the arrangement could tell the readings apart: a position at
+        the top is where a scroller that lost its box comes back, and one at the
+        bottom is where a remounted list starts, so a position at neither is the
+        only one that shows Back kept it. Then waits for the position, within 2px.
+        """
+        left = self._left_at
+        if left is None:
+            raise AssertionError("no thread was opened, so there is no position to return to")
+        scroller = self.page.locator(
+            f"[data-testid='channel-view'][data-channel-name='{name}']"
+        ).get_by_test_id("message-list")
+        expect(scroller).to_be_visible()
+        room = scroller.evaluate("(el) => el.scrollHeight - el.clientHeight")
+        if not 100 <= left <= room - 100:
+            raise AssertionError(
+                f"the arrangement did not separate the readings: left at {left}, "
+                f"of {room} the list can scroll"
+            )
+        try:
+            self.page.wait_for_function(
+                "([el, left]) => Math.abs(el.scrollTop - left) <= 2",
+                arg=[scroller.element_handle(), left],
+                timeout=10_000,
+            )
+        except PlaywrightTimeoutError:
+            return False
+        return True
 
     def thread_has_message(self, text: str) -> bool:
         """Whether the open panel shows a message — fetched from the server on open."""
@@ -604,6 +698,9 @@ class ChatPage:
         `Then` performs an action. Gives up after ten seconds, leaving whatever
         the page shows for the `Then` to fail on.
         """
+        # A submit closes the phone's drawer and hides the box, so the drawer is opened
+        # before the first submit and before each resubmit.
+        self._ensure_drawer_open()
         box = self.page.get_by_test_id("search-box")
         box.fill(query)
         box.press("Enter")
@@ -614,6 +711,7 @@ class ChatPage:
             expect(results.or_(empty).first).to_be_visible()
             if results.count() > 0:
                 return
+            self._ensure_drawer_open()
             box.press("Enter")
             self.page.wait_for_timeout(500)
 
@@ -726,6 +824,7 @@ class ChatPage:
         message is what lists it in the other sidebar, and a send before the server
         has put this connection in the room would race its own arrangement.
         """
+        self._ensure_drawer_open()
         self.page.get_by_test_id("dm-new").click()
         self.page.locator(f"[data-testid='dm-pick'][data-member-name='{name}']").click()
         expect(self._view_of(name)).to_be_visible()
@@ -749,3 +848,68 @@ class ChatPage:
 
     def _dm_item(self, name: str) -> Locator:
         return self.page.locator(f"[data-testid='dm-list-item'][data-dm-name='{name}']")
+
+    # --- sideways scrolling -----------------------------------------------
+
+    def sideways_scrollers(self) -> list[str]:
+        """What on the current screen scrolls sideways; `[]` when nothing does."""
+        return self.page.evaluate(_SIDEWAYS_SCROLLERS)
+
+    def sideways_tour_at_360(
+        self,
+        signed_out: BrowserContext,
+        thread_root: str = "lunch at noon?",
+        dm_partner: str = "grace",
+    ) -> dict[str, list[str]]:
+        """Visit every screen Req 6 names at 360 by 740, keeping what scrolls sideways.
+
+        Run after the scroll-position check, so it cannot disturb it: it opens a
+        thread, a DM and Settings. The answer holds only the screens that scrolled,
+        so `{}` is a pass. Whether each control can be *reached and used* is not
+        checked here: only a person looking at 360px can say.
+
+        Starts a DM with `dm_partner`, which writes to the server — harmless in a
+        scenario that truncates messaging before it runs.
+        """
+        self.page.set_viewport_size(_NARROWEST)
+        found: dict[str, list[str]] = {}
+
+        def record(screen: str, scrollers: list[str]) -> None:
+            if scrollers:
+                found[screen] = scrollers
+
+        record("channel", self.sideways_scrollers())
+
+        self.open_thread(thread_root)
+        record("thread", self.sideways_scrollers())
+        self.go_back()
+
+        # The drawer with the create-channel form filled (a long name, not submitted)
+        # and the new-DM list open.
+        self._ensure_drawer_open()
+        self.page.get_by_test_id("create-channel-name").fill("a-channel-with-a-very-long-name-xx")
+        self._press(self.page.get_by_test_id("dm-new"))
+        picks = self.page.get_by_test_id("dm-pick")
+        expect(picks.first).to_be_visible()
+        record("drawer", self.sideways_scrollers())
+
+        self._press(self.page.locator(f"[data-testid='dm-pick'][data-member-name='{dm_partner}']"))
+        expect(self._view_of(dm_partner)).to_be_visible()
+        record("DM", self.sideways_scrollers())
+
+        self.search("lunch")
+        expect(self.page.get_by_test_id("search-result").first).to_be_visible()
+        record("search", self.sideways_scrollers())
+
+        self.open_settings()
+        record("settings", self.sideways_scrollers())
+
+        sign_in = signed_out.new_page()
+        try:
+            sign_in.set_viewport_size(_NARROWEST)
+            sign_in.goto(f"{self.base_url}/sign-in")
+            expect(sign_in.get_by_test_id("sign-in")).to_be_visible()
+            record("sign-in", sign_in.evaluate(_SIDEWAYS_SCROLLERS))
+        finally:
+            sign_in.close()
+        return found
