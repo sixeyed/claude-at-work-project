@@ -89,14 +89,14 @@ it goes down to Vitest.
 
 | Behaviour | Layer | File |
 |---|---|---|
-| On a phone, Ada picks #general from the drawer, reacts and replies through "⋯", goes Back to where she was, and at 360 wide no screen she can reach scrolls sideways | **BDD** | `tests/bdd/features/phone_layout.feature` |
+| On a phone, Ada picks #general from the drawer, reacts and replies through "⋯", goes Back to where she was, then visits every screen at 360 wide and none scrolls sideways | **BDD** | `tests/bdd/features/phone_layout.feature` |
 | `useNarrow`: 767 narrow, 768 wide, follows changes both ways, unsubscribes | Vitest | `src/lib/layout/useNarrow.test.ts` |
 | The drawer — first load, ☰ on every screen, each way it closes and doesn't, modal focus, "⋯" closed by it, the search path — and crossing the breakpoint with a thread, a draft, a scroll position and the member panel | Vitest, through the real `App` | `src/App.narrow.test.tsx` |
 | The panels covering, their back controls, browser Back, the member panel's default and its resets | Vitest, through `ChannelView` with the real `ChannelList` | `src/features/channels/ChannelView.narrow.test.tsx` |
 
 **What no test covers**, and who checks it instead:
 - **360px: "every control can be reached and used"** — jsdom does no layout. The journey's last
-  step resizes to 360×740 and checks *sideways scroll only* on a channel, a thread, the drawer with
+  `When` resizes to 360×740 and visits, and its last `Then` checks *sideways scroll only* on a channel, a thread, the drawer with
   the create-channel form filled and the new-DM list open, a DM, `/search` with results,
   `/settings` and sign-in (Task 3). Whether each control is reachable and usable at 360 — the
   composer row, an admin's channel header, Settings' fields — is the acceptance-reviewer's check 4
@@ -311,7 +311,8 @@ Feature: CollabHub on a phone
     Then Grace sees 1 reply on "lunch at noon?" without reloading
     When Ada goes Back
     Then Ada sees the "general" channel where she left it
-    And at 360 wide, no screen Ada can reach scrolls sideways
+    When Ada visits every screen at 360 wide
+    Then none of them scrolls sideways
 ```
 
 - **Reused verbatim:** `Ada is signed in`, `Ada has created a public channel named`, `Ada opens the
@@ -322,9 +323,13 @@ Feature: CollabHub on a phone
   module and conftest only; vocabulary §35 did the same).
 - **New:** `Given Grace has sent {count:d} messages in "{channel}"` (one `grace.open()`, open the
   channel, wait for the join, then `count` × `send_message_and_wait` with bodies unique in the
-  scenario) · `When Ada goes Back` · `Then Ada sees the "{name}" channel where she left it` · `Then
-  at 360 wide, no screen Ada can reach scrolls sideways` (it requests `signed_out_context` for the
-  sign-in page, and asserts the tour's result is `{}` — every screen named with what scrolled).
+  scenario) · `When Ada goes Back` · `Then Ada sees the "{name}" channel where she left it` · `When
+  Ada visits every screen at 360 wide` (it requests `signed_out_context` for the sign-in page, runs
+  `sideways_tour_at_360` and keeps its result in a function-scoped `tour` dict fixture of the steps
+  module) · `Then none of them scrolls sideways` (no action: asserts `tour["result"] == {}`, failing
+  with every screen named and what scrolled; a missing `"result"` key — the `When` never ran — is a
+  `KeyError`, not a pass). The act is a `When` and the check a `Then` because a `Then` never
+  performs an action (vocabulary §16).
 - **Why 10, then the message, then 15:** the list opens at its newest; reaching "lunch at noon?"
   scrolls it up to a position that is neither the top (a scroller that lost its box comes back at 0)
   nor the bottom (a remounted list starts at its newest). Both wrong builds then fail the last-but-one
@@ -451,7 +456,7 @@ Task 9. What overflows 360 today, found by reading the classes:
   **D20 stays open**. D47's "Layout below 768px is gh-9" becomes a pointer to D48.
 - [ ] ADR with the `adr-writer` skill: one tree at every width, JS-computed narrow, overlay over a
   mounted column.
-- [ ] Scenario vocabulary: §36, *CollabHub on a phone — four phrases, one phone journey (gh-9)*,
+- [ ] Scenario vocabulary: §36, *CollabHub on a phone — five phrases, one phone journey (gh-9)*,
   in §35's shape.
 - [ ] Sweep: `grep -rn "gh-9\|768\|narrow\|mobile" docs/design src/frontend/src tests/bdd` for
   anything saying narrow screens aren't built.
@@ -544,3 +549,11 @@ Round 1, `reviews/plan-reviewer-1.md`:
 7. **Fixed.** Task 9 passes each file from `git status --short` by name, as `code-writer.md` says.
 
 Left for later stages: `AttachmentList.tsx` chip line corrected to `:166`.
+
+Round 2, `reviews/plan-reviewer-2.md`:
+
+1. **Fixed.** The tour is now an act and a check: `When Ada visits every screen at 360 wide` runs
+   `sideways_tour_at_360` and keeps its result in a `tour` fixture; `Then none of them scrolls
+   sideways` performs nothing and asserts the result is `{}`. Updated: the Gherkin, the *New*
+   phrases bullet, the test-approach row, *What no test covers*, and Task 8's vocabulary entry
+   (five phrases).
