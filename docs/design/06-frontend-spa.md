@@ -389,9 +389,11 @@ is in `/features/threads`.
   applies (a press on an input focuses it).
 - **One at a time**: `openMessageMenu` in the chat store holds the open instance's id (client
   state, D24). The offered actions changing under an open menu closes it, compared by value.
-- **Focus when "⋯" goes away** (a live delete, a role change, the thread closing): to the nearest
+- **Focus when "⋯" goes away**: on a live delete of the message, focus moves to the nearest
   `[data-focus-fallback]` — the message list's scroller, or the thread panel — never the body.
-  After editing, saved or cancelled, focus returns to "⋯", which stays while editing.
+  A change to the offered actions (a role change) keeps "⋯" and closes the menu, returning focus
+  to "⋯". Closing the thread or switching channel takes the menu away with its surface and
+  claims nothing about focus. After editing, saved or cancelled, focus returns to "⋯", which stays while editing.
 
 ### 5.4 Search — added 2026-10-02
 
