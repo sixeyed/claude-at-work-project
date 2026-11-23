@@ -59,6 +59,8 @@ Taken in this plan:
 | 20 | Read state under a covering panel — **assumed** | Unchanged: the covered list counts as read exactly as it does beside a thread when wide | No requirement speaks to it, and changing it touches `readState`. Alternative: stop reading while covered — one predicate and a test |
 | 21 | The keyboard | `interactive-widget=resizes-content` in the viewport meta, and `#root` at `100dvh` | The issue's own assumption, provable only on a device: left for the human (*Acceptance*) |
 | 22 | The register | **D48 🟢**, a responsive web layout below 768px, leaving D20 open; an ADR as D47 had | The issue's *Record in this slice* |
+| 23 | "Rotate with a thread open and a draft" against Decision 19 — **assumed** | The path means **both** drafts: the channel composer's, typed before the thread opens (or at the wide end, where both composers show), and the thread composer's. Both survive a crossing either way. Acceptance check 3 is performed in that order: at 390×844 Ada types a draft in the channel composer, *then* opens the thread and types a reply draft, resizes to 844×390 and back; the thread is open, the reply draft is there, and **Back to channel** shows the channel draft | At 390 a covering thread hides the channel composer (Decision 19), so check 3's "opens a thread and types a draft in the channel composer" can't be done in that order (*Corrections*). Typing first keeps every word of the check and adds the only composer usable at 390. Alternative: leave the channel composer uncovered under a thread — two composers on a 390px screen; a class change in Task 6 and one test row |
+| 24 | Focus on two narrow-only paths — **assumed** | **Back to channel** on a covering panel (thread or members) focuses the channel composer's textarea; crossing wide → narrow with focus inside the sidebar moves focus to ☰. Neither is required by the issue | Without it focus drops to `<body>` as the focused control unmounts or is hidden. The composer is where a reader returning to a channel goes next; ☰ is what replaces the sidebar. Alternative: leave it to the browser — remove two lines and two assertions |
 
 Nothing here builds on a 🔴 entry. **D20** (React Native vs PWA) is the nearest and stays open: no
 manifest, no service worker, nothing platform-specific in `/lib`. D26 and D28 are 🟢 and only
@@ -71,6 +73,11 @@ followed (Tailwind v4, light palette).
   and `ada_touch_context` at `:349-360`. It is still wider than 768px, so the conclusion stands —
   every existing journey runs the wide layout — and Task 3 updates its comment, which names gh-9.
 - `ThreadPanel`'s `w-80 shrink-0` is at `ThreadPanel.tsx:142`, not `:139`. No consequence.
+- **Acceptance check 3** ("opens a thread and types a draft in the channel composer") can't be
+  done in that order at 390×844: the open thread covers the channel composer (Decision 19).
+  Decision 23 gives the order the acceptance-reviewer follows.
+- **Acceptance check 4** lists no sign-in page, which Req 6 does. The journey checks it at 360
+  (Task 3); the acceptance-reviewer should add it.
 
 ## Test approach — recommendation to the test pair
 
@@ -82,14 +89,21 @@ it goes down to Vitest.
 
 | Behaviour | Layer | File |
 |---|---|---|
-| On a phone, Ada picks #general from the drawer, reacts and replies through "⋯", goes Back to where she was, and nothing scrolls sideways | **BDD** | `tests/bdd/features/phone_layout.feature` |
+| On a phone, Ada picks #general from the drawer, reacts and replies through "⋯", goes Back to where she was, and at 360 wide no screen she can reach scrolls sideways | **BDD** | `tests/bdd/features/phone_layout.feature` |
 | `useNarrow`: 767 narrow, 768 wide, follows changes both ways, unsubscribes | Vitest | `src/lib/layout/useNarrow.test.ts` |
 | The drawer — first load, ☰ on every screen, each way it closes and doesn't, modal focus, "⋯" closed by it, the search path — and crossing the breakpoint with a thread, a draft, a scroll position and the member panel | Vitest, through the real `App` | `src/App.narrow.test.tsx` |
 | The panels covering, their back controls, browser Back, the member panel's default and its resets | Vitest, through `ChannelView` with the real `ChannelList` | `src/features/channels/ChannelView.narrow.test.tsx` |
 
 **What no test covers**, and who checks it instead:
-- **360px on every screen** — the CSS in Task 7. jsdom does no layout; the journey checks sideways
-  scroll at 390 on a channel; the acceptance-reviewer's check 4 covers every screen at 360.
+- **360px: "every control can be reached and used"** — jsdom does no layout. The journey's last
+  step resizes to 360×740 and checks *sideways scroll only* on a channel, a thread, the drawer with
+  the create-channel form filled and the new-DM list open, a DM, `/search` with results,
+  `/settings` and sign-in (Task 3). Whether each control is reachable and usable at 360 — the
+  composer row, an admin's channel header, Settings' fields — is the acceptance-reviewer's check 4
+  plus sign-in (*Corrections*), and the human's.
+- **The journey's last `Then`s are the SPA's own** (scroll position, sideways scroll), not what
+  the server holds: the server is proven mid-scenario, by Grace seeing the reaction and the reply
+  count. That is deliberate — the scroll and the layout are what the journey exists for.
 - **The composer above the on-screen keyboard** (Decision 21), and a real rotation — the human, on
   a real phone (*Acceptance*, "For the human").
 - The drawer's look and animation — not specified.
@@ -217,6 +231,7 @@ close a "⋯" menu by itself.
 | Test | Proves | Expected red |
 |---|---|---|
 | `opens on a narrow / and holds focus inside it` | Req 4 first load; Req 3 focus in: dialog **Sidebar** present, `document.activeElement` inside it, `<main>` `inert` | `Unable to find role="dialog" and name "Sidebar"` |
+| `on a narrow / it can be closed, and stays closed` | Req 4 "and can be closed": open on arrival; press **Close sidebar** → no dialog, ☰ focused, pathname `/`; press ☰ (dialog back — the positive), then Escape → no dialog, ☰ focused. Each close is itself a re-render of the shell, so a build whose arrival effect depends on `drawerOpen` or on every render reopens it and fails here | `Unable to find role="dialog" and name "Sidebar"` (first load) |
 | `a link straight to a channel, a DM, /search or /settings opens closed, with ☰` | Req 4; Req 2's every screen — four renders in one `it.each`, each: ☰ present, no dialog, channel links inaccessible | `Unable to find role="button" and name "Open sidebar"` |
 | `wide / shows the sidebar and no ☰` | the wide side of Req 1 and 4: at 1024 no dialog, no ☰, the `general` link accessible | **passes at red, by design** — today's layout; it fails a build that opens the drawer or shows ☰ at 768+ |
 | `crossing to narrow on / leaves it closed` | Decision 16: render at 1024 on `/`, `setViewportWidth(767)`: ☰ present, no dialog | `Unable to find … "Open sidebar"` |
@@ -243,20 +258,22 @@ close a "⋯" menu by itself.
 | Test | Proves | Expected red |
 |---|---|---|
 | `a thread stays open, the same panel, side ⇄ full screen` | Req 7; Paths "Rotate": at 1024 on `/c/general?thread=<root>`, hold the thread panel node; → 390: same node, **Back to channel**, message column `inert`; → 1024: same node, **Close thread**, column not `inert` | `Unable to find role="button" and name "Back to channel"` |
-| `the composer's draft and its node survive both crossings` | Req 7: type in the channel composer at 1024; → 390 → 1024: the same textarea, its value kept, ☰ present at 390 | `Unable to find … "Open sidebar"` |
+| `with a thread open, both drafts and their nodes survive 1024 → 390 → 1024` | Req 7; Paths "Rotate with a thread open and a draft"; Decision 23: at 1024 on `/c/general?thread=<root>`, type `channel draft` in **Message #general** and `reply draft` in **Reply**, hold both textareas; → 390: **Back to channel** shown (the thread covers), both textareas the same nodes with their values; → 1024: the same, **Close thread** shown | `Unable to find … "Back to channel"` |
+| `acceptance check 3's order: a channel draft, then a thread and a reply draft, 390 → 844 → 390` | Decision 23, the other direction: at 390 on `/c/general`, type `channel draft`; open the thread from the root's summary (`/1 reply/`); type `reply draft` in **Reply**; → 844 (**Close thread**, both values); → 390: thread still covering, **Reply** holds `reply draft`; press **Back to channel**: **Message #general** holds `channel draft` and has focus (Decision 24) | `Unable to find … "Open sidebar"` (☰ asserted at the first 390 render) |
 | `the channel list keeps its scroll position across both crossings` | Req 7: `giveLayout` the list's scroller at `scrollTop` 300 of 1200 (viewport 500); → 390 → 1024: the same node at 300, ☰ present at 390 | same |
 | `the member panel takes each width's default` | Req 7, *The member panel across the breakpoint*: 1024 shown; → 390 hidden and **Members** offered; open it; → 1024 shown, no **Back to channel**; → 390 hidden again | heading **Members** still present at 390 |
 | `wide to narrow with a thread open keeps the thread covering` | *The member panel across the breakpoint*, its exception: → 390: thread panel, **Back to channel**, no **Members** heading | `Unable to find … "Back to channel"` |
 | `the drawer is closed after crossing to wide and back` | Req 7: open at 390; → 1024: no dialog, no ☰, sidebar links accessible; → 390: no dialog | `Unable to find … "Open sidebar"` |
+| `crossing to narrow with focus in the sidebar moves it to ☰` | Decision 24: at 1024 on a channel, focus the `random` link; → 390: `document.activeElement` is **Open sidebar**. Its neighbour, in the same test: back at 1024, focus the channel composer; → 390: focus stays on the composer | `Unable to find … "Open sidebar"` |
 
 **`ChannelView.narrow.test.tsx` — the panels**
 
 | Test | Proves | Expected red |
 |---|---|---|
 | `at 768 the member panel is beside the list; at 767 it is closed with a Members button` | Req 1's boundary on the panel, two renders | at 767: heading **Members** still present |
-| `a thread covers the list; Back to channel returns at the scroll position left` | Req 5; Paths "A thread, then Back": `giveLayout` the list at 300; open a thread from its summary: **Back to channel**, column `inert`; press it: no panel, the same scroller at 300, `?thread` gone | `Unable to find … "Back to channel"` |
+| `a thread covers the list; Back to channel returns at the scroll position left` | Req 5; Paths "A thread, then Back": `giveLayout` the list at 300; open a thread from its summary: **Back to channel**, column `inert`; press it: no panel, the same scroller at 300, `?thread` gone, focus on the channel composer (Decision 24) | `Unable to find … "Back to channel"` |
 | `the browser's Back closes a covering thread at the same position` | Req 5, *A thread opened from a narrow channel*: as above, closing with the `Back` button (`navigate(-1)`); asserts the covering form before Back | same |
-| `Members opens a covering panel; Back to channel closes it; no history entry` | Req 5: press **Members** (`aria-expanded` true): heading **Members**, column `inert`, `location().key` unchanged; **Back to channel**: heading gone, column not `inert` | `Unable to find role="button" and name "Members"` |
+| `Members opens a covering panel; Back to channel closes it; no history entry` | Req 5: press **Members** (`aria-expanded` true): heading **Members**, column `inert`, `location().key` unchanged; **Back to channel**: heading gone, column not `inert`, focus on the channel composer | `Unable to find role="button" and name "Members"` |
 | `the member panel closes on a channel switch` | Decision 17: open in `general`, click `random`: no **Members** heading in `random` | same |
 | `a DM offers no Members button` | the DM rule, anchored: `general` shows **Members**; open the DM: none, no panel | same |
 
@@ -294,7 +311,7 @@ Feature: CollabHub on a phone
     Then Grace sees 1 reply on "lunch at noon?" without reloading
     When Ada goes Back
     Then Ada sees the "general" channel where she left it
-    And nothing on Ada's screen scrolls sideways
+    And at 360 wide, no screen Ada can reach scrolls sideways
 ```
 
 - **Reused verbatim:** `Ada is signed in`, `Ada has created a public channel named`, `Ada opens the
@@ -306,7 +323,8 @@ Feature: CollabHub on a phone
 - **New:** `Given Grace has sent {count:d} messages in "{channel}"` (one `grace.open()`, open the
   channel, wait for the join, then `count` × `send_message_and_wait` with bodies unique in the
   scenario) · `When Ada goes Back` · `Then Ada sees the "{name}" channel where she left it` · `Then
-  nothing on Ada's screen scrolls sideways`.
+  at 360 wide, no screen Ada can reach scrolls sideways` (it requests `signed_out_context` for the
+  sign-in page, and asserts the tour's result is `{}` — every screen named with what scrolled).
 - **Why 10, then the message, then 15:** the list opens at its newest; reaching "lunch at noon?"
   scrolls it up to a position that is neither the top (a scroller that lost its box comes back at 0)
   nor the bottom (a remounted list starts at its newest). Both wrong builds then fail the last-but-one
@@ -319,7 +337,9 @@ Feature: CollabHub on a phone
 - **Page object** (`chat_page.py`), new testids only there:
   - `phone: bool = False` in `__init__`.
   - `_ensure_drawer_open()` — phone only: if `sidebar` is not visible, press `drawer-open` and
-    expect `sidebar` visible. `create_channel` calls it first.
+    expect `sidebar` visible. `create_channel`, `search` (before the first submit **and** before
+    each resubmit, since a submit closes the drawer and hides `search-box`), `start_dm` and
+    `open_settings` call it first.
   - `open_channel` on a phone: `_ensure_drawer_open()`, press the channel, expect the named view,
     then **expect `sidebar` hidden** (the drawer closed by the navigation). Unchanged elsewhere.
   - `reply_in_thread` records the `message-list` element's `scrollTop` just before pressing
@@ -334,12 +354,28 @@ Feature: CollabHub on a phone
     `scrollWidth > clientWidth + 1`, each described by tag and `data-testid`. The step asserts it is
     `[]`. (An `overflow-y-auto` scroller computes `overflow-x: auto`, so `<main>` and the list are
     checked, not only the page.)
+  - `sideways_tour_at_360(signed_out: BrowserContext) -> dict[str, list[str]]` — Req 6's screens,
+    after the scroll check so it can't disturb it. `page.set_viewport_size({"width": 360,
+    "height": 740})`, then `sideways_scrollers()` on each, keeping only non-empty answers:
+    **channel** (the one open) · **thread** (`open_thread("lunch at noon?")`, then `go_back()`) ·
+    **drawer** (`_ensure_drawer_open()`, fill `create-channel-name` with a 40-character name
+    without submitting, press `dm-new`, expect `dm-pick` visible) · **DM** (press the `dm-pick`
+    for Grace, expect her view) · **search** (`search("lunch")`, results shown) · **settings**
+    (`open_settings()`) · **sign-in** (a new page in `signed_out`, the same 360×740, `goto`
+    `/sign-in`, expect `sign-in` visible; closed after). The issue's "every control can be reached
+    and used" is not checked here (*What no test covers*).
+- **The phone sign-in leans on Decision 16.** `ada_phone_context` signs in through
+  `SignInPage.sign_in`, which waits for `workspace-name` **visible**, then `use_workspace`, which
+  clicks a `workspace-option` (`sign_in_page.py:30-64`). On a phone both hold only because the
+  callback lands on `/` and the drawer opens there. `sign_in_page.py` needs no change; a later
+  change to Decision 16 must teach it to open the drawer, or every phone fixture fails at sign-in.
 
 **Expected red** — the suite can't run before the code-writer; the test-writer proves the feature
 parses and every step binds (`--collect-only`, `--generate-missing` printing nothing). Run against
-today's build, it would fail at `When Ada opens the "general" channel`: the 390px sidebar is visible
-(no ☰ needed), the press navigates, and *expect `sidebar` hidden* times out — there is no drawer.
-Leave uncommitted.
+today's build, it would fail at `Given Ada has created a public channel named "general"`: there is
+no `sidebar` testid, so `_ensure_drawer_open()` finds it not visible, presses `drawer-open`, and
+times out — there is no ☰. (`ada_phone_context`'s sign-in passes on today's build: at 390 the
+sidebar is simply visible.) Leave uncommitted.
 
 ## Task 4: The hook, the viewport (GREEN)
 
@@ -363,7 +399,8 @@ Leave uncommitted.
   handles Escape (`closeDrawer`) and the Tab wrap over its focusable, non-disabled descendants.
 - [ ] Arrival: an effect on `pathname` opens the drawer when it is `/` and the width is narrow
   **at that moment** (read through a ref, so `narrow` is not a dependency — Decision 16).
-- [ ] Width: when `narrow` turns false, set `drawerOpen` false without moving focus.
+- [ ] Width: when `narrow` turns false, set `drawerOpen` false without moving focus. When it turns
+  true and `document.activeElement` is inside the `<aside>`, focus ☰ (Decision 24).
 - [ ] `onNavigate={closeDrawer}` to `ChannelList`, `DirectMessageList`, `SearchBox`,
   `WorkspaceSwitcher`; `onCreated` navigates then closes. In each component, call `onNavigate` at
   exactly the points Task 2's table lists — `SearchBox` after its blank check, in both branches;
@@ -380,19 +417,25 @@ Leave uncommitted.
 - [ ] Member panel: wide — as today when no thread and not a DM. Narrow — rendered only when open,
   with `onBack` closing it, covering as the thread does. `ChannelHeader` gets `onToggleMembers` and
   `membersOpen` only when narrow, not a DM and no thread is open.
+- [ ] Decision 24: a **Back to channel** press (thread or members) focuses the channel composer's
+  textarea once the panel has gone — the thread's through `ChannelView`'s close handler when
+  narrow, not through `useThreadParam`, so the browser's Back and the wide **Close thread** are
+  untouched.
 - [ ] Task 2: every test passes. `npm --prefix src/frontend run typecheck` clean. Leave uncommitted.
 
 ## Task 7: 360px (GREEN)
 
-Nothing at this layer can test it (*What no test covers*); the journey and acceptance check 4 do.
-What overflows 360 today, found by reading the classes:
+Vitest can't test it (*What no test covers*); the journey's 360 tour does, at its first run in
+Task 9. What overflows 360 today, found by reading the classes:
 
 - [ ] `AttachmentList.tsx:141`: `max-w-80` (320px) inside a `px-6` row leaves 312px at 360 → cap at
-  `max-w-[min(20rem,100%)]`; the file chip at `:164` gets `max-w-full` so `truncate` can work.
+  `max-w-[min(20rem,100%)]`; the file chip at `:166` gets `max-w-full` so `truncate` can work.
 - [ ] `MessageItem.tsx:160` and `SearchResult.tsx:38`: add `[overflow-wrap:anywhere]` — a long URL
   in `whitespace-pre-wrap` text is one unbreakable word.
-- [ ] `ChannelHeader`'s `<h2>`: `break-words` (a long name). Check the composer row, the Settings
-  page and the sign-in page at 360 in the first real run (Task 9) and fix what is found there.
+- [ ] `ChannelHeader`'s `<h2>`: `break-words` (a long name); with the new **Members** button, the
+  header row is `flex-wrap` or the name `min-w-0 truncate`, so a long name can't push it off.
+- [ ] Anything the journey's 360 tour names when it first runs (Task 9) — the composer row,
+  Settings, sign-in — is fixed here, and recorded under *Found while building*.
 - [ ] Leave uncommitted.
 
 ## Task 8: The record
@@ -419,11 +462,14 @@ What overflows 360 today, found by reading the classes:
   first run, and every existing journey on its desktop or tablet context (issue *Tests*). Counts at
   or above the baseline: Vitest 620 + this plan's new tests; e2e 27. `-- -k phone` is for
   iterating if it fails. No `integration`: no service's Python, SQL or stream changes.
-- [ ] `python3 .claude/hooks/checks/conventions.py $(git diff --name-only HEAD)` and
-  `.claude/hooks/security.sh`.
-- [ ] **First real run**, on the Compose stack, in a browser's device mode at 360×740 and 390×844:
-  the five acceptance checks by hand, plus the composer row, `/settings`, sign-in and an admin's
-  channel header. Expect it to find an overflow the tests didn't; fix it, and record it below.
+- [ ] `python3 .claude/hooks/checks/conventions.py <file> …` with every file `git status --short`
+  lists as changed or new, by name (`git diff` misses new files), and `.claude/hooks/security.sh`.
+- [ ] The journey's 360 tour is this slice's first look at 360: a screen it names is fixed in
+  Task 7's files and the e2e layer rerun once.
+- [ ] **Left for the human** in the green report (the code-writer can't drive a browser by hand):
+  at 360×740 and 390×844, every control reachable and usable — the composer row, an admin's
+  channel header with **Members**, Settings' fields, sign-in — and the device checks under
+  *Acceptance*.
 - [ ] Fill in *Found while building*. Leave the worktree dirty and report.
 
 ## Found while building
@@ -443,18 +489,20 @@ found, each with the test that now pins it down. Empty until then.*
   table: every screen (it.each), close button, backdrop, Escape, channel, DM, new DM, search (both
   branches), `/settings`, workspace, create — and the "doesn't" rows (typing, new-DM list, blank
   search, refused create); Tasks 5, 3 (☰ in the journey). 3 → focus in, Tab wrap, focus back on
-  each close, `inert`; Task 5. 4 → first load, links straight to four screens, Decision 16; Task 5.
-  5 → `ChannelView.narrow` rows, browser Back, no history entry; Task 6; the journey's Back. 6 →
-  Task 7, the journey's sideways check, acceptance check 4 and the human. 7 → the crossing table;
-  Tasks 5, 6.
+  each close, `inert`; Task 5. 4 → first load, "can be closed, and stays closed", links straight
+  to four screens, Decision 16; Task 5. 5 → `ChannelView.narrow` rows, browser Back, no history
+  entry; Task 6; the journey's Back. 6 → Task 7, the journey's 360 tour over every screen Req 6
+  names, acceptance check 4 and the human for "reached and used". 7 → the crossing table, the two
+  draft rows with a thread open (Decision 23); Tasks 5, 6.
 - ***Where the rules meet*:** drawer and "⋯" → "opening it closes an open menu" + "backdrop …
   nothing else"; drawer and navigation → "starting a new DM"; a narrow thread → the two
   `ChannelView.narrow` thread rows and the journey; search and the drawer → the two search rows and
   the result row; member panel across the breakpoint → the two crossing rows.
 - ***Paths*:** first load → "opens on a narrow /" + "picking a channel"; a link to a channel →
   it.each; `/search`/`/settings` → it.each (sideways: acceptance); a DM → "picking a DM"; thread
-  then Back → the `ChannelView.narrow` rows and the journey; rotate → the crossing table, through
-  `App`, so `ChatLayout`'s own narrow change is in the tree; keyboard → the human.
+  then Back → the `ChannelView.narrow` rows and the journey; rotate with a thread and a draft → the
+  two draft rows, both directions, through `App`, so `ChatLayout`'s own narrow change is in the
+  tree; keyboard → the human.
 - ***Decided already*:** 1–6 → Decisions 1–6; D20 named above.
 - **Interfaces with a test each:** `useNarrow` (Task 1); ☰, Close sidebar, Dismiss sidebar, the
   dialog, `hidden`, `inert` (Task 2 drawer table); `onNavigate` on each of four components (one row
@@ -467,3 +515,32 @@ found, each with the test that now pins it down. Empty until then.*
 - **Known ripple:** `setup.ts` must install the fake before any test, or every test that renders
   `ChatLayout` fails on `window.matchMedia is not a function` — so it is Task 1, RED. The moved step
   definition is RED. No GREEN task touches a test file.
+
+## Review responses
+
+Round 1, `reviews/plan-reviewer-1.md`:
+
+1. **Fixed.** Decision 23 (**assumed**) names the conflict with Decision 19: the path means both
+   drafts, and acceptance check 3 is performed channel draft → open thread → reply draft → rotate;
+   a *Corrections* entry says so for the acceptance-reviewer. The crossing table's draft row is
+   replaced by two rows with a thread open, one per direction (1024 → 390 → 1024, and check 3's
+   390 → 844 → 390), each asserting both textareas' nodes and values.
+2. **Fixed.** New row `on a narrow / it can be closed, and stays closed`: close by button, reopen,
+   close by Escape, still on `/`, ☰ focused each time — each close is a shell re-render, so an
+   arrival effect keyed on `drawerOpen` or on every render fails it.
+3. **Fixed.** The journey's last step is now `at 360 wide, no screen Ada can reach scrolls
+   sideways`: `sideways_tour_at_360` resizes to 360×740 and checks the channel, a thread, the
+   drawer with the create form filled and the new-DM list open, a DM, `/search` with results,
+   `/settings` and sign-in (via `signed_out_context`). Task 7 fixes what its first run names; the
+   hand run is gone from Task 9 and "reached and used" is listed for the human. *What no test
+   covers* and *Corrections* name sign-in's absence from check 4.
+4. **Fixed.** Expected red now names `Given Ada has created a public channel named "general"`;
+   the phone sign-in's reliance on Decision 16 is stated under Task 3, with `sign_in_page.py`
+   unchanged. `search`, `start_dm` and `open_settings` also open the drawer first on a phone.
+5. **Fixed.** Said under *What no test covers*.
+6. **Fixed.** Decision 24 (**assumed**): **Back to channel** focuses the channel composer;
+   crossing to narrow with focus in the sidebar focuses ☰. Asserted in the two `ChannelView.narrow`
+   Back rows and a new crossing row (with its neighbour: focus elsewhere is left alone); Tasks 5, 6.
+7. **Fixed.** Task 9 passes each file from `git status --short` by name, as `code-writer.md` says.
+
+Left for later stages: `AttachmentList.tsx` chip line corrected to `:166`.
