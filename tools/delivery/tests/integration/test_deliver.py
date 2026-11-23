@@ -633,3 +633,100 @@ def test_a_finished_delivery_leaves_no_new_commit(repo, remote, issue_3):
 
     assert run(repo, issue_3, FakeAgent()) == 0
     assert git(repo.parent / "caw-gh-3", "rev-parse", "HEAD") == before
+
+
+# --- labels on the issue --------------------------------------------------------
+
+
+def label_edits(gh) -> list[list[str]]:
+    """Each `gh issue edit` the runner made, as its --add-label / --remove-label arguments."""
+    return [c[0][6:] for c in gh.calls if c[0][1:3] == ["issue", "edit"]]
+
+
+@pytest.fixture
+def labelled(issue_3, gh_issue):
+    """Issue 3 as a person left it — `delivery:ready` on — then, read again at the end, as the
+    runner's own start left it."""
+    issue_3.answers["issue view"] = [
+        gh_issue(number=3, title="Display names", body=BODY, labels=("delivery", "delivery:ready")),
+        gh_issue(
+            number=3, title="Display names", body=BODY, labels=("delivery", "delivery:in-progress")
+        ),
+    ]
+    return issue_3
+
+
+def test_a_run_is_in_progress_on_its_issue_then_says_how_it_ended(repo, labelled):
+    code = run(repo, labelled, FakeAgent())
+
+    assert code == 2
+    assert label_edits(labelled) == [
+        ["--add-label", "delivery:in-progress", "--remove-label", "delivery:ready"],
+        ["--add-label", "delivery:needs-human", "--remove-label", "delivery:in-progress"],
+    ]
+
+
+def test_a_failed_run_is_labelled_failed(repo, labelled):
+    code = run(repo, labelled, FakeAgent(stray=True))
+
+    assert code == 1
+    assert label_edits(labelled)[-1] == [
+        "--add-label", "delivery:failed", "--remove-label", "delivery:in-progress",
+    ]  # fmt: skip
+
+
+def test_a_run_out_of_time_is_labelled_so(repo, labelled):
+    start = 1_792_150_000
+
+    code = run(
+        repo,
+        labelled,
+        FakeAgent(),
+        env={"DELIVER_DEADLINE": str(start)},
+        clock=lambda: start,
+    )
+
+    assert code == 4
+    assert label_edits(labelled)[-1][:2] == ["--add-label", "delivery:out-of-time"]
+
+
+def test_a_finished_delivery_run_again_is_labelled_accepted(repo, labelled):
+    run(repo, labelled, FakeAgent())
+    run_dir = repo.parent / "caw-gh-3" / "docs" / "plans" / "gh-3" / "run"
+    (run_dir / "state.json").write_text(
+        (run_dir / "state.json").read_text().replace('"needs_human"', '"done"')
+    )
+
+    code = run(repo, labelled, FakeAgent())
+
+    assert code == 0
+    assert label_edits(labelled)[-1][:2] == ["--add-label", "delivery:accepted"]
+
+
+def test_labels_that_cannot_be_set_never_change_how_a_run_ends(repo, labelled, capsys):
+    labelled.answers["issue edit"] = BackendError("HTTP 502")
+
+    code = run(repo, labelled, FakeAgent())
+
+    assert code == 2
+    assert (repo.parent / "caw-gh-3" / "docs" / "plans" / "gh-3" / "needs-human.md").exists()
+    # Both swaps tried, each logged once with gh's reason — and nothing else changed.
+    tried = {edit[1] for edit in label_edits(labelled)}
+    assert tried == {"delivery:in-progress", "delivery:needs-human"}
+    assert capsys.readouterr().err.count("HTTP 502") == 2
+
+
+def test_a_run_that_never_starts_sets_no_label(repo, labelled, person, capsys):
+    run(repo, labelled, FakeAgent())
+    person("docs/plans/gh-3/answers.md", "theirs\n")
+    worktree = repo.parent / "caw-gh-3"
+    (worktree / "docs" / "plans" / "gh-3" / "mine.md").write_text("mine\n")
+    git(worktree, "add", ".")
+    git(worktree, "commit", "-qm", "mine")
+    before = len(label_edits(labelled))
+
+    code = run(repo, labelled, FakeAgent())
+
+    assert code == 1
+    assert "diverged" in capsys.readouterr().err
+    assert len(label_edits(labelled)) == before

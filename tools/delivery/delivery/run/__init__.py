@@ -54,6 +54,13 @@ time and the PR — and each preview gets a random password for Dex, posted ther
 else; the acceptance stage gets it as SMOKE_PASSWORD, no agent the Slack token. Without them nothing is
 posted and the password is the shared `collabhub`. A failed post never fails a run.
 
+On GitHub the run labels its issue (delivery.labels): `delivery:in-progress` as it starts,
+taking off whatever trigger or end label the last run left, and at the end the one label
+its exit status gives — `delivery:accepted`, `delivery:needs-human`, `delivery:out-of-time`
+or `delivery:failed`. A run refused before its worktree is open labels nothing. A label that
+can't be set is logged and never fails a run. `.github/workflows/deliver-on-label.yml`
+starts a run when a person adds `delivery:ready`, through `delivery trigger`.
+
 A run can have a deadline, DELIVER_DEADLINE: no stage starts with less than
 DELIVER_DEADLINE_MARGIN minutes left, so a run on a hosted runner ends at a checkpoint
 rather than mid-stage at the job's limit. It exits 4; run it again to continue, from the
@@ -177,6 +184,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from delivery.errors import BackendError, ConfigError, RunError
+from delivery.labels import LabelChange, ending, starting
 from delivery.model import Backend, Issue
 from delivery.resolve import BackendConfig
 from delivery.run import preflight as checks
@@ -300,7 +308,16 @@ def deliver(
         run.backend = backend
         run.slack = notifier_from(settings.env, transport=slack_transport, log=log)
         source = Source(config.kind, config.url, issue.number)
-        return run.go(restart, render_issue(issue), source, agent=agent, sleep=sleep, clock=clock)
+        relabel(backend, key, starting(issue.labels))
+        status = 1
+        try:
+            status = run.go(
+                restart, render_issue(issue), source, agent=agent, sleep=sleep, clock=clock
+            )
+        finally:
+            # However it ended — an exception is caught below as exit 1 — the issue says so.
+            end_labels(backend, key, status)
+        return status
     except ConfigError as e:
         error(str(e))
         return 2
@@ -311,6 +328,27 @@ def deliver(
         # A corrupt state file, a git that failed, a file that went missing: still one line.
         error(f"{type(e).__name__}: {e}")
         return 1
+
+
+def relabel(backend: Backend, key: str, change: LabelChange) -> None:
+    """Changes the issue's labels; a change that fails is logged and never fails the run."""
+    if not change:
+        return
+    try:
+        backend.set_labels(key, change.add, change.remove)
+    except BackendError as e:
+        log(f"The labels on {key} were not changed: {e}")
+
+
+def end_labels(backend: Backend, key: str, status: int) -> None:
+    """The run's end label, from the issue's labels as they are now: a person may have
+    changed them while it ran."""
+    try:
+        labels = backend.get(key).labels
+    except BackendError as e:
+        log(f"The labels on {key} were not changed: {e}")
+        return
+    relabel(backend, key, ending(labels, status))
 
 
 def git(*args: str) -> str:

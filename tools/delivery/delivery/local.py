@@ -15,6 +15,8 @@ KEY = re.compile(r"issue-([0-9]+)")
 NO_PULL_REQUESTS = (
     "the local backend opens no pull request — open it by hand from the proof, with `tea pr create`"
 )
+#: A local issue has no workflow to dispatch and no collaborators: it is started by hand.
+STARTED_BY_HAND = "a local issue is started from the command line — scripts/deliver.sh issue-N"
 #: `# Issue 8 — Better mobile experience`: the heading every local issue opens with.
 HEADING = re.compile(r"^# Issue [0-9]+ — (.+)$", re.MULTILINE)
 
@@ -61,6 +63,15 @@ class LocalBackend:
 
     def ensure_label(self, name: str, description: str, color: str) -> None:
         """Nothing to do: local issues carry no labels."""
+
+    def set_labels(self, key: str, add: Sequence[str], remove: Sequence[str]) -> None:
+        """Nothing to do: local issues carry no labels."""
+
+    def permission(self, login: str) -> str:
+        raise BackendError(STARTED_BY_HAND)
+
+    def start_delivery(self, key: str, *, restart: bool, stub: bool) -> None:
+        raise BackendError(STARTED_BY_HAND)
 
     def find_pull_request(self, head: str) -> PullRequest | None:
         raise BackendError(NO_PULL_REQUESTS)

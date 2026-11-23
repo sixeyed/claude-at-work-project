@@ -132,8 +132,14 @@ def test_get_asks_for_every_field_the_model_holds(backend, gh):
         "--repo",
         REPO,
         "--json",
-        "number,title,body,url,labels",
+        "number,title,body,url,labels,state",
     ]
+
+
+def test_get_reads_whether_the_issue_is_open(backend, gh, gh_issue):
+    gh.answers["issue view"] = gh_issue(state="CLOSED")
+
+    assert backend.get("gh-5").state == "CLOSED"
 
 
 @pytest.mark.parametrize("key", ["issue-5", "5", "gh-", "gh-five"])
@@ -290,3 +296,104 @@ def test_a_file_at_a_commit_is_linked_raw_so_an_image_shows_inline(backend):
     url = backend.blob_url("abc123", "docs/plans/gh-3/proof/feature/sign-in.png")
 
     assert url == f"{REPO_URL}/blob/abc123/docs/plans/gh-3/proof/feature/sign-in.png?raw=true"
+
+
+# --- labels, permission and dispatch -------------------------------------------
+
+
+def test_labels_are_added_and_removed_in_one_edit(backend, gh):
+    backend.set_labels("gh-5", add=["delivery:in-progress"], remove=["delivery:ready", "bug"])
+
+    args, _ = gh.call("issue edit")
+    assert args == [
+        "gh", "issue", "edit", "5", "--repo", REPO,
+        "--add-label", "delivery:in-progress",
+        "--remove-label", "delivery:ready", "--remove-label", "bug",
+    ]  # fmt: skip
+
+
+def test_no_change_makes_no_call(backend, gh):
+    backend.set_labels("gh-5", add=[], remove=[])
+
+    assert gh.calls == []
+
+
+def test_a_label_the_repo_lacks_is_made_and_the_edit_tried_once_more(backend, gh):
+    gh.answers["issue edit"] = [BackendError("'delivery:failed' not found"), ""]
+
+    backend.set_labels("gh-5", add=["delivery:failed"], remove=["delivery:in-progress"])
+
+    edits = [c for c in gh.calls if c[0][1:3] == ["issue", "edit"]]
+    assert len(edits) == 2
+    args, _ = gh.call("label create")
+    assert args[3] == "delivery:failed"
+    assert "--force" in args
+
+
+def test_an_edit_that_fails_twice_is_a_backend_error(backend, gh):
+    gh.answers["issue edit"] = BackendError("HTTP 502")
+
+    with pytest.raises(BackendError, match="502"):
+        backend.set_labels("gh-5", add=["delivery:failed"], remove=[])
+
+
+def test_a_failed_removal_alone_makes_no_label(backend, gh):
+    gh.answers["issue edit"] = BackendError("HTTP 502")
+
+    with pytest.raises(BackendError):
+        backend.set_labels("gh-5", add=[], remove=["delivery:ready"])
+
+    assert not [c for c in gh.calls if c[0][1:3] == ["label", "create"]]
+
+
+def test_a_senders_permission_comes_from_the_collaborators_endpoint(backend, gh):
+    gh.answers["api repos/sixeyed/claude-at-work-project/collaborators/octo/permission"] = "write\n"
+
+    assert backend.permission("octo") == "write"
+
+    args, _ = gh.calls[0]
+    assert args == [
+        "gh", "api", "repos/sixeyed/claude-at-work-project/collaborators/octo/permission",
+        "--hostname", "github.com", "--jq", ".permission",
+    ]  # fmt: skip
+
+
+def test_someone_who_is_not_a_collaborator_has_no_permission(backend, gh):
+    gh.answers["api repos/sixeyed/claude-at-work-project/collaborators/octo/permission"] = (
+        BackendError("gh: Not Found (HTTP 404)")
+    )
+
+    assert backend.permission("octo") == "none"
+
+
+def test_any_other_failure_reading_a_permission_is_a_backend_error(backend, gh):
+    gh.answers["api repos/sixeyed/claude-at-work-project/collaborators/octo/permission"] = (
+        BackendError("HTTP 502")
+    )
+
+    with pytest.raises(BackendError, match="502"):
+        backend.permission("octo")
+
+
+@pytest.mark.parametrize(
+    ("restart", "stub", "flags"),
+    [
+        (False, False, ["-f", "restart=false", "-f", "stub=false"]),
+        (True, True, ["-f", "restart=true", "-f", "stub=true"]),
+    ],
+)
+def test_a_delivery_is_started_by_dispatching_its_workflow(backend, gh, restart, stub, flags):
+    backend.start_delivery("gh-5", restart=restart, stub=stub)
+
+    args, _ = gh.call("workflow run")
+    assert args == [
+        "gh",
+        "workflow",
+        "run",
+        "deliver.yml",
+        "--repo",
+        REPO,
+        "-f",
+        "key=gh-5",
+        *flags,
+    ]

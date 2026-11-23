@@ -136,3 +136,30 @@ def test_it_opens_no_pull_requests(issues_root):
 def test_every_pull_request_call_says_to_open_one_by_hand(issues_root, call):
     with pytest.raises(BackendError, match="tea pr create"):
         call(LocalBackend(issues_root))
+
+
+# --- labels, permission and dispatch -------------------------------------------
+
+
+def test_set_labels_does_nothing_locally(issues_root):
+    before = {p: p.read_text() for p in (issues_root / "docs/issues").iterdir()}
+
+    LocalBackend(issues_root).set_labels("issue-8", add=["delivery:in-progress"], remove=[])
+
+    assert {p: p.read_text() for p in (issues_root / "docs/issues").iterdir()} == before
+
+
+def test_a_local_issue_is_always_open(issues_root):
+    assert LocalBackend(issues_root).get("issue-8").state == "OPEN"
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda b: b.permission("octo"),
+        lambda b: b.start_delivery("issue-8", restart=False, stub=False),
+    ],
+)
+def test_a_local_issue_is_started_from_the_command_line(issues_root, call):
+    with pytest.raises(BackendError, match=r"scripts/deliver\.sh"):
+        call(LocalBackend(issues_root))

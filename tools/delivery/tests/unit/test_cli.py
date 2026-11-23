@@ -48,6 +48,7 @@ def test_create_prints_the_issue_as_json(capsys, issues_root, body_file):
         "body": BODY,
         "url": "docs/issues/009.md",
         "labels": [],
+        "state": "OPEN",
     }
 
 
@@ -244,3 +245,124 @@ def test_a_failed_notify_is_reported_and_still_exits_0(capsys, tmp_path):
 
     assert code == 0
     assert "not_in_channel" in err
+
+
+# --- trigger and ensure-labels ---------------------------------------------------
+
+PERMISSION = "api repos/sixeyed/claude-at-work-project/collaborators/octo/permission"
+
+
+def trigger(capsys, root, gh, *extra):
+    return cli(capsys, root, *GITHUB, "trigger", "gh-5", "--sender", "octo", *extra, run=gh)
+
+
+def edits(gh):
+    return [c[0] for c in gh.calls if c[0][1:3] == ["issue", "edit"]]
+
+
+def dispatches(gh):
+    return [c[0] for c in gh.calls if c[0][1:3] == ["workflow", "run"]]
+
+
+def test_trigger_swaps_the_label_then_dispatches_the_delivery(capsys, issues_root, gh, gh_issue):
+    gh.answers["issue view"] = gh_issue(labels=("delivery", "delivery:ready"))
+    gh.answers[PERMISSION] = "write\n"
+
+    code, out, _ = trigger(capsys, issues_root, gh)
+
+    assert code == 0
+    assert edits(gh) == [
+        ["gh", "issue", "edit", "5", "--repo", "github.com/sixeyed/claude-at-work-project",
+         "--add-label", "delivery:in-progress", "--remove-label", "delivery:ready"],
+    ]  # fmt: skip
+    assert dispatches(gh) == [
+        ["gh", "workflow", "run", "deliver.yml", "--repo", "github.com/sixeyed/claude-at-work-project",
+         "-f", "key=gh-5", "-f", "restart=false", "-f", "stub=false"],
+    ]  # fmt: skip
+    # The labels change before the dispatch: a second event must find no trigger.
+    order = [c[0][1:3] for c in gh.calls]
+    assert order.index(["issue", "edit"]) < order.index(["workflow", "run"])
+    assert "started" in out
+
+
+def test_trigger_takes_restart_from_the_label_and_stub_from_the_flag(
+    capsys, issues_root, gh, gh_issue
+):
+    gh.answers["issue view"] = gh_issue(labels=("delivery:restart",))
+    gh.answers[PERMISSION] = "admin\n"
+
+    trigger(capsys, issues_root, gh, "--stub")
+
+    assert dispatches(gh)[0][-4:] == ["-f", "restart=true", "-f", "stub=true"]
+
+
+def test_trigger_refuses_a_closed_issue_and_takes_the_label_off(capsys, issues_root, gh, gh_issue):
+    gh.answers["issue view"] = gh_issue(labels=("delivery:ready",), state="CLOSED")
+    gh.answers[PERMISSION] = "admin\n"
+
+    code, out, _ = trigger(capsys, issues_root, gh)
+
+    assert code == 0
+    assert dispatches(gh) == []
+    assert edits(gh)[0][-2:] == ["--remove-label", "delivery:ready"]
+    assert "closed" in out
+
+
+def test_trigger_refuses_a_sender_who_cannot_write(capsys, issues_root, gh, gh_issue):
+    gh.answers["issue view"] = gh_issue(labels=("delivery:ready",))
+    gh.answers[PERMISSION] = "read\n"
+
+    code, out, _ = trigger(capsys, issues_root, gh)
+
+    assert code == 0
+    assert dispatches(gh) == []
+    assert "--add-label" not in edits(gh)[0]
+    assert "octo" in out
+
+
+def test_trigger_with_no_trigger_label_does_nothing(capsys, issues_root, gh, gh_issue):
+    gh.answers["issue view"] = gh_issue(labels=("delivery", "delivery:in-progress"))
+    gh.answers[PERMISSION] = "admin\n"
+
+    code, out, _ = trigger(capsys, issues_root, gh)
+
+    assert code == 0
+    assert edits(gh) == []
+    assert dispatches(gh) == []
+    assert "no trigger label" in out
+
+
+def test_trigger_that_cannot_dispatch_exits_1(capsys, issues_root, gh, gh_issue):
+    from delivery.errors import BackendError
+
+    gh.answers["issue view"] = gh_issue(labels=("delivery:ready",))
+    gh.answers[PERMISSION] = "write\n"
+    gh.answers["workflow run"] = BackendError("HTTP 403: Resource not accessible")
+
+    code, _, err = trigger(capsys, issues_root, gh)
+
+    assert code == 1
+    assert "403" in err
+    # No run is coming: the issue mustn't say one is.
+    assert edits(gh)[-1][-4:] == [
+        "--add-label", "delivery:failed", "--remove-label", "delivery:in-progress",
+    ]  # fmt: skip
+
+
+def test_ensure_labels_makes_all_eight(capsys, issues_root, gh):
+    code, _, _ = cli(capsys, issues_root, *GITHUB, "ensure-labels", run=gh)
+
+    made = [c[0][3] for c in gh.calls if c[0][1:3] == ["label", "create"]]
+    assert code == 0
+    assert sorted(made) == sorted(
+        [
+            "delivery",
+            "delivery:ready",
+            "delivery:restart",
+            "delivery:in-progress",
+            "delivery:accepted",
+            "delivery:needs-human",
+            "delivery:out-of-time",
+            "delivery:failed",
+        ]
+    )

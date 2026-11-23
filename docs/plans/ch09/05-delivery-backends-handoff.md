@@ -140,7 +140,8 @@ Three rules to keep:
 
 ## Open — put these to the user
 
-1. **Stage labels.** The names, which ones a run sets and clears, and what a failed or
+1. **Stage labels.** *Answered by `11-delivery-trigger-plan.md` and ADR
+   `261123-a-label-starts-a-delivery`: a label per outcome, not per stage.* The names, which ones a run sets and clears, and what a failed or
    stopped run leaves. `delivery` marks an issue as written for delivery, and a separate
    trigger label, applied by a person, starts one.
 2. **`needs_human` on GitHub.** Do the questions go to an issue comment, with the answers

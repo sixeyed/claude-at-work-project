@@ -83,8 +83,42 @@ gh api -X PATCH repos/OWNER/REPO -F allow_squash_merge=true -F allow_merge_commi
 
 ## The workflows, on the default branch
 
-`.github/workflows/deliver.yml` runs a delivery, and `preview.yml` holds a PR's preview. GitHub
-dispatches a workflow only from the default branch, so both have to be on `main`.
+`.github/workflows/deliver.yml` runs a delivery, `deliver-on-label.yml` starts one when a
+person adds `delivery:ready` to its issue, and `preview.yml` holds a PR's preview. GitHub runs
+an `issues` workflow and dispatches one only from the default branch, so all three have to be
+on `main`.
+
+## The delivery labels
+
+A delivery is started, and reports, through labels on its issue:
+
+| Label | Meaning |
+|---|---|
+| `delivery` | written for delivery, by the `issue-writer` skill; starts nothing |
+| `delivery:ready` | a person adds it to start a delivery, or to resume one |
+| `delivery:restart` | a person adds it to start again from plan-writer |
+| `delivery:in-progress` | a run is going |
+| `delivery:accepted` | the run ended accepted, with its PR open |
+| `delivery:needs-human` | stopped: answer `needs-human.md` on the branch, then add `delivery:ready` |
+| `delivery:out-of-time` | add `delivery:ready` to carry on |
+| `delivery:failed` | read the run's log before adding `delivery:ready` |
+
+Only someone with write or admin access starts a run; a label added by anyone else, or on a
+closed issue, is taken off again, and `deliver-on-label`'s job summary says why. The runner
+makes a label it is missing as it sets it, but a person needs `delivery:ready` in the label
+picker before any run has happened. Make all eight with:
+
+```bash
+uv run delivery --backend github --url https://github.com/OWNER/REPO ensure-labels
+```
+
+To prove the trigger without a model, set the repo variable `DELIVER_STUB` to `1`: every run a
+label starts is then a stub run. Delete it afterwards.
+
+```bash
+gh variable set DELIVER_STUB --body 1 --repo OWNER/REPO
+gh variable delete DELIVER_STUB --repo OWNER/REPO
+```
 
 ## Slack (optional)
 
