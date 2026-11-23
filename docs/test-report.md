@@ -1,15 +1,15 @@
 # Test report
 
-Written by `scripts/test.sh` after every layer it runs, so an edit by hand is lost. Revision `56fb009602cc-dirty`.
+Written by `scripts/test.sh` after every layer it runs, so an edit by hand is lost. Revision `9dfde148e3b1-dirty`.
 
 ## Layers
 
 | Layer | Result | Passed | Failed | Skipped | Revision |
 |---|---|--:|--:|--:|---|
-| Lint | ✅ passed | | | | `56fb009602cc-dirty` |
-| Unit | ✅ passed | 1993 | 0 | 0 | `56fb009602cc-dirty` |
-| Integration | ✅ passed | 627 | 0 | 0 | `56fb009602cc-dirty` |
-| End-to-end | ✅ passed | 25 | 0 | 0 | `56fb009602cc-dirty` |
+| Lint | ✅ passed | | | | `9dfde148e3b1-dirty` |
+| Unit | ✅ passed | 2099 | 0 | 0 | `9dfde148e3b1-dirty` |
+| Integration | ⚪ not run | | | | |
+| End-to-end | ✅ passed | 26 | 0 | 0 | `9dfde148e3b1-dirty` |
 
 ## Failures
 
@@ -51,6 +51,14 @@ None.
 | Scenario | Result |
 |---|---|
 | Grace sees the image and the PDF Ada sends | ✅ passed |
+
+### Message actions
+
+1 of 1 passed.
+
+| Scenario | Result |
+|---|---|
+| On a touch screen, Ada reacts to Grace's message and replies in its thread | ✅ passed |
 
 ### Messages
 
@@ -130,15 +138,15 @@ None.
 
 | Service | Unit | Integration |
 |---|---|---|
-| asset | ✅ 39 passed | ✅ 34 passed |
-| auth | ✅ 116 passed | ✅ 171 passed |
+| asset | ✅ 39 passed | — |
+| auth | ✅ 116 passed | — |
 | canvas | ✅ 2 passed | — |
-| messaging | ✅ 136 passed | ✅ 325 passed |
-| other | ✅ 889 passed | ✅ 48 passed |
-| shared | ✅ 94 passed | ✅ 26 passed |
-| testkit | ✅ 130 passed | ✅ 6 passed |
-| worker | ✅ 19 passed | ✅ 17 passed |
-| frontend | ✅ 568 passed | — |
+| messaging | ✅ 136 passed | — |
+| other | ✅ 943 passed | — |
+| shared | ✅ 94 passed | — |
+| testkit | ✅ 130 passed | — |
+| worker | ✅ 19 passed | — |
+| frontend | ✅ 620 passed | — |
 
 ## Coverage
 

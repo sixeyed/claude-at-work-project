@@ -700,3 +700,16 @@ verbatim: `Ada is signed in`, `Ada has created a public channel named`, `Grace i
 - `When Grace opens her direct message with Ada`
 - `When Grace sends "{body}"`
 - `Then Ada sees "{body}" in the channel without reloading`
+
+## 35. 🟢 Message actions — one new phrase, one touch journey (issue gh-8)
+
+`message_actions.feature` has a single scenario: Ada on a touch tablet (no hover) reacts to
+Grace's message and replies in its thread through the "⋯" button, and Grace sees both live.
+Which actions a message offers is proven in Vitest. Reused verbatim: `Ada is signed in`, `Ada has
+created a public channel named`, `Ada reacts to "{body}" with "{emoji}"`, `Grace sees "{body}"
+with {count} "{emoji}" reaction`, `Ada replies "{reply}" in the thread on "{body}"` and `Grace
+sees N reply on "{body}" without reloading`. The last four definitions moved, unchanged, from
+`test_reaction_steps.py` and `test_thread_steps.py` into `steps/conftest.py`, because pytest-bdd
+resolves a step from the calling module and `conftest.py` only. New:
+
+- `Given Grace has sent "{body}" in "{channel}"`

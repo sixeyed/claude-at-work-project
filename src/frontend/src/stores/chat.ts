@@ -59,6 +59,17 @@ interface ChatState {
    * 404.
    */
   lastChannelId: string | null
+  /**
+   * The `MessageActions` instance whose menu is open, if any. Client state — an
+   * instance id, never a message (D24). One menu is open at a time, and this is
+   * what enforces it even when no pointer event closes the other (a screen
+   * reader activates with a bare `click`).
+   */
+  openMessageMenu: string | null
+  /** Opens this instance's menu, replacing any other. */
+  openMessageMenuFor: (menuId: string) => void
+  /** Clears the open menu only if it is this one — closing another's is a no-op. */
+  closeMessageMenu: (menuId: string) => void
   setActiveChannel: (channelId: string | null) => void
   clearLastChannel: () => void
   setReadingChannel: (channelId: string | null) => void
@@ -81,6 +92,10 @@ export const useChatStore = create<ChatState>((set) => ({
   joinedChannelId: null,
   readingChannelId: null,
   lastChannelId: null,
+  openMessageMenu: null,
+  openMessageMenuFor: (menuId) => set({ openMessageMenu: menuId }),
+  closeMessageMenu: (menuId) =>
+    set((state) => (state.openMessageMenu === menuId ? { openMessageMenu: null } : state)),
   setActiveChannel: (channelId) =>
     set(
       channelId === null

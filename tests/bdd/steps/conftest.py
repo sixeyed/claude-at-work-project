@@ -190,3 +190,33 @@ def ada_edits(ada: ChatPage, old: str, new: str) -> None:
 @when(parsers.parse('Ada deletes "{body}"'))
 def ada_deletes(ada: ChatPage, body: str) -> None:
     ada.delete_message(body)
+
+
+# --- reactions and threads, shared with message_actions.feature ------------
+#
+# These four moved here, unchanged, from `test_reaction_steps.py` and
+# `test_thread_steps.py`: pytest-bdd finds a step in the module that called
+# `scenarios()` or in `conftest.py`, and `message_actions.feature` speaks the
+# same phrases to prove the same journeys on a touch screen.
+
+
+@when(parsers.parse('Ada reacts to "{body}" with "{emoji}"'))
+def ada_reacts(ada: ChatPage, body: str, emoji: str) -> None:
+    ada.react_to(body, emoji)
+
+
+@then(parsers.parse('Grace sees "{body}" with {count:d} "{emoji}" reaction'))
+def grace_sees_reaction(grace: ChatPage, body: str, count: int, emoji: str) -> None:
+    assert grace.has_reaction_count(body, emoji, count)
+
+
+@when(parsers.parse('Ada replies "{reply}" in the thread on "{body}"'))
+def ada_replies(ada: ChatPage, reply: str, body: str) -> None:
+    ada.reply_in_thread(body, reply)
+
+
+#: `parsers.re`, so "1 reply" and "2 replies" are one phrase and `[^"]*` cannot
+#: swallow a closing quote.
+@then(parsers.re(r'Grace sees (?P<count>\d+) repl(?:y|ies) on "(?P<body>[^"]*)" without reloading'))
+def grace_sees_count(grace: ChatPage, count: str, body: str) -> None:
+    assert grace.has_reply_count(body, int(count))

@@ -46,10 +46,71 @@ def _holds(check: Callable[[], None]) -> bool:
     return True
 
 
+#: Evaluated in the page for the "⋯" button: its own opacity times every
+#: ancestor's. Playwright treats an `opacity-0` element as visible, so without
+#: this a button that only appears on hover would pass on a device with no hover.
+_EFFECTIVELY_OPAQUE = """(el) => {
+  let opacity = 1
+  for (let node = el; node; node = node.parentElement) {
+    opacity *= parseFloat(getComputedStyle(node).opacity)
+  }
+  return opacity === 1
+}"""
+
+#: Evaluated in the page for the open menu: its four corners, inset 2px, each hit
+#: a node inside the menu. A menu clipped by the scrolling list, off the edge of
+#: the viewport (`elementFromPoint` answers null there) or covered by something
+#: else fails — which is what "fully visible" means in a real browser.
+_CORNERS_HIT_THE_MENU = """(menu) => {
+  const r = menu.getBoundingClientRect()
+  const corners = [
+    [r.left + 2, r.top + 2], [r.right - 2, r.top + 2],
+    [r.left + 2, r.bottom - 2], [r.right - 2, r.bottom - 2],
+  ]
+  return corners.every(([x, y]) => {
+    const hit = document.elementFromPoint(x, y)
+    return hit !== null && menu.contains(hit)
+  })
+}"""
+
+
 class ChatPage:
-    def __init__(self, page: Page, base_url: str) -> None:
+    def __init__(self, page: Page, base_url: str, touch: bool = False) -> None:
         self.page = page
         self.base_url = base_url
+        #: True for a context made with `has_touch`: presses are taps, because
+        #: `Locator.tap()` throws without it and a touchscreen has no click.
+        self.touch = touch
+
+    def _press(self, locator: Locator) -> None:
+        """Tap on a touch device, click on any other."""
+        if self.touch:
+            locator.tap()
+        else:
+            locator.click()
+
+    def _open_actions(self, item: Locator) -> Locator:
+        """Open a message's "⋯" menu and return the menu, shown in full.
+
+        Everything a message offers is behind this button, at every width, so
+        every action starts here. Three things are proved on the way, because a
+        real browser is the only place they can be: the button is *really*
+        visible before anything hovers (opacity, not just layout), the press
+        opens a menu, and that menu is whole — each corner answers to the menu
+        itself and not to the list that scrolls under it.
+        """
+        button = item.get_by_test_id("message-actions")
+        expect(button).to_be_visible()
+        self.page.wait_for_function(
+            _EFFECTIVELY_OPAQUE, arg=button.element_handle(), timeout=10_000
+        )
+        self._press(button)
+        menu = self.page.get_by_test_id("message-actions-menu")
+        expect(menu).to_be_visible()
+        self.page.wait_for_function(
+            _CORNERS_HIT_THE_MENU, arg=menu.element_handle(), timeout=10_000
+        )
+        return menu
 
     # --- navigation -------------------------------------------------------
 
@@ -300,14 +361,14 @@ class ChatPage:
         cache write too: an edit the server accepted but the SPA never applied
         would leave the old words showing, and that is worth failing for.
         """
-        self._item_for(old).get_by_test_id("message-edit").click()
+        self._press(self._open_actions(self._item_for(old)).get_by_test_id("message-edit"))
         editor = self.page.get_by_test_id("message-editor-input")
         editor.fill(new)
         self.page.get_by_test_id("message-editor-save").click()
         expect(self._message(new)).to_be_visible()
 
     def delete_message(self, text: str) -> None:
-        self._item_for(text).get_by_test_id("message-delete").click()
+        self._press(self._open_actions(self._item_for(text)).get_by_test_id("message-delete"))
         expect(self.page.get_by_test_id("message-deleted").first).to_be_visible()
 
     def has_edited_marker(self, text: str) -> bool:
@@ -347,20 +408,18 @@ class ChatPage:
     # --- reactions --------------------------------------------------------
 
     def react_to(self, text: str, emoji: str) -> None:
-        """Open a message's picker and choose an emoji, waiting for the chip.
+        """Open a message's "⋯" menu, choose React, then an emoji, waiting for the chip.
 
-        Hovering first because the controls live behind `group-hover`. Playwright
-        would click through the transparency anyway — opacity is not visibility
-        to it — but a hover is what a person does, and it costs nothing.
+        "⋯" opens the actions at every width, so there is no hover here: a touch
+        screen has none, and this is the path it takes.
 
         Waiting on the chip rather than on the request covers the cache write
         too: a reaction the server accepted and the SPA never applied would
         leave nothing on screen, and that is worth failing for.
         """
-        item = self._item_for(text)
-        item.hover()
-        item.get_by_test_id("reaction-picker").click()
-        self.page.locator(f"[data-testid='reaction-option'][data-emoji='{emoji}']").click()
+        menu = self._open_actions(self._item_for(text))
+        self._press(menu.get_by_test_id("reaction-picker"))
+        self._press(self.page.locator(f"[data-testid='reaction-option'][data-emoji='{emoji}']"))
         expect(self._chip(text, emoji)).to_be_visible()
 
     def has_reaction_count(self, text: str, emoji: str, count: int) -> bool:
@@ -388,11 +447,10 @@ class ChatPage:
         before anything has left the browser. `data-pending='false'` is the ack
         or the echo replacing the `temp:` row.
 
-        Hovering first because the action lives behind `group-hover`.
+        "⋯" opens the actions at every width, so it is opened first, never hovered.
         """
-        item = self._channel_item_for(body)
-        item.hover()
-        item.get_by_test_id("thread-open").click()
+        menu = self._open_actions(self._channel_item_for(body))
+        self._press(menu.get_by_test_id("thread-open"))
         self.page.get_by_test_id("thread-composer-input").fill(reply)
         self.page.get_by_test_id("thread-composer-send").click()
         panel = self.page.get_by_test_id("thread-panel")
