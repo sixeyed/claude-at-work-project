@@ -10,15 +10,25 @@ import pytest
 REPO_URL = "https://github.com/sixeyed/claude-at-work-project"
 
 
-def gh_issue(number: int = 5, title: str = "Pin a message", body: str = "## Summary\n\nPins.\n"):
-    """`gh issue view --json number,title,body,url,labels` output."""
+def gh_issue(
+    number: int = 5,
+    title: str = "Pin a message",
+    body: str = "## Summary\n\nPins.\n",
+    labels: tuple[str, ...] = ("delivery",),
+    state: str = "OPEN",
+):
+    """`gh issue view --json number,title,body,url,labels,state` output."""
     return json.dumps(
         {
             "number": number,
             "title": title,
             "body": body,
             "url": f"{REPO_URL}/issues/{number}",
-            "labels": [{"id": "LA_1", "name": "delivery", "description": "", "color": "0e8a16"}],
+            "labels": [
+                {"id": f"LA_{i}", "name": name, "description": "", "color": "0e8a16"}
+                for i, name in enumerate(labels)
+            ],
+            "state": state,
         }
     )
 

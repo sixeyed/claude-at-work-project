@@ -124,11 +124,11 @@ Then post it:
 
 - **A remote backend publishes it.** Name the backend and repo URL and wait for the user to say
   to post it — the coverage-table confirmation is not that. Then make sure the marker label
-  exists and create the issue with it. `delivery` marks an issue as written for delivery; it
-  does not start one.
+  exists — `ensure-labels` makes it and the labels that drive a delivery — and create the issue
+  with it. `delivery` marks an issue as written for delivery; it does not start one.
 
   ```bash
-  uv run delivery --url <u> ensure-label delivery
+  uv run delivery --url <u> ensure-labels
   uv run delivery --url <u> issue create --title "<title>" --body-file <draft> --label delivery
   ```
 
@@ -183,5 +183,6 @@ Then stop — starting the delivery is theirs. Give the user:
 - **local:** the path, the key, and the command that starts delivery, `scripts/deliver.sh
   issue-<N>`;
 - **remote:** the issue's URL, the key, and the command that delivers it from this machine,
-  `scripts/deliver.sh --backend github --url <repo URL> gh-<N>` — starting it from the issue
-  itself, with a label, arrives with the GitHub Actions workflow.
+  `scripts/deliver.sh --backend github --url <repo URL> gh-<N>` — and that adding the
+  `delivery:ready` label to the issue starts it on GitHub Actions instead. Never add that label
+  yourself: starting a run spends money, and is theirs to do.

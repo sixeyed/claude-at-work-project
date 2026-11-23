@@ -18,6 +18,7 @@ from urllib.parse import urlsplit
 
 from delivery.errors import BackendError
 from delivery.github import GitHubBackend
+from delivery.labels import LABELS
 from delivery.run.preflight import problems, runs_quietly
 
 DOC = "docs/delivery/prerequisites.md"
@@ -32,10 +33,11 @@ ANCHORS = (
     "squash-merges-only",
     "the-workflows-on-the-default-branch",
     "slack-optional",
+    "the-delivery-labels",
 )
 CLAUDE_SECRETS = ("CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY")
 SLACK = ("SLACK_BOT_TOKEN", "SLACK_CHANNEL")
-WORKFLOWS = ("deliver.yml", "preview.yml")
+WORKFLOWS = ("deliver.yml", "deliver-on-label.yml", "preview.yml")
 
 
 @dataclass(frozen=True)
@@ -109,6 +111,7 @@ def github_checks(backend: GitHubBackend) -> list[Check]:
             lambda: workflows(settings, lambda path: get(f"{api}/{path}")),
         )
     )
+    found.append(attempt("the delivery labels", "the-delivery-labels", lambda: labels(backend)))
     return found
 
 
@@ -192,7 +195,16 @@ def workflows(settings: dict | BackendError, get: Callable[[str], Any]) -> tuple
             missing.append(name)
     if missing:
         return MISSING, f"not on {branch}: {', '.join(missing)}"
-    return OK, f"{' and '.join(WORKFLOWS)} are on {branch}"
+    return OK, f"{', '.join(WORKFLOWS)} are on {branch}"
+
+
+def labels(backend: GitHubBackend) -> tuple[str, str]:
+    args = ["gh", "label", "list", "--repo", backend.repo, "--json", "name", "--limit", "500"]
+    have = {label["name"] for label in json.loads(backend.run(args, None) or "[]")}
+    missing = [name for name in LABELS if name not in have]
+    if missing:
+        return MISSING, f"missing {', '.join(missing)} — `uv run delivery ensure-labels` makes them"
+    return OK, f"all {len(LABELS)} are on the repo"
 
 
 def render(checks: list[Check]) -> str:

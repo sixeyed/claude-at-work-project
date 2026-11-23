@@ -23,6 +23,8 @@ class Issue:
     body: str
     url: str
     labels: list[str] = field(default_factory=list)
+    #: OPEN or CLOSED, as GitHub spells it. A local issue is always open.
+    state: str = "OPEN"
 
     def to_json(self) -> dict[str, object]:
         return asdict(self)
@@ -57,6 +59,16 @@ class Backend(Protocol):
 
     def ensure_label(self, name: str, description: str, color: str) -> None:
         """Creates the label, or updates it if it exists. A backend with no labels does nothing."""
+
+    def set_labels(self, key: str, add: Sequence[str], remove: Sequence[str]) -> None:
+        """Adds and removes labels on the issue, making any added label the repo lacks. A
+        backend with no labels does nothing."""
+
+    def permission(self, login: str) -> str:
+        """What `login` may do to the repo: admin, write, read or none."""
+
+    def start_delivery(self, key: str, *, restart: bool, stub: bool) -> None:
+        """Starts the issue's delivery where it runs remotely — on GitHub, deliver.yml."""
 
     def find_pull_request(self, head: str) -> PullRequest | None:
         """The open PR from branch `head`, if there is one."""

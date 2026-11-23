@@ -9,8 +9,12 @@
 # itself. With the SLACK_BOT_TOKEN and SLACK_CHANNEL secrets the run reports to Slack, one
 # thread per delivery, and each preview gets a random password posted there.
 #
-# Plans: docs/plans/ch09/07-delivery-actions-handoff.md, 08-delivery-actions-plan.md and
-# 10-delivery-pr-plan.md.
+# deliver-on-label.yml dispatches this when a person adds `delivery:ready` to an issue. The
+# runner labels the issue as it goes — `delivery:in-progress`, then how it ended — and a run
+# that never got to say, cancelled or killed, is labelled `delivery:failed` here.
+#
+# Plans: docs/plans/ch09/07-delivery-actions-handoff.md, 08-delivery-actions-plan.md,
+# 10-delivery-pr-plan.md and 11-delivery-trigger-plan.md.
 name: deliver
 run-name: deliver ${{ inputs.key }}${{ inputs.stub && ' (stub)' || '' }}${{ inputs.restart && ' (restart)' || '' }}
 
@@ -43,7 +47,8 @@ concurrency:
 
 permissions:
   contents: write
-  issues: read
+  # The runner labels the issue as the run goes.
+  issues: write
   pull-requests: write
   # To dispatch preview.yml for the PR.
   actions: write
@@ -178,6 +183,22 @@ jobs:
           # 2 needs a human, 3 paused at an unbuilt stage, 4 out of time: each is a run
           # that did what it should and pushed its branch. Only an error fails the job.
           case "$status" in 0 | 2 | 3 | 4) exit 0 ;; *) exit "$status" ;; esac
+
+      - name: Label a run that never reported failed
+        # The runner swaps in-progress for how it ended; still there, it never got to.
+        if: always() && steps.inputs.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          number="${KEY#gh-}"
+          labels=$(gh issue view "$number" --repo "$REPO" --json labels --jq '.labels[].name') || {
+              echo "::warning::Couldn't read $KEY's labels"; exit 0; }
+          if grep -qx 'delivery:in-progress' <<<"$labels"; then
+              gh issue edit "$number" --repo "$REPO" \
+                  --add-label delivery:failed --remove-label delivery:in-progress \
+                  || echo "::warning::Couldn't label $KEY failed"
+          fi
 
       - name: Summary
         if: always()

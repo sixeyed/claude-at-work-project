@@ -12,6 +12,7 @@ import pytest
 from delivery.cli import main
 from delivery.errors import BackendError
 from delivery.github import GitHubBackend
+from delivery.labels import LABELS
 from delivery.prereqs import ANCHORS, DOC, github_checks, machine_checks, render
 
 URL = "https://github.com/caw-project/ch09"
@@ -43,9 +44,15 @@ def ready(gh):
             ),
             f"{API}/contents/.github/workflows/deliver.yml?ref=main": "{}",
             f"{API}/contents/.github/workflows/preview.yml?ref=main": "{}",
+            f"{API}/contents/.github/workflows/deliver-on-label.yml?ref=main": "{}",
+            "label list": labels(*LABELS),
         }
     )
     return gh
+
+
+def labels(*names: str) -> str:
+    return json.dumps([{"name": n} for n in names])
 
 
 def secrets(*names: str) -> str:
@@ -81,6 +88,7 @@ def test_a_repo_with_everything_in_place_passes_every_check(ready):
         "Actions may open pull requests": "ok",
         "squash merges only": "ok",
         "the workflows, on the default branch": "ok",
+        "the delivery labels": "ok",
     }
     assert "sixeyed" in found["gh, signed in"][1]
 
@@ -216,6 +224,39 @@ def test_a_workflow_missing_from_the_default_branch_fails_and_names_it(ready):
     assert (state, anchor) == ("missing", "the-workflows-on-the-default-branch")
     assert "preview.yml" in detail
     assert "deliver.yml" not in detail
+
+
+def test_the_trigger_workflow_is_one_of_them(ready):
+    ready.answers[f"{API}/contents/.github/workflows/deliver-on-label.yml?ref=main"] = BackendError(
+        "HTTP 404"
+    )
+
+    state, detail, _ = checks(ready)["the workflows, on the default branch"]
+
+    assert state == "missing"
+    assert "deliver-on-label.yml" in detail
+
+
+def test_missing_labels_fail_and_are_named(ready):
+    ready.answers["label list"] = labels("delivery", "bug")
+
+    state, detail, anchor = checks(ready)["the delivery labels"]
+
+    assert (state, anchor) == ("missing", "the-delivery-labels")
+    assert "delivery:ready" in detail
+    assert "delivery:failed" in detail
+    assert "bug" not in detail
+    assert "delivery ensure-labels" in detail
+
+
+def test_the_labels_are_listed_from_the_repo(ready):
+    checks(ready)
+
+    args, _ = ready.call("label list")
+    assert args == [
+        "gh", "label", "list", "--repo", "github.com/caw-project/ch09",
+        "--json", "name", "--limit", "500",
+    ]  # fmt: skip
 
 
 def test_the_workflows_are_looked_for_on_the_default_branch(ready):

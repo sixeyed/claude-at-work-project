@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 
 from delivery.errors import BackendError, ConfigError
 from delivery.github import GitHubBackend, Runner
+from delivery.labels import LABELS, MARKER, decide_trigger, ending
 from delivery.local import LocalBackend
 from delivery.model import Backend, Issue
 from delivery.readback import differences
@@ -44,8 +45,7 @@ from delivery.resolve import GITHUB, BackendConfig, resolve
 if TYPE_CHECKING:
     from delivery.run.notify import Transport
 
-LABEL_DESCRIPTION = "Written for the delivery team (scripts/deliver.sh)"
-LABEL_COLOR = "0e8a16"
+LABEL_DESCRIPTION, LABEL_COLOR = LABELS[MARKER]
 
 
 def parser() -> argparse.ArgumentParser:
@@ -61,6 +61,15 @@ def parser() -> argparse.ArgumentParser:
     label.add_argument("name")
     label.add_argument("--description", default=LABEL_DESCRIPTION)
     label.add_argument("--color", default=LABEL_COLOR)
+
+    commands.add_parser("ensure-labels", help="create or update every delivery label")
+
+    trigger = commands.add_parser(
+        "trigger", help="start an issue's delivery if its labels say to — deliver-on-label.yml"
+    )
+    trigger.add_argument("key", help="gh-N")
+    trigger.add_argument("--sender", required=True, help="the login that added the label")
+    trigger.add_argument("--stub", action="store_true", help="start it with the stub claude")
 
     notify = commands.add_parser("notify", help="post to the delivery's Slack thread")
     notify.add_argument("text")
@@ -174,6 +183,12 @@ def dispatch(args: argparse.Namespace, config: BackendConfig, backend: Backend) 
     if args.command == "ensure-label":
         backend.ensure_label(args.name, args.description, args.color)
         return 0
+    if args.command == "ensure-labels":
+        for name, (description, color) in LABELS.items():
+            backend.ensure_label(name, description, color)
+        return 0
+    if args.command == "trigger":
+        return trigger(backend, args.key, args.sender, stub=args.stub)
     if args.action == "get":
         return show(backend.get(args.key))
     body = read_body(args.body_file)
@@ -184,6 +199,29 @@ def dispatch(args: argparse.Namespace, config: BackendConfig, backend: Backend) 
     found = differences(args.title, body, backend.get(args.key))
     print("\n".join(found) if found else "match")  # noqa: T201
     return 1 if found else 0
+
+
+def trigger(backend: Backend, key: str, sender: str, *, stub: bool) -> int:
+    """Starts the delivery if the issue's labels, as they are now, say to. The labels change
+    before the dispatch, so an event queued behind this one finds no trigger left."""
+    issue = backend.get(key)
+    decided = decide_trigger(
+        labels=issue.labels, state=issue.state, permission=backend.permission(sender)
+    )
+    if decided.labels:
+        backend.set_labels(key, decided.labels.add, decided.labels.remove)
+    if decided.start:
+        try:
+            backend.start_delivery(key, restart=decided.restart, stub=stub)
+        except BackendError:
+            # No run is coming, so in-progress would be a lie: the issue says it failed.
+            now = [n for n in issue.labels if n not in decided.labels.remove]
+            now += decided.labels.add
+            change = ending(now, 1)
+            backend.set_labels(key, change.add, change.remove)
+            raise
+    print(f"{key}: {decided.reason} (label added by {sender})")  # noqa: T201
+    return 0
 
 
 def read_body(path: Path) -> str:

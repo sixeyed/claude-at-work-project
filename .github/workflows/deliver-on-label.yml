@@ -1,0 +1,58 @@
+# Starts an issue's delivery when a person adds `delivery:ready` — or `delivery:restart`, to
+# start it again from plan-writer — by dispatching deliver.yml. `delivery trigger` reads the
+# issue's labels as they are now, not the event's, and swaps the trigger for
+# `delivery:in-progress` before it dispatches: two labels added together fire two events,
+# and the second, queued behind the first, finds no trigger left and stops. A closed issue,
+# or a sender without write access, is refused and the trigger taken off.
+#
+# Every label added to any issue fires `issues: labeled`, and GitHub can't filter the trigger
+# by name, so most of this workflow's runs are skipped ones; they are here, not in
+# deliver.yml's list. Labels the runner sets with GITHUB_TOKEN start no workflow at all.
+#
+# With the repo variable DELIVER_STUB=1, every run this starts is a stub run: no model, no
+# cost. Set it to prove the trigger; delete it after.
+#
+# Plan: docs/plans/ch09/11-delivery-trigger-plan.md.
+name: deliver-on-label
+run-name: deliver-on-label gh-${{ github.event.issue.number }} — ${{ github.event.label.name }}
+
+on:
+  issues:
+    types: [labeled]
+
+permissions:
+  contents: read
+  issues: write
+  # To dispatch deliver.yml.
+  actions: write
+
+jobs:
+  trigger:
+    if: github.event.label.name == 'delivery:ready' || github.event.label.name == 'delivery:restart'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Queued, never cancelled: the run behind reads the labels the one in front left.
+    concurrency:
+      group: deliver-on-label-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10.2.0
+
+      - name: Start the delivery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DELIVERY_URL: ${{ github.server_url }}/${{ github.repository }}
+          KEY: gh-${{ github.event.issue.number }}
+          SENDER: ${{ github.event.sender.login }}
+          STUB: ${{ vars.DELIVER_STUB == '1' }}
+        run: |
+          args=(trigger "$KEY" --sender "$SENDER")
+          [ "$STUB" != true ] || args+=(--stub)
+          # Only the delivery package: none of the services' dependencies.
+          uv run --quiet --frozen --package collabhub-delivery delivery --backend github "${args[@]}" | tee "$RUNNER_TEMP/trigger.txt"
+          {
+              echo "## $(cat "$RUNNER_TEMP/trigger.txt")"
+              [ "$STUB" != true ] || { echo; echo "A stub run: the repo variable DELIVER_STUB is 1."; }
+          } >>"$GITHUB_STEP_SUMMARY"

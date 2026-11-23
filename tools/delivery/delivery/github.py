@@ -14,6 +14,7 @@ from collections.abc import Callable, Sequence
 from urllib.parse import urlsplit
 
 from delivery.errors import BackendError
+from delivery.labels import LABELS
 from delivery.model import Issue, PullRequest
 
 #: Runs a command with optional stdin and returns its stdout; raises
@@ -24,11 +25,13 @@ Runner = Callable[[list[str], str | None], str]
 BODY_LIMIT = 65536
 KEY = re.compile(r"gh-([0-9]+)")
 CAN_WRITE = frozenset({"ADMIN", "MAINTAIN", "WRITE"})
-ISSUE_FIELDS = "number,title,body,url,labels"
+ISSUE_FIELDS = "number,title,body,url,labels,state"
 PR_FIELDS = "number,url,isDraft"
 #: The workflow that previews a PR, dispatched because a PR opened with GITHUB_TOKEN fires
 #: no `pull_request` workflow.
 PREVIEW_WORKFLOW = "preview.yml"
+#: The workflow that runs a delivery, dispatched by `delivery trigger`.
+DELIVER_WORKFLOW = "deliver.yml"
 
 
 def run_gh(args: list[str], input: str | None = None) -> str:  # noqa: A002
@@ -90,6 +93,7 @@ class GitHubBackend:
             body=found["body"],
             url=found["url"],
             labels=[label["name"] for label in found["labels"]],
+            state=found.get("state", "OPEN"),
         )
 
     def edit(self, key: str, title: str, body: str) -> Issue:
@@ -101,6 +105,42 @@ class GitHubBackend:
     def ensure_label(self, name: str, description: str, color: str) -> None:
         args = ["label", "create", name, "--repo", self.repo, "--description", description]
         self._gh([*args, "--color", color, "--force"])
+
+    def set_labels(self, key: str, add: Sequence[str], remove: Sequence[str]) -> None:
+        if not add and not remove:
+            return
+        args = ["issue", "edit", str(self._number(key)), "--repo", self.repo]
+        for name in add:
+            args += ["--add-label", name]
+        for name in remove:
+            args += ["--remove-label", name]
+        try:
+            self._gh(args)
+        except BackendError:
+            if not add:
+                raise
+            # Most likely a label the repo hasn't got yet: make each, then once more.
+            for name in add:
+                description, color = LABELS.get(name, ("", "ededed"))
+                self.ensure_label(name, description, color)
+            self._gh(args)
+
+    def permission(self, login: str) -> str:
+        path = f"repos/{self.repo.split('/', 1)[1]}/collaborators/{login}/permission"
+        host = self.repo.split("/", 1)[0]
+        try:
+            found = self._gh(["api", path, "--hostname", host, "--jq", ".permission"])
+        except BackendError as e:
+            if "404" in str(e):
+                return "none"
+            raise
+        return found.strip() or "none"
+
+    def start_delivery(self, key: str, *, restart: bool, stub: bool) -> None:
+        self._number(key)
+        args = ["workflow", "run", DELIVER_WORKFLOW, "--repo", self.repo, "-f", f"key={key}"]
+        flags = ["-f", f"restart={str(restart).lower()}", "-f", f"stub={str(stub).lower()}"]
+        self._gh([*args, *flags])
 
     def find_pull_request(self, head: str) -> PullRequest | None:
         args = ["pr", "list", "--repo", self.repo, "--head", head, "--state", "open"]
