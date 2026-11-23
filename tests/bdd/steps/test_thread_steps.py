@@ -24,9 +24,8 @@ scenarios("../features/threads.feature")
 # --- when -----------------------------------------------------------------
 
 
-@when(parsers.parse('Ada replies "{reply}" in the thread on "{body}"'))
-def ada_replies(ada: ChatPage, reply: str, body: str) -> None:
-    ada.reply_in_thread(body, reply)
+# `Ada replies … in the thread on …` and `Grace sees N repl(y|ies) on … without
+# reloading` are in `steps/conftest.py`, shared with message_actions.feature.
 
 
 @when(parsers.parse('Grace opens the thread on "{body}"'))
@@ -35,13 +34,6 @@ def grace_opens_thread(grace: ChatPage, body: str) -> None:
 
 
 # --- then -----------------------------------------------------------------
-
-
-#: `parsers.re`, so "1 reply" and "2 replies" are one phrase and `[^"]*` cannot
-#: swallow a closing quote.
-@then(parsers.re(r'Grace sees (?P<count>\d+) repl(?:y|ies) on "(?P<body>[^"]*)" without reloading'))
-def grace_sees_count(grace: ChatPage, count: str, body: str) -> None:
-    assert grace.has_reply_count(body, int(count))
 
 
 @then(parsers.parse('Grace sees "{text}" in the thread'))

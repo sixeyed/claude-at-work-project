@@ -17,6 +17,7 @@ import { useNavigate } from 'react-router-dom'
 
 import type { ThreadPage } from '../../lib/api/messaging'
 import { snapshot } from '../../lib/auth/session'
+import { useChatStore } from '../../stores/chat'
 import { auth, messaging, requests } from '../../test/api'
 import {
   aChannel,
@@ -273,6 +274,69 @@ describe('ChannelView — the thread panel', () => {
     expect(await screen.findByRole('alert')).toBeInTheDocument()
     expect(threadPanel()).not.toBeInTheDocument()
     expect(screen.queryByText('reply to A')).not.toBeInTheDocument()
+  })
+
+  it('closing the thread with a reply’s menu open leaves no menu open anywhere', async () => {
+    renderShell(`/c/${GENERAL}?thread=${rootA.id}`)
+    const panel = await findThreadPanel()
+    const replyRow = (await within(panel).findByText('reply to A')).closest('article') as HTMLElement
+    fireEvent.click(within(replyRow).getByRole('button', { name: 'Message actions' }))
+    expect(screen.getAllByRole('menu')).toHaveLength(1)
+
+    fireEvent.click(within(panel).getByRole('button', { name: 'Close thread' }))
+
+    await vi.waitFor(() => expect(threadPanel()).not.toBeInTheDocument())
+    expect(screen.queryAllByRole('menu')).toHaveLength(0)
+    expect(useChatStore.getState().openMessageMenu).toBeNull()
+    // The channel's own rows still have their "⋯", all of them shut.
+    await screen.findByText('root B')
+    for (const opener of screen.getAllByRole('button', { name: 'Message actions' })) {
+      expect(opener).toHaveAttribute('aria-expanded', 'false')
+    }
+  })
+
+  it('switching channel with a menu open leaves no menu, and none on the next view', async () => {
+    renderShell()
+    const rootBRow = (await screen.findByText('root B')).closest('article') as HTMLElement
+    fireEvent.click(within(rootBRow).getByRole('button', { name: 'Message actions' }))
+    expect(screen.getAllByRole('menu')).toHaveLength(1)
+
+    fireEvent.click(await screen.findByRole('link', { name: /random/ }))
+
+    await screen.findByText('Nothing here yet. Say something.')
+    expect(screen.queryAllByRole('menu')).toHaveLength(0)
+    expect(useChatStore.getState().openMessageMenu).toBeNull()
+
+    // And back: the same message is on screen again, with its menu shut.
+    fireEvent.click(await screen.findByRole('link', { name: /general/ }))
+    const again = (await screen.findByText('root B')).closest('article') as HTMLElement
+    expect(within(again).getByRole('button', { name: 'Message actions' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+    expect(screen.queryAllByRole('menu')).toHaveLength(0)
+  })
+
+  it('a menu opened in the thread panel closes the one open in the channel', async () => {
+    renderShell(`/c/${GENERAL}?thread=${rootA.id}`)
+    const panel = await findThreadPanel()
+    const replyRow = (await within(panel).findByText('reply to A')).closest('article') as HTMLElement
+    const channelRow = (await screen.findByText('root B')).closest('article') as HTMLElement
+    const channelOpener = within(channelRow).getByRole('button', { name: 'Message actions' })
+    const panelOpener = within(replyRow).getByRole('button', { name: 'Message actions' })
+
+    fireEvent.click(channelOpener)
+    expect(channelOpener).toHaveAttribute('aria-expanded', 'true')
+    expect(screen.getAllByRole('menu')).toHaveLength(1)
+
+    // No pointer-down, as a screen reader activates it: only the shared id can close the other.
+    fireEvent.click(panelOpener)
+
+    expect(channelOpener).toHaveAttribute('aria-expanded', 'false')
+    expect(panelOpener).toHaveAttribute('aria-expanded', 'true')
+    const open = screen.getAllByRole('menu')
+    expect(open).toHaveLength(1)
+    expect(open[0].id).toBe(panelOpener.getAttribute('aria-controls'))
   })
 
   it('a new workspace shows no thread from the old one', async () => {

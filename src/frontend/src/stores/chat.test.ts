@@ -78,4 +78,25 @@ describe('the chat store', () => {
 
     expect(useChatStore.getState().joinedChannelId).toBe('channel-1')
   })
+
+  it('one message menu is open at a time: opening another replaces it', () => {
+    expect(useChatStore.getState().openMessageMenu).toBeNull()
+
+    useChatStore.getState().openMessageMenuFor('menu-a')
+    expect(useChatStore.getState().openMessageMenu).toBe('menu-a')
+
+    useChatStore.getState().openMessageMenuFor('menu-b')
+    expect(useChatStore.getState().openMessageMenu).toBe('menu-b')
+  })
+
+  it('closing names its menu: closing another’s leaves the open one open', () => {
+    const { openMessageMenuFor, closeMessageMenu } = useChatStore.getState()
+    openMessageMenuFor('menu-a')
+
+    closeMessageMenu('menu-b')
+    expect(useChatStore.getState().openMessageMenu).toBe('menu-a')
+
+    closeMessageMenu('menu-a')
+    expect(useChatStore.getState().openMessageMenu).toBeNull()
+  })
 })

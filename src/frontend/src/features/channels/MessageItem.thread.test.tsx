@@ -9,6 +9,7 @@
  */
 
 import { screen, within } from '@testing-library/react'
+import type { UserEvent } from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { Message } from '../../lib/api/messaging'
@@ -50,51 +51,64 @@ function renderBeside(subject: Message) {
   return { ...view, onOpenThread, confirmed: first, subject: second }
 }
 
-const replyAction = (within_: HTMLElement) =>
-  within(within_).queryByRole('button', { name: 'Reply in thread' })
+/**
+ * Open that row's "⋯" and look for Reply in thread. A row with no "⋯" offers
+ * nothing, so it answers `null`; every guard below finds the action on the
+ * confirmed row first, so `null` cannot come from a build with no menu at all.
+ */
+async function replyAction(user: UserEvent, within_: HTMLElement) {
+  const opener = within(within_).queryByRole('button', { name: 'Message actions' })
+  if (!opener) return null
+  await user.click(opener)
+  return screen.queryByRole('menuitem', { name: 'Reply in thread' })
+}
 
 describe('MessageItem — Reply in thread', () => {
   it('a top-level message offers Reply in thread, which opens it', async () => {
     const onOpenThread = vi.fn()
     const { user } = renderWithProviders(row(aMessage({ authorId: ADA }), onOpenThread))
 
-    await user.click(screen.getByRole('button', { name: 'Reply in thread' }))
+    await user.click(screen.getByRole('button', { name: 'Message actions' }))
+    await user.click(screen.getByRole('menuitem', { name: 'Reply in thread' }))
 
     expect(onOpenThread).toHaveBeenCalledOnce()
   })
 
-  it('none on a pending message', () => {
-    const { confirmed, subject } = renderBeside(aMessage({ id: 'temp:1234', authorId: ADA }))
+  it('none on a pending message', async () => {
+    const { user, confirmed, subject } = renderBeside(aMessage({ id: 'temp:1234', authorId: ADA }))
 
-    expect(replyAction(confirmed)).toBeInTheDocument()
-    expect(replyAction(subject)).not.toBeInTheDocument()
+    expect(await replyAction(user, confirmed)).toBeInTheDocument()
+    expect(await replyAction(user, subject)).not.toBeInTheDocument()
   })
 
-  it('none on a deleted one', () => {
-    const { confirmed, subject } = renderBeside(
+  it('none on a deleted one', async () => {
+    const { user, confirmed, subject } = renderBeside(
       aMessage({ authorId: ADA, body: '', deletedAt: '2026-09-15T09:32:00Z' }),
     )
 
-    expect(replyAction(confirmed)).toBeInTheDocument()
-    expect(replyAction(subject)).not.toBeInTheDocument()
+    expect(await replyAction(user, confirmed)).toBeInTheDocument()
+    expect(await replyAction(user, subject)).not.toBeInTheDocument()
   })
 
-  it('none on a reply', () => {
-    const { confirmed, subject } = renderBeside(
+  it('none on a reply', async () => {
+    const { user, confirmed, subject } = renderBeside(
       aMessage({ authorId: ADA, threadRootId: '0199a000-0000-7000-8000-0000000000aa' }),
     )
 
-    expect(replyAction(confirmed)).toBeInTheDocument()
-    expect(replyAction(subject)).not.toBeInTheDocument()
+    expect(await replyAction(user, confirmed)).toBeInTheDocument()
+    // Ada's own reply has a "⋯" (React, Edit, Delete): the menu opens, with no Reply in it.
+    expect(within(subject).getByRole('button', { name: 'Message actions' })).toBeInTheDocument()
+    expect(await replyAction(user, subject)).not.toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument()
   })
 
-  it('without onOpenThread: no summary, no action', () => {
+  it('without onOpenThread: no summary, no action', async () => {
     const rootWithReplies = aMessage({
       authorId: ADA,
       replyCount: 2,
       lastReplyAt: '2026-09-15T10:00:00Z',
     })
-    renderWithProviders(
+    const { user } = renderWithProviders(
       <>
         {row(rootWithReplies, vi.fn())}
         {row({ ...rootWithReplies, id: 'another-root' }, undefined)}
@@ -104,10 +118,12 @@ describe('MessageItem — Reply in thread', () => {
 
     // The positive half: with the prop, both are there.
     expect(within(withProp).getByText(/2 replies/)).toBeInTheDocument()
-    expect(replyAction(withProp)).toBeInTheDocument()
+    expect(await replyAction(user, withProp)).toBeInTheDocument()
 
     expect(within(withoutProp).queryByText(/2 replies/)).not.toBeInTheDocument()
-    expect(replyAction(withoutProp)).not.toBeInTheDocument()
+    expect(await replyAction(user, withoutProp)).not.toBeInTheDocument()
+    // Not null because there is no menu: the row has one, holding React, Edit, Delete.
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument()
   })
 })
 

@@ -89,29 +89,62 @@ describe('ThreadPanel — what it shows', () => {
   it('the panel’s root has reactions, edit and delete, no summary, no Reply in thread', async () => {
     const reacted = { ...root, reactions: [{ emoji: 'tada', count: 1, reacted: false }] }
     messaging.get(THREAD, aThreadPage(reacted, [reply()]))
-    renderPanel()
+    const { user } = renderPanel()
     await screen.findByText('who is on call tonight?')
     const [rootRow] = articles()
 
     // The positives first: the root takes everything a message takes.
     expect(within(rootRow).getByRole('button', { name: /, 1$/ })).toBeInTheDocument()
-    expect(within(rootRow).getByRole('button', { name: 'Add a reaction' })).toBeInTheDocument()
-    expect(within(rootRow).getByRole('button', { name: 'Edit' })).toBeInTheDocument()
-    expect(within(rootRow).getByRole('button', { name: 'Delete' })).toBeInTheDocument()
+    await user.click(within(rootRow).getByRole('button', { name: 'Message actions' }))
+    expect(screen.getByRole('menuitem', { name: 'React' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Edit' })).toBeInTheDocument()
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument()
     expect(within(rootRow).queryByText(/repl(y|ies)/)).not.toBeInTheDocument()
-    expect(
-      within(rootRow).queryByRole('button', { name: 'Reply in thread' }),
-    ).not.toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: 'Reply in thread' })).not.toBeInTheDocument()
+    expect(screen.getAllByRole('menuitem')).toHaveLength(3)
   })
 
   it('replies offer no Reply in thread', async () => {
-    messaging.get(THREAD, aThreadPage(root, [reply({ authorId: ADA, body: 'my own reply' })]))
-    renderPanel()
+    messaging.get(
+      THREAD,
+      aThreadPage(root, [
+        reply({ authorId: ADA, body: 'my own reply' }),
+        reply({ authorId: GRACE, body: 'her reply' }),
+      ]),
+    )
+    const { user } = renderPanel()
     await screen.findByText('my own reply')
-    const mine = articles()[1]
+    // Replies are oldest first: Ada's is last in the wire page, so it comes first.
+    const rows = articles()
+    const mine = rows.find((row) => within(row).queryByText('my own reply')) as HTMLElement
+    const hers = rows.find((row) => within(row).queryByText('her reply')) as HTMLElement
 
-    expect(within(mine).getByRole('button', { name: 'Edit' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Reply in thread' })).not.toBeInTheDocument()
+    await user.click(within(mine).getByRole('button', { name: 'Message actions' }))
+    expect(screen.getAllByRole('menuitem').map((e) => e.textContent?.trim())).toEqual([
+      'React',
+      'Edit',
+      'Delete',
+    ])
+
+    await user.click(within(hers).getByRole('button', { name: 'Message actions' }))
+    expect(screen.getAllByRole('menuitem').map((e) => e.textContent?.trim())).toEqual(['React'])
+    expect(screen.queryByRole('menuitem', { name: 'Reply in thread' })).not.toBeInTheDocument()
+  })
+
+  it('a reply deleted while its menu is open: no menu, and focus is on the thread panel', async () => {
+    const mine = reply({ authorId: ADA, body: 'my own reply' })
+    messaging.get(THREAD, aThreadPage(root, [mine]))
+    const { user, queryClient } = renderPanel()
+    await screen.findByText('my own reply')
+    const row = articles().find((r) => within(r).queryByText('my own reply')) as HTMLElement
+    await user.click(within(row).getByRole('button', { name: 'Message actions' }))
+    expect(screen.getByRole('menuitem', { name: 'Delete' })).toBeInTheDocument()
+
+    arrives(queryClient, { ...mine, body: '', deletedAt: '2026-09-15T09:32:00Z', version: 2 })
+
+    expect(await screen.findByText('This message was deleted.')).toBeInTheDocument()
+    expect(screen.queryAllByRole('menu')).toHaveLength(0)
+    expect(screen.getByRole('complementary', { name: 'Thread' })).toHaveFocus()
   })
 
   it('a deleted reply is a tombstone', async () => {

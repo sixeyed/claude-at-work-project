@@ -19,7 +19,7 @@ click.
 from __future__ import annotations
 
 import pytest
-from pytest_bdd import given, parsers, scenarios, then, when
+from pytest_bdd import given, parsers, scenarios, then
 
 from bdd.pages.chat_page import ChatPage
 
@@ -38,20 +38,10 @@ def grace_is_watching(grace: ChatPage, name: str) -> None:
     grace.wait_for_channel_joined()
 
 
-# --- when -----------------------------------------------------------------
-
-
-@when(parsers.parse('Ada reacts to "{body}" with "{emoji}"'))
-def ada_reacts(ada: ChatPage, body: str, emoji: str) -> None:
-    ada.react_to(body, emoji)
-
-
 # --- then -----------------------------------------------------------------
-
-
-@then(parsers.parse('Grace sees "{body}" with {count:d} "{emoji}" reaction'))
-def grace_sees_reaction(grace: ChatPage, body: str, count: int, emoji: str) -> None:
-    assert grace.has_reaction_count(body, emoji, count)
+#
+# `Ada reacts to …` and `Grace sees … reaction` are in `steps/conftest.py`, shared
+# with message_actions.feature.
 
 
 @then(parsers.parse('Ada sees "{body}" with {count:d} "{emoji}" reaction'))

@@ -255,8 +255,18 @@ def reset_messaging(messaging_dsn: str, asset_dsn: str, stack_ready: None) -> No
     _run_off_loop(partial(_truncate, asset_dsn, ASSET_TABLES))
 
 
-def _signed_in_context(browser: Browser, base_url: str, email: str) -> Iterator[BrowserContext]:
-    context = browser.new_context()
+#: A 1024 by 768 tablet with a touchscreen and no hover — `has_touch` is what lets
+#: Playwright's `Locator.tap()` run at all. Wide enough that the layout is the
+#: desktop one (narrow screens are gh-9), so the one thing that differs from the
+#: shared contexts is how a message's actions are reached.
+TOUCH_TABLET: dict[str, Any] = {"viewport": {"width": 1024, "height": 768}, "has_touch": True}
+
+
+def _signed_in_context(
+    browser: Browser, base_url: str, email: str, **options: Any
+) -> Iterator[BrowserContext]:
+    """Sign `email` in, in a new browser context made with `options`."""
+    context = browser.new_context(**options)
     page = context.new_page()
 
     sign_in = SignInPage(page, base_url)
@@ -334,6 +344,20 @@ def ada_own_context(browser: Browser, base_url: str, stack_ready: None) -> Itera
     price, and it is why only the session scenarios pay it.
     """
     yield from _signed_in_context(browser, base_url, ADA)
+
+
+@pytest.fixture
+def ada_touch_context(
+    browser: Browser, base_url: str, stack_ready: None
+) -> Iterator[BrowserContext]:
+    """Ada, signed in on a touch tablet that only this scenario uses.
+
+    Function-scoped, like `ada_own_context`, because the session contexts are
+    shared: giving them a touchscreen or another viewport would change every
+    journey in the suite. One more trip through Dex is the price, and one
+    scenario pays it.
+    """
+    yield from _signed_in_context(browser, base_url, ADA, **TOUCH_TABLET)
 
 
 @pytest.fixture
