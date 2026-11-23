@@ -52,9 +52,9 @@ Taken in this plan. Rows 7–11 are the choices the issue left to the plan on pu
 | 11 | The icon | The text glyph "⋯" (U+22EF), `aria-hidden`, inside the labelled button | No icon set in the SPA |
 | 12 | One menu at a time | `openMessageMenu: string \| null` in `useChatStore`, holding the open instance's `useId()` | It covers screen-reader activation, which sends a `click` with no `pointerdown`, so the outside-close never fires. Client state, so D24 allows it. `useId` tells the root's two rows (channel and panel) apart |
 | 13 | Where focus goes when "⋯" disappears while focused — **assumed** | The nearest ancestor with `data-focus-fallback`: `MessageList`'s scroller (`tabIndex={-1}`) in the channel, the thread panel's `<aside>` (`tabIndex={-1}`) in a thread, via `focus({ preventScroll: true })` | The issue says "the message list". For the thread it does not say which element, and the root sits outside the replies log. Changing it means moving one attribute, plus one test |
-| 14 | "Stops allowing the action" — **assumed** | Any change to the offered actions while the menu is open closes it. Focus goes to "⋯" if "⋯" remains (it is inside the list), otherwise to the fallback (#13) | The case the issue names is a role change that removes Delete. Keeping the menu open with a changed item list would move items under the user's finger. Cost to change: one effect and one test |
-| 15 | Focus after an outside tap — **assumed** | The menu closes and focus is not moved | Pulling focus back to "⋯" would take it from whatever was tapped, such as the composer. Escape and a choice do return it (Req 4) |
-| 16 | A scroll while open — **assumed** | The menu follows its button (re-placed, still clamped to the viewport). It does not close | A new message at the live end scrolls the list programmatically, and closing on it would close Ada's menu every time someone speaks. A touch that *starts* a scroll still closes it, through `pointerdown` (Req 3). Closing on scroll instead is one listener change and one test |
+| 14 | "Stops allowing the action" — **assumed** | Any change to the offered actions while the menu is open closes it, **compared by value**: the same actions in a new array (every render makes one) are no change, so a live reaction, edit or summary on the message leaves its menu open. Focus goes to "⋯" if "⋯" remains (it is inside the list), otherwise to the fallback (#13) | The case the issue names is a role change that removes Delete. Keeping the menu open with a changed item list would move items under the user's finger. Cost to change: one effect and one test |
+| 15 | Focus after an outside press — **assumed** | If focus is in the menu, the `pointerdown` handler first focuses "⋯" (`preventScroll`), then closes. The press's own default then does what the platform does: a press on something focusable (the composer) focuses it; a mouse press on nothing focusable clears focus, as it does anywhere on a page. A touch that starts a scroll has no `mousedown`, so focus stays on "⋯" | Req 4: closing returns focus to "⋯", and the menu never leaves focus on a removed node. Holding focus on "⋯" against a mouse press would need `preventDefault` on every outside `mousedown`, blocking text selection and focus wherever Ada pressed. Cost to change: one listener, one test |
+| 16 | A scroll while open — **assumed** | The menu follows its button (re-placed, still clamped to the viewport). It does not close | A new message at the live end scrolls the list programmatically, and closing on it would close Ada's menu every time someone speaks. A touch that *starts* a scroll still closes it, through `pointerdown` (Req 3). A wheel scroll that carries "⋯" out of the list leaves the menu clamped with no "⋯" beside it; Task 9's first run judges it, and closing when "⋯" leaves its scroller's box is the refinement. Closing on scroll instead is one listener change and one test |
 | 17 | "⋯" while editing — **assumed** | It stays. Edit chosen again while editing changes nothing | The issue doesn't say. Hiding it would move the header under the editor. Cost: one condition |
 | 18 | `ReactionPicker.tsx` | Deleted. The emoji row moves into `MessageActions` and the blur-race note moves into its header. The test ids stay (`reaction-picker` on the React item, `reaction-option` + `data-emoji` on each emoji, `thread-open`, `message-edit`, `message-delete` on the items) | Two components each owning an open state would need two closing rules. Keeping the test ids means the page objects change by one step: open "⋯" first |
 | 19 | The touch journey's browser | A function-scoped `ada_touch_context` (1024×768, `has_touch=True`) in `tests/bdd/conftest.py`, like `ada_own_context`. The feature's step module overrides `ada` with it, and `ChatPage(touch=True)` taps instead of clicking | The session contexts are shared, so changing their viewport would change every journey. One more trip through Dex is the cost, paid by one scenario |
@@ -65,10 +65,7 @@ native code. D37 and D38 (session) are unrelated.
 
 ## Corrections to the issue
 
-None. Every reference in *What exists already* was checked against the tree at `df51879`:
-`MessageItem.tsx:91-99, :115, :135`, `ThreadPanel.tsx:118-131`, `ReactionPicker.tsx:8-12, :28-40`,
-`MessageEditor.tsx:46`, `reactions.ts:18`, `chat_page.py:296-311, :349-364, :383-`, `conftest.py:259,
-:342`, and no `window.confirm` in `src/frontend/src`. The issue's *assumes* list is checked:
+None. Every reference in *What exists already* holds at `df51879`. The *assumes* list is checked:
 
 - **jsdom has no layout:** right. Req 5's arithmetic is unit-tested through `placeMenu`. The real
   geometry is checked in a browser (Task 4's page object, and acceptance check 6).
@@ -83,11 +80,9 @@ None. Every reference in *What exists already* was checked against the tree at `
 
 ## Test approach — recommendation to the test pair
 
-**TDD, plus the one BDD journey the issue asks for.** The rules (what is offered, where the menu
-goes, what closes it, where focus lands) are all provable in Vitest. The touch journey is the
-browser proof that "⋯" is really visible and usable with no hover, and it is an existing journey
-(reactions and threads) run on a new device. Write the journey and the page-object change first,
-then everything else down the pyramid.
+**TDD, plus the one BDD journey the issue asks for.** Every rule is provable in Vitest; the touch
+journey is the browser proof that "⋯" is usable with no hover — an existing journey (reactions,
+threads) on a new device. Write the journey and page objects first, then down the pyramid.
 
 | Behaviour | Layer | File |
 |---|---|---|
@@ -105,8 +100,10 @@ then everything else down the pyramid.
 **What no test here covers:** the menu shown in full on **the last message of a long channel** and
 **at the thread panel's right edge** in a real browser. `placeMenu`'s unit tests prove the
 arithmetic, and Task 4's page object checks the hit-test on every menu the journeys open, but
-none of those opens on the last of a scrolled list. **The acceptance pack's checks 5 and 6 cover
-it** (the issue's assumption 1). Also not covered: what a screen reader announces.
+none of those opens on the last of a scrolled list or on a reply at the panel's edge. **Acceptance
+check 6 covers the last message** (the issue's assumption 1). The issue has no check for the
+panel's edge: **the acceptance-reviewer measures a reply's menu in the thread panel too**, against
+the viewport, and Task 9's first run does it first. Also not covered: what a screen reader announces.
 
 **Baseline**, from `docs/test-report.md` at `56fb009602cc-dirty`: unit 1993 passed (Vitest 568),
 end-to-end 25 passed. Expected after: Vitest ≥ 568 plus the new tests, e2e ≥ 26.
@@ -149,15 +146,12 @@ Paths under `src/frontend/src/` are shortened to start at `features/` or `stores
 | `features/channels/MessageList.tsx` · `features/threads/ThreadPanel.tsx` | modify | `data-focus-fallback` + `tabIndex={-1}` | 7 |
 | `docs/design/06-frontend-spa.md` · `07-open-decisions-register.md` · `docs/adr/261123-one-message-actions-menu-at-every-width.md` · `docs/plans/ch06/gherkin/00-scenario-vocabulary.md` | modify · modify · create · modify | the record | 8 |
 
-**The sweep.** `ReactionPicker` is imported only by `MessageItem.tsx:36`. `MessageItem`'s props
-don't change, so its callers (`MessageList.tsx:327`, `ThreadPanel.tsx:120`) don't either. The
-breaking tests above come from a grep for `'Edit'`, `'Delete'`, `Reply in thread`, `Add a
-reaction` and the four item test ids. `ChannelView.thread.test.tsx:169` finds the channel scroller
-as `article.parentElement`, which still holds: the scroller gains attributes, not a wrapper. Hover
-docstrings: `chat_page.py:352, :391` (Task 4) and `ReactionPicker.tsx:2` (deleted). Doc 06 has no
-section on actions. `git worktree list` shows only `main` and this branch, and `git branch
---no-merged main` is empty. Deliberately unchanged: the BDD truncation (no table), `ReactionBar`
-(always visible already), and `MessageEditor` (its Escape stays; `MessageItem` reacts to it).
+**The sweep.** `ReactionPicker` is imported only by `MessageItem.tsx:36`; `MessageItem`'s props and
+callers (`MessageList.tsx:327`, `ThreadPanel.tsx:120`) don't change. Breaking tests: a grep for
+`'Edit'`, `'Delete'`, `Reply in thread`, `Add a reaction` and the item test ids.
+`ChannelView.thread.test.tsx:169`'s `article.parentElement` still finds the scroller. Hover
+docstrings: `chat_page.py:352, :391`. No other branch is open. Unchanged: BDD truncation,
+`ReactionBar`, `MessageEditor` (its Escape stays).
 
 ## How this plan runs
 
@@ -167,8 +161,7 @@ section on actions. `git worktree list` shows only `main` and this branch, and `
 | GREEN | 5–7 | code-writer | Tasks 1–3 pass; `tsc` clean |
 | Finish | 8–9 | code-writer | the record, then `lint unit` and the whole `e2e` layer |
 
-One red phase: nothing in the SPA's tests is typed from a contract this changes. `tsc` is red from
-Task 1 until Task 5, because the tests name store fields that don't exist yet.
+`tsc` is red from Task 1 until Task 5: the tests name store fields that don't exist yet.
 
 ---
 
@@ -293,12 +286,18 @@ Behaviour:
 - **Choosing.** A choice closes the menu, focuses "⋯", then calls the handler. Edit's editor then
   takes focus itself (`autoFocus`).
 - **Closing.** `pointerdown` on `document` (capture) closes the menu when the target is in neither
-  the trigger nor the menu node; it doesn't move focus. `keydown` Escape on `document` while open
-  closes and focuses "⋯".
+  the trigger nor the menu node. If focus is in the menu, it focuses "⋯" first (#15); the press's
+  `mousedown` default then moves focus where the platform puts it. **Checked in the installed
+  user-event 14.6.7:** `user.click` dispatches `pointerdown`, then `mousedown`, whose default calls
+  `focusElement(target)` (`dist/esm/system/pointer/mouse.js:63-75`), which focuses the closest
+  focusable ancestor or, with none, blurs to `body` (`dist/esm/event/focus.js:12-23`), as a browser
+  does. `fireEvent.pointerDown` alone has no default: it stands for a touch that starts a scroll.
+  `keydown` Escape on `document` while open closes and focuses "⋯".
 - **Placement.** `useLayoutEffect` measures the trigger and the menu, then applies `placeMenu` with
   `{ width: innerWidth, height: innerHeight }`. It runs again on the swap to emoji, and on `scroll`
   (capture) and `resize`.
-- **Actions changing.** A change to `actions` while open closes the menu and focuses "⋯".
+- **Actions changing.** A change to `actions`' **contents** while open closes the menu and focuses
+  "⋯" (#14). A new array with the same contents is no change: never depend on `[actions]`.
 - **Unmount.** The layout-effect cleanup runs `closeMessageMenu(id)`. If `document.activeElement`
   is the trigger or inside the menu, it focuses `trigger.closest('[data-focus-fallback]')`.
   **Checked in the installed `react-dom` 19.2.8**
@@ -319,7 +318,8 @@ every test: `Failed to resolve import "./MessageActions"`. Each test is one the 
 | `Enter on a focused item chooses it: Delete calls onDelete once, the menu closes, focus is on "⋯"` | keyboard choice | — |
 | `each choice closes the menu and returns focus to "⋯"` | Req 3 "after any choice" | `it.each` over Reply, Edit and Delete: each handler once |
 | `Escape closes the menu and focus returns to "⋯"` | Req 3, Req 4 | — |
-| `a touch pointer-down outside closes it, chooses nothing and leaves focus where it was` | Req 3 "tap anywhere outside" (#15) | listens for `click` or `mousedown` instead: `fireEvent.pointerDown(outsideButton, { pointerType: 'touch' })` alone, no click |
+| `a touch that starts a scroll outside closes it, chooses nothing, and focus is on "⋯", not the body` | Req 3 "the touch that starts a scroll", Req 4 (#15) | `fireEvent.pointerDown(outsideDiv, { pointerType: 'touch' })` alone, no click, on a non-focusable `<div>`; focus was on the first item before. Fails a build listening for `click`/`mousedown`, and one that closes without focusing "⋯" (focus falls to `body`) |
+| `a press on an outside input closes the menu, chooses nothing and leaves focus in that input` | #15's other side | `user.click(outsideInput)`: fails a build that holds focus on "⋯" against the press (`preventDefault` on `mousedown`), or focuses "⋯" after the press |
 | `a pointer-down inside the menu does not close it` | the positive of the above | closes on any `pointerdown` |
 | `"⋯" toggles: a second press closes the menu` | the trigger is not "outside" | treats the trigger's `pointerdown` as outside (closes, then the click reopens) |
 | `React swaps the items for the six emoji, focus on the first` | Req 2 (#8) | — |
@@ -329,6 +329,7 @@ every test: `Failed to resolve import "./MessageActions"`. Each test is one the 
 | `a pointer-down outside the emoji row closes it and adds no reaction` | Req 3 for the row | — |
 | `opening one menu closes another, even with no pointer-down` | Req 3, #12 | two instances: `user.click(A)`, then `fireEvent.click(B)`, as a screen reader activates. Exactly one `menu` in the document, B's. Fails a build with no shared open id |
 | `the actions changing while open closes the menu, focus on "⋯"` | #14 | rerender `['react','reply','delete']` → `['react','reply']` |
+| `a re-render with the same actions in a new array keeps the menu open and focus where it was` | #14, value not identity | open, ArrowDown to the second item, rerender `['react','reply','delete']` → a fresh `['react','reply','delete']`: the menu is still there and focus is still on Reply in thread. Fails a build whose effect depends on `[actions]` |
 | `unmounting with focus on "⋯" or in its menu moves focus to the fallback; with focus elsewhere, leaves it` | *A live delete* (#13) | three cases. The third (focus on an outside input) is the positive that a build which always focuses the fallback fails |
 | `unmounting clears its own open id, and not another's` | *Switching channel* | two instances, B open: unmount A → B's menu still open; unmount B → `openMessageMenu` null |
 | `the menu sits where placeMenu puts it, and follows a scroll` | Req 5, #16 | `getBoundingClientRect` stubbed: trigger `{top:700,bottom:720,left:990,right:1010}`, menu 160×150 → `position: fixed; top: 546px; left: 850px`. Trigger moved to `{top:300,bottom:320,…}`, then `fireEvent.scroll(scrollerOutsideTheMenu)` → `top: 324px`. jsdom's window is 1024×768: assert that first |
@@ -352,7 +353,7 @@ and new:
 
 | Test | Expected red |
 |---|---|
-| `no hover-revealed row: before "⋯" is pressed, no React, Reply, Edit or Delete control is in the document` | assertion: the old row's buttons are in the DOM (jsdom ignores `opacity-0`) |
+| `no hover-revealed row: before "⋯" is pressed, no React, Reply, Edit or Delete control is in the document; after, Edit is a menuitem` | assertion: the old row's buttons are in the DOM (jsdom ignores `opacity-0`). The second half fails a row that renders no actions at all |
 | `your own message's "⋯" offers React, Reply in thread, Edit, Delete` (with `onOpenThread`) | no "Message actions" |
 | `"⋯" on Grace's message offers React and Reply in thread only` | same |
 | `a channel admin's "⋯" on someone else's message offers Delete, never Edit` | same |
@@ -377,6 +378,7 @@ helpers the socket handlers and the send path use:
 |---|---|---|
 | `Grace's delete lands while Ada's menu is open: the tombstone has no "⋯", no menu is open, and focus is on the message list, not the body` | *A live delete* | no "⋯" to open |
 | `Ada's admin role ends while her menu offers Delete: the menu closes and focus is on that message's "⋯"` | *stops allowing the action* (#14) | same. Rerender with `myRole: null` |
+| `a live reaction, then a live edit, to the message leave its open menu open, focus on the item it was on` | #14 by value, through the real row | same. `upsertMessage` Grace's message with a reaction added, then with a new body and `editedAt`; after each the menu is there and focus is on its second item. Fails a build that closes on any re-render |
 | `a pending message has no "⋯"; once confirmed, it does` | *Paths: pending, then confirmed* | `upsertMessage` a `temp:` row: no "⋯" (passes before green, and stays as a guard). Then `removeMessage` + `upsertMessage` with the confirmed row: "⋯" — fails here |
 
 The message list is the element whose child is the article, as `MessageList.test.tsx:51` finds it.
@@ -418,9 +420,7 @@ Feature: Message actions
   Background:
     Given Ada is signed in
 
-  # The one journey a browser is needed for: a touch screen and no hover, through
-  # to the server, seen in Grace's window. What each message offers, the keyboard,
-  # closing and focus are proven in Vitest.
+  # Touch and no hover, through to Grace's window; the rules are proven in Vitest.
   Scenario: On a touch screen, Ada reacts to Grace's message and replies in its thread
     Given Ada has created a public channel named "general"
     And Grace has sent "lunch at noon?" in "general"
@@ -430,13 +430,10 @@ Feature: Message actions
     Then Grace sees 1 reply on "lunch at noon?" without reloading
 ```
 
-**Phrases.** Reused verbatim:
-
-- `Ada is signed in` and `Ada has created a public channel named` (`steps/conftest.py`).
-- `Ada reacts to "{body}" with "{emoji}"` and `Grace sees "{body}" with {count:d} "{emoji}"
-  reaction` (now in `test_reaction_steps.py:44, :52`).
-- `Ada replies "{reply}" in the thread on "{body}"` and the `Grace sees N repl(y|ies) on "…"
-  without reloading` regex (now in `test_thread_steps.py:27, :42`).
+**Phrases** reused verbatim: `Ada is signed in`, `Ada has created a public channel named`
+(`steps/conftest.py`); `Ada reacts to "{body}" with "{emoji}"`, `Grace sees "{body}" with {count:d}
+"{emoji}" reaction` (`test_reaction_steps.py:44, :52`); `Ada replies "{reply}" in the thread on
+"{body}"`, the `Grace sees N repl(y|ies) on "…" without reloading` regex (`test_thread_steps.py:27, :42`).
 
 pytest-bdd resolves steps from the calling module and `conftest.py` only (`steps/conftest.py:3-7`),
 so **those four definitions move, unchanged, into `steps/conftest.py`** and are deleted from their
@@ -535,8 +532,8 @@ tests/bdd --generate-missing --feature tests/bdd/features` prints nothing. Under
 - [ ] **Doc 06 §5.2:** a new block, **Message actions — added 2026-11-23** (register D47), after
   *Threads*: one "⋯" at every width and `offeredActions`; markup and keyboard (#7, #10); React's
   swap (#8); the portal and `placeMenu` (#9, #16); closing (pointerdown outside, Escape, a choice;
-  never blur); one at a time (#12); focus in on open, back to "⋯" on Escape, a choice or after
-  editing, to `data-focus-fallback` when "⋯" goes (#13, #14).
+  never blur); one at a time (#12); focus in on open, back to "⋯" on Escape, a choice, an outside
+  press (#15) or after editing, to `data-focus-fallback` when "⋯" goes (#13, #14).
 - [ ] **Register:** D47 in *Frontend SPA*: 🟢 **Decided (2026-11-23, issue gh-8):** message actions
   behind one "⋯" menu at every width. Name what was built against it, and link the ADR.
 - [ ] **ADR** `docs/adr/261123-one-message-actions-menu-at-every-width.md`, with the `adr-writer`
@@ -558,14 +555,14 @@ tests/bdd --generate-missing --feature tests/bdd/features` prints nothing. Under
   `.claude/hooks/security.sh`.
 - [ ] **First real run** on the Compose stack, in Chromium's touch emulation at 1024×768: "⋯" on
   the last message of a scrolled channel and on a reply at the panel's right edge (each menu
-  whole); start a scroll with a menu open (it closes); acceptance check 3 by keyboard. Fix anything
-  found with a test, and record it below.
+  whole); start a scroll with a menu open (it closes); on desktop, wheel-scroll "⋯" out of the
+  list with its menu open and judge #16; acceptance check 3 by keyboard. Fix anything found with a
+  test, and record it below.
 - [ ] Fill in *Found while building*; leave the worktree dirty.
 
 ## Found while building
 
-*Filled in by the code-writer: every deviation from this plan, and every bug the first real run
-found, each with the test that now pins it down. Empty until then.*
+*Filled in by the code-writer; empty until then.*
 
 ## Not in this plan
 
@@ -574,15 +571,13 @@ menu with ArrowDown on "⋯" (APG's optional extra — Enter and Space do it).
 
 ## Self-review
 
-**Issue coverage:**
-
 | Issue item | Tasks | Tests |
 |---|---|---|
 | Req 1 | 1, 3, 5, 7 | actionRules ×7, MessageItem ×6, ThreadPanel, journey |
 | Req 2 | 2, 6 | the emoji tests |
 | Req 3 | 2, 3, 5 | outside / Escape / choice / one-at-a-time; ChannelView ×3 |
 | Req 4 | 2, 3 | semantics, keyboard, focus, MessageItem keyboard path |
-| Req 5 | 1, 2, 4 | placeMenu ×7, the placement test, `_open_actions` hit-test; acceptance 6 for the long channel |
+| Req 5 | 1, 2, 4 | placeMenu ×7, the placement test, `_open_actions` hit-test; acceptance 6 and the panel-edge measurement |
 | *A live delete* | 2, 3 | MessageList.actions, ThreadPanel |
 | *Edit and the menu* | 3 | MessageItem |
 | *React and closing* | 2 | the emoji tests |
@@ -592,9 +587,14 @@ menu with ArrowDown on "⋯" (APG's optional extra — Enter and Space do it).
 | *Decided* 1–5 | Decisions 1–5 | |
 | *Record* | 8 | |
 
-**Names:** `openMessageMenu` / `openMessageMenuFor` / `closeMessageMenu` everywhere. New test ids
-`message-actions` and `message-actions-menu`; the item ids are kept. Vitest uses the accessible
-names from Task 2's markup, and the page objects use the test ids.
+**Names** are Task 1's and Task 2's throughout. Every existing test that breaks is RED work (Tasks 3, 4).
 
-**Known ripple:** the existing tests that break are all RED work (Task 3 and Task 4's page
-objects). No GREEN task writes a test or a test helper.
+## Review responses
+
+Round 1 (`reviews/plan-reviewer-1.md`):
+
+1. **Fixed.** #15 rewritten: on an outside `pointerdown` with focus in the menu, "⋯" is focused first, then the press's default applies (user-event's behaviour checked at `mouse.js:63-75`, `focus.js:12-23`, cited in Task 2). Two tests replace the old one: a touch-scroll `pointerDown` alone ends on "⋯", not `body`; `user.click` on an outside input ends in that input. A mouse press on nothing focusable clears focus as a browser does: recorded in #15 with the `preventDefault` alternative.
+2. **Fixed.** #14 and Task 2 say the comparison is by value, never `[actions]`. New tests: Task 2's same-contents rerender keeps the menu and focus; `MessageList.actions`' live reaction then live edit through `upsertMessage` leaves the open menu open.
+3. **Fixed.** The no-hover-row test now opens "⋯" and finds Edit as a menuitem.
+4. **Fixed.** *What no test covers* credits check 6 with the last message only, and asks the acceptance-reviewer to measure a reply's menu at the panel's edge.
+5. **Kept #16**, with the detached-menu case and the refinement named in it; Task 9's first run wheel-scrolls "⋯" out of the list and judges it.
