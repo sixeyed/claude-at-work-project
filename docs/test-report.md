@@ -1,15 +1,15 @@
 # Test report
 
-Written by `scripts/test.sh` after every layer it runs, so an edit by hand is lost. Revision `9dfde148e3b1-dirty`.
+Written by `scripts/test.sh` after every layer it runs, so an edit by hand is lost. Revision `cc60f55a2ccc-dirty`.
 
 ## Layers
 
 | Layer | Result | Passed | Failed | Skipped | Revision |
 |---|---|--:|--:|--:|---|
-| Lint | ✅ passed | | | | `9dfde148e3b1-dirty` |
-| Unit | ✅ passed | 2099 | 0 | 0 | `9dfde148e3b1-dirty` |
+| Lint | ✅ passed | | | | `cc60f55a2ccc-dirty` |
+| Unit | ✅ passed | 2141 | 0 | 0 | `cc60f55a2ccc-dirty` |
 | Integration | ⚪ not run | | | | |
-| End-to-end | ✅ passed | 26 | 0 | 0 | `9dfde148e3b1-dirty` |
+| End-to-end | ✅ passed | 27 | 0 | 0 | `cc60f55a2ccc-dirty` |
 
 ## Failures
 
@@ -27,6 +27,14 @@ None.
 | Ada creates a public channel and lands in it | ✅ passed |
 | A new public channel appears for another member | ✅ passed |
 | Ada creates a private channel and only she can see it | ✅ passed |
+
+### CollabHub on a phone
+
+1 of 1 passed.
+
+| Scenario | Result |
+|---|---|
+| On a phone, Ada picks a channel from the drawer, replies in a thread and goes Back | ✅ passed |
 
 ### Direct messages
 
@@ -146,7 +154,7 @@ None.
 | shared | ✅ 94 passed | — |
 | testkit | ✅ 130 passed | — |
 | worker | ✅ 19 passed | — |
-| frontend | ✅ 620 passed | — |
+| frontend | ✅ 662 passed | — |
 
 ## Coverage
 
@@ -161,4 +169,4 @@ Unit tests only.
 | messaging | `█████░░░░░` 56% | `███░░░░░░░` 31% |
 | shared | `█████████░` 90% | `███████░░░` 75% |
 | worker | `██████░░░░` 65% | `███░░░░░░░` 30% |
-| frontend | `█████████░` 97% | `████████░░` 88% |
+| frontend | `█████████░` 97% | `████████░░` 89% |

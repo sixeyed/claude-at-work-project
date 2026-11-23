@@ -257,9 +257,17 @@ def reset_messaging(messaging_dsn: str, asset_dsn: str, stack_ready: None) -> No
 
 #: A 1024 by 768 tablet with a touchscreen and no hover — `has_touch` is what lets
 #: Playwright's `Locator.tap()` run at all. Wide enough that the layout is the
-#: desktop one (narrow screens are gh-9), so the one thing that differs from the
+#: desktop one (narrow screens are `PHONE`'s), so the one thing that differs from the
 #: shared contexts is how a message's actions are reached.
 TOUCH_TABLET: dict[str, Any] = {"viewport": {"width": 1024, "height": 768}, "has_touch": True}
+
+#: A 390 by 844 phone: under 768px, so the sidebar is a drawer behind ☰ and a thread
+#: covers the channel. `is_mobile` gives it the phone's viewport meta handling.
+PHONE: dict[str, Any] = {
+    "viewport": {"width": 390, "height": 844},
+    "has_touch": True,
+    "is_mobile": True,
+}
 
 
 def _signed_in_context(
@@ -358,6 +366,23 @@ def ada_touch_context(
     scenario pays it.
     """
     yield from _signed_in_context(browser, base_url, ADA, **TOUCH_TABLET)
+
+
+@pytest.fixture
+def ada_phone_context(
+    browser: Browser, base_url: str, stack_ready: None
+) -> Iterator[BrowserContext]:
+    """Ada, signed in on a 390 by 844 phone that only this scenario uses.
+
+    Function-scoped, as `ada_touch_context` is and for its reason: the session
+    contexts are shared, and a phone viewport would change every journey.
+
+    The sign-in leans on the drawer opening on arrival at `/`: `SignInPage` waits
+    for `workspace-name` to be visible and then clicks a `workspace-option`, and on
+    a phone both are in the drawer. A change to that rule has to teach
+    `SignInPage` to open the drawer, or this fixture fails at sign-in.
+    """
+    yield from _signed_in_context(browser, base_url, ADA, **PHONE)
 
 
 @pytest.fixture

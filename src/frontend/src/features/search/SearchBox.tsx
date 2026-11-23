@@ -18,7 +18,17 @@ import { searchKeys } from './useSearch'
 /** The longest query Messaging accepts. */
 const MAX_QUERY_LENGTH = 200
 
-export function SearchBox({ workspaceId }: { workspaceId: string | null }) {
+interface Props {
+  workspaceId: string | null
+  /**
+   * Called on every non-blank submit, whether it navigates or only refetches: the
+   * narrow shell closes its drawer either way, and a location listener would miss
+   * the second.
+   */
+  onNavigate?: () => void
+}
+
+export function SearchBox({ workspaceId, onNavigate }: Props) {
   const { pathname } = useLocation()
   const [params] = useSearchParams()
   const navigate = useNavigate()
@@ -35,6 +45,7 @@ export function SearchBox({ workspaceId }: { workspaceId: string | null }) {
 
     void queryClient.invalidateQueries({ queryKey: searchKeys.results(workspaceId, q) })
     if (!onSearchPage || current.trim() !== q) navigate(`/search?q=${encodeURIComponent(q)}`)
+    onNavigate?.()
   }
 
   return (

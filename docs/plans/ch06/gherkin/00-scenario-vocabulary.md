@@ -713,3 +713,19 @@ sees N reply on "{body}" without reloading`. The last four definitions moved, un
 resolves a step from the calling module and `conftest.py` only. New:
 
 - `Given Grace has sent "{body}" in "{channel}"`
+
+## 36. 🟢 CollabHub on a phone — five phrases, one phone journey (issue gh-9)
+
+`phone_layout.feature` has a single scenario: Ada on a 390 by 844 phone picks a channel from
+the drawer, reacts and replies in a thread, goes Back to where she was, then visits every screen
+at 360 wide. What the drawer and the panels do, and what crossing the breakpoint keeps, is proven
+in Vitest. Reused verbatim: the phrases of §35, and `Grace has sent "{body}" in "{channel}"`,
+which moved, unchanged, from `test_message_action_steps.py` into `steps/conftest.py`. New:
+
+- `Given Grace has sent {count} messages in "{channel}"`
+- `When Ada goes Back`
+- `Then Ada sees the "{name}" channel where she left it`
+- `When Ada visits every screen at 360 wide`
+- `Then none of them scrolls sideways`
+
+The visit is a `When` and the check a `Then`, because a `Then` never performs an action (§16).

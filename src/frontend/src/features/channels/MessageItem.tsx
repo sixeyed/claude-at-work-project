@@ -157,7 +157,7 @@ export function MessageItem({
           onCancel={() => setEditing(false)}
         />
       ) : (
-        <p data-testid="message-body" className="text-sm whitespace-pre-wrap text-ink">
+        <p data-testid="message-body" className="text-sm whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">
           {message.body}
         </p>
       )}

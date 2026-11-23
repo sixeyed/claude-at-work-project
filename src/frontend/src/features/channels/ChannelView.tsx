@@ -9,9 +9,10 @@
 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useParams } from 'react-router-dom'
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
 
 import { getChannel } from '../../lib/api/messaging'
+import { useNarrow } from '../../lib/layout/useNarrow'
 import { ThreadPanel } from '../threads/ThreadPanel'
 import { useThreadParam } from '../threads/useThreadParam'
 import { ChannelHeader } from './ChannelHeader'
@@ -42,6 +43,31 @@ export function ChannelView({ accessToken, workspaceId, userId }: Props) {
   // Which thread is open lives in the URL. Switching channel drops it, since
   // the new channel's address carries no `?thread=`.
   const { threadId, openThread, closeThread } = useThreadParam()
+
+  // Below 768px a panel covers the message column instead of sitting beside it
+  // (register D48). The element tree is the same at every width: the column stays
+  // mounted and laid out under the panel, so its scroll position survives, and a
+  // rotation changes classes and attributes only.
+  const narrow = useNarrow()
+  // The member panel is open for one (channel, thread, width) and no other: changing
+  // any of them closes it with no effect to reset it. Crossing to wide forgets it
+  // outright — the key alone would reopen it on the way back to narrow.
+  const [membersOpenFor, setMembersOpenFor] = useState<string | null>(null)
+  const membersKey = `${channelId ?? ''}|${threadId ?? ''}|${narrow}`
+  if (!narrow && membersOpenFor !== null) setMembersOpenFor(null)
+  const membersOpen = membersOpenFor === membersKey
+
+  // **Back to channel** returns the reader to the channel's composer. The panel is
+  // still on screen when the press happens, so the focus waits for the render that
+  // removes it (and the `inert` on the column with it).
+  const column = useRef<HTMLDivElement>(null)
+  const focusComposerOnReturn = useRef(false)
+  useEffect(() => {
+    if (focusComposerOnReturn.current && !threadId && !membersOpen) {
+      focusComposerOnReturn.current = false
+      column.current?.querySelector('textarea')?.focus()
+    }
+  })
 
   // Opening a channel refetches the list: the sidebar's counts are the
   // server's, and the user has just changed what they are looking at.
@@ -80,6 +106,16 @@ export function ChannelView({ accessToken, workspaceId, userId }: Props) {
   }
 
   const label = channelLabel(channel, directory.nameFor)
+  const dm = isDm(channel)
+  // A DM's two members are fixed and are its name; there is nothing to list.
+  const canListMembers = !dm && !threadId
+  const covered = narrow && (threadId !== null || membersOpen)
+
+  function backToChannel() {
+    focusComposerOnReturn.current = true
+    if (threadId) closeThread()
+    else setMembersOpenFor(null)
+  }
 
   return (
     <section data-testid="channel-view" data-channel-name={label} className="flex h-full flex-col">
@@ -88,10 +124,16 @@ export function ChannelView({ accessToken, workspaceId, userId }: Props) {
         workspaceId={workspaceId}
         channel={channel}
         label={label}
+        onToggleMembers={
+          narrow && canListMembers
+            ? () => setMembersOpenFor(membersOpen ? null : membersKey)
+            : undefined
+        }
+        membersOpen={membersOpen}
       />
 
-      <div className="flex min-h-0 flex-1">
-        <div className="flex min-w-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 flex-1">
+        <div ref={column} inert={covered} className="flex min-w-0 flex-1 flex-col">
           {/* Keyed by channel: every channel is a fresh mount, which starts at
               its newest message, measures the bottom, takes its divider once
               and flushes its pending read as it unmounts. */}
@@ -135,12 +177,20 @@ export function ChannelView({ accessToken, workspaceId, userId }: Props) {
             rootId={threadId}
             userId={userId}
             myRole={channel.myRole ?? null}
-            onClose={closeThread}
+            // Narrow, the press is **Back to channel**; the browser's Back and the wide
+            // **Close thread** go through `closeThread` untouched.
+            onClose={narrow ? backToChannel : closeThread}
+            fullScreen={narrow}
           />
         ) : (
-          // A DM's two members are fixed and are its name; there is nothing to list.
-          !isDm(channel) && (
-            <MemberPanel accessToken={accessToken} workspaceId={workspaceId} channel={channel} />
+          canListMembers &&
+          (!narrow || membersOpen) && (
+            <MemberPanel
+              accessToken={accessToken}
+              workspaceId={workspaceId}
+              channel={channel}
+              onBack={narrow ? backToChannel : undefined}
+            />
           )
         )}
       </div>

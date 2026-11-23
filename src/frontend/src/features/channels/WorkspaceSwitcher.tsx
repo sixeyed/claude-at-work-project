@@ -15,9 +15,11 @@ import type { Session } from '../../lib/auth/session'
 
 interface Props {
   current: Session
+  /** Called by the Settings link and by a workspace option — neither is a route change the shell can see. */
+  onNavigate?: () => void
 }
 
-export function WorkspaceSwitcher({ current }: Props) {
+export function WorkspaceSwitcher({ current, onNavigate }: Props) {
   const active = current.workspaces.find((w) => w.id === current.activeWorkspaceId)
 
   return (
@@ -29,6 +31,7 @@ export function WorkspaceSwitcher({ current }: Props) {
       <Link
         to="/settings"
         data-testid="current-user"
+        onClick={onNavigate}
         className="block text-xs text-ink-muted hover:underline"
       >
         {current.profile.displayName}
@@ -43,7 +46,10 @@ export function WorkspaceSwitcher({ current }: Props) {
                 data-testid="workspace-option"
                 data-workspace-name={workspace.name}
                 disabled={workspace.id === current.activeWorkspaceId}
-                onClick={() => void session.changeWorkspace(workspace.id)}
+                onClick={() => {
+                  void session.changeWorkspace(workspace.id)
+                  onNavigate?.()
+                }}
                 className="text-xs text-ink-muted underline disabled:no-underline disabled:opacity-50"
               >
                 {workspace.name}

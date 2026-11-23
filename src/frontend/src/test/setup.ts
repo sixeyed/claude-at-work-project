@@ -10,6 +10,7 @@
  *   than reaching whatever is listening on localhost.
  * - `connect()` is replaced with the fake socket for every test, so no unit
  *   test can open a real connection.
+ * - `window.matchMedia` is the fake of `viewport.ts`, at 1024px.
  * - After each test: handlers, recorded requests, sockets, the page's focus and
  *   visibility, the DOM and the Zustand store go back to where they started.
  */
@@ -23,6 +24,7 @@ import { useChatStore } from '../stores/chat'
 import { resetRequests, server } from './api'
 import { resetPageAttention } from './page'
 import { resetSockets } from './socket'
+import { installViewport } from './viewport'
 
 vi.mock('../lib/realtime/socket', async () => {
   const { fakeConnect } = await import('./socket')
@@ -31,10 +33,15 @@ vi.mock('../lib/realtime/socket', async () => {
 
 server.listen({ onUnhandledRequest: 'error' })
 
+// jsdom has no `matchMedia`: every test runs at 1024px, the wide layout, unless
+// it calls `setViewportWidth`. Installed again after each test, below.
+installViewport()
+
 const initialChat = useChatStore.getState()
 
 afterEach(() => {
   cleanup()
+  installViewport()
   server.resetHandlers()
   resetRequests()
   resetSockets()

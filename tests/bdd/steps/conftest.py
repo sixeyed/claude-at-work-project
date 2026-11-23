@@ -200,6 +200,21 @@ def ada_deletes(ada: ChatPage, body: str) -> None:
 # same phrases to prove the same journeys on a touch screen.
 
 
+@given(parsers.re(r'Grace has sent "(?P<body>[^"]*)" in "(?P<channel>[^"]*)"'))
+def grace_has_sent(grace: ChatPage, body: str, channel: str) -> None:
+    """Grace sends from a window that is already in the channel's room.
+
+    The wait for the join is the point: Ada's reaction and reply are broadcast to
+    the room, and a Grace who had not been admitted to it yet would miss them for
+    a reason that has nothing to do with message actions. Moved here, unchanged,
+    from `test_message_action_steps.py`, because `phone_layout.feature` says it too.
+    """
+    grace.open()
+    grace.open_channel(channel)
+    grace.wait_for_channel_joined()
+    grace.send_message_and_wait(body)
+
+
 @when(parsers.parse('Ada reacts to "{body}" with "{emoji}"'))
 def ada_reacts(ada: ChatPage, body: str, emoji: str) -> None:
     ada.react_to(body, emoji)

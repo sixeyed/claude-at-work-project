@@ -35,7 +35,7 @@ export function SearchResult({ message, channelTitle, authorName }: Props) {
         <time dateTime={message.createdAt}>{formatDateTime(message.createdAt, clock)}</time>
         {message.editedAt && <span>(edited)</span>}
       </span>
-      <p className="text-sm whitespace-pre-wrap text-ink">{message.body}</p>
+      <p className="text-sm whitespace-pre-wrap text-ink [overflow-wrap:anywhere]">{message.body}</p>
     </Link>
   )
 }
