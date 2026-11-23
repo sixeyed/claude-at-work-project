@@ -29,9 +29,15 @@ interface Props {
   accessToken: string
   workspaceId: string | null
   userId: string
+  /**
+   * Called when a DM link is followed, and when a picked DM has opened and the app
+   * has navigated to it — not at the pick: a failed open shows nothing, and a
+   * drawer closed at the pick would leave the user on the old screen with no sign why.
+   */
+  onNavigate?: () => void
 }
 
-export function DirectMessageList({ accessToken, workspaceId, userId }: Props) {
+export function DirectMessageList({ accessToken, workspaceId, userId, onNavigate }: Props) {
   const navigate = useNavigate()
   const { data: channels } = useChannels(accessToken, workspaceId)
   const directory = useWorkspaceMembers(accessToken, workspaceId)
@@ -55,7 +61,10 @@ export function DirectMessageList({ accessToken, workspaceId, userId }: Props) {
       { userId: otherId, workspaceId },
       {
         onSuccess: (channel, variables) => {
-          if (variables.workspaceId === currentWorkspace.current) navigate(`/c/${channel.id}`)
+          if (variables.workspaceId === currentWorkspace.current) {
+            navigate(`/c/${channel.id}`)
+            onNavigate?.()
+          }
         },
       },
     )
@@ -110,6 +119,7 @@ export function DirectMessageList({ accessToken, workspaceId, userId }: Props) {
                 to={`/c/${dm.id}`}
                 data-testid="dm-list-item"
                 data-dm-name={label}
+                onClick={onNavigate}
                 className={({ isActive }) =>
                   [
                     'flex items-center justify-between gap-2 rounded px-2 py-1 text-sm',

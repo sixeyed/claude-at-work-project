@@ -479,8 +479,20 @@ Task 9. What overflows 360 today, found by reading the classes:
 
 ## Found while building
 
-*Filled in by the code-writer: every deviation from this plan, and every bug the first real run
-found, each with the test that now pins it down. Empty until then.*
+- **Image cap (Task 7).** The plan's `max-w-[min(20rem,100%)]` on the image broke
+  `AttachmentList.test.tsx` (`toHaveClass('max-w-80')`), an existing test and so RED work. The
+  image keeps `max-w-80`; its button carries `max-w-full [&>img]:max-w-[min(20rem,100%)]`, whose
+  higher specificity gives the same cap. Pinned by the journey's 360 tour (passed); no Vitest test.
+- **Member panel reset on crossing to wide (Decision 17).** The key `channel|thread|narrow` alone
+  reopens the panel on a return to narrow, so `ChannelView` also clears `membersOpenFor` while
+  wide (a render-time `setState`). Pinned by `the member panel takes each width's default`.
+- **Same pattern in `ChatLayout`:** `drawerOpen` is cleared during render while wide, not by an
+  effect. Pinned by `the drawer is closed after crossing to wide and back`.
+- **Focus back on ☰** is requested by `closeDrawer` and done by an effect on `shown`, because ☰
+  is `inert` until the commit that closes the drawer. Pinned by every "focus back on ☰" row.
+- **`ChannelHeader`'s controls:** the Members button sits in a new wrapper; the admin
+  `channel-controls` div is kept as it was, inside it, so a non-admin still has none.
+- No bug was found by the journey's first run; the 360 tour found nothing to fix.
 
 ## Not in this plan
 

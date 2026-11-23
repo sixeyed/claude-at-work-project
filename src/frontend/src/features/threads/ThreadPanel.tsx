@@ -41,6 +41,12 @@ interface Props {
   /** The caller's role in the channel — `admin` may delete anyone's message. */
   myRole: string | null
   onClose: () => void
+  /**
+   * Below 768px the panel covers the channel instead of sitting beside it. The same
+   * element either way, so a rotation never remounts it and its scroll position and
+   * reply draft survive; only the class and the close control's name change.
+   */
+  fullScreen?: boolean
 }
 
 /** Nothing loaded yet — one array, so the layout effect is not re-run each render. */
@@ -59,6 +65,7 @@ export function ThreadPanel({
   userId,
   myRole,
   onClose,
+  fullScreen = false,
 }: Props) {
   const scroller = useRef<HTMLDivElement>(null)
   const heightBeforePrepend = useRef<number | null>(null)
@@ -139,7 +146,11 @@ export function ThreadPanel({
       // Where focus goes when the row holding it goes away (a live delete).
       data-focus-fallback
       tabIndex={-1}
-      className="flex w-80 shrink-0 flex-col border-l border-border"
+      className={
+        fullScreen
+          ? 'absolute inset-0 z-10 flex w-full flex-col bg-surface'
+          : 'flex w-80 shrink-0 flex-col border-l border-border'
+      }
     >
       <header className="flex items-center justify-between border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold text-ink">Thread</h2>
@@ -149,7 +160,7 @@ export function ThreadPanel({
           onClick={onClose}
           className="text-xs text-ink-muted underline"
         >
-          Close thread
+          {fullScreen ? 'Back to channel' : 'Close thread'}
         </button>
       </header>
 

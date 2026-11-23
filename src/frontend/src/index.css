@@ -26,9 +26,14 @@
 }
 
 html,
-body,
-#root {
+body {
   height: 100%;
+}
+
+/* The dynamic viewport height: on a phone the browser's own bars come and go, and
+   100% of a layout viewport taller than the screen pushes the composer below it. */
+#root {
+  height: 100dvh;
 }
 
 body {

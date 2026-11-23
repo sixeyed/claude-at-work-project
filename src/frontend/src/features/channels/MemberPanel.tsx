@@ -25,9 +25,11 @@ interface Props {
   accessToken: string
   workspaceId: string | null
   channel: Channel
+  /** Below 768px the panel covers the message column; given, it shows a **Back to channel** control. */
+  onBack?: () => void
 }
 
-export function MemberPanel({ accessToken, workspaceId, channel }: Props) {
+export function MemberPanel({ accessToken, workspaceId, channel, onBack }: Props) {
   const [selected, setSelected] = useState('')
 
   const directory = useWorkspaceMembers(accessToken, workspaceId)
@@ -43,7 +45,24 @@ export function MemberPanel({ accessToken, workspaceId, channel }: Props) {
   const addable = directory.members.filter((member) => !inChannel.has(member.user.id))
 
   return (
-    <aside data-testid="member-panel" className="w-64 shrink-0 border-l border-border p-4">
+    <aside
+      data-testid="member-panel"
+      className={
+        onBack
+          ? 'absolute inset-0 z-10 w-full overflow-y-auto bg-surface p-4'
+          : 'w-64 shrink-0 border-l border-border p-4'
+      }
+    >
+      {onBack && (
+        <button
+          type="button"
+          data-testid="members-close"
+          onClick={onBack}
+          className="mb-3 text-xs text-ink-muted underline"
+        >
+          Back to channel
+        </button>
+      )}
       <h3 className="text-xs font-medium tracking-wide text-ink-muted uppercase">Members</h3>
 
       {isPending ? (

@@ -127,7 +127,9 @@ function AttachmentImage(props: ItemProps) {
     <button
       type="button"
       onClick={() => openFresh(queryClient, props)}
-      className="rounded"
+      // `max-w-80` on the image is a flat 320px, which a 360px screen's padded row
+      // cannot hold; this wider-specificity rule caps it at the row when that is less.
+      className="max-w-full rounded [&>img]:max-w-[min(20rem,100%)]"
       aria-label={`Open ${attachment.fileName}`}
     >
       <img
@@ -161,7 +163,7 @@ function AttachmentFile(props: ItemProps) {
     <div
       data-testid="message-attachment-file"
       data-file-name={attachment.fileName}
-      className="flex items-center gap-3 rounded border border-border px-3 py-2 text-sm"
+      className="flex max-w-full items-center gap-3 rounded border border-border px-3 py-2 text-sm"
     >
       <span className="min-w-0 truncate text-ink">{attachment.fileName}</span>
       <span className="text-xs text-ink-muted">{formatBytes(attachment.sizeBytes)}</span>

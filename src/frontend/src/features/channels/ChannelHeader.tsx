@@ -31,9 +31,23 @@ interface Props {
   channel: Channel
   /** The bare name to show: the channel's, or the other person's for a DM. */
   label: string
+  /**
+   * Below 768px the member panel is closed by default and this opens it. The
+   * **Members** button renders when this is given; the view gives it only when
+   * narrow, not a DM, and no thread is open.
+   */
+  onToggleMembers?: () => void
+  membersOpen?: boolean
 }
 
-export function ChannelHeader({ accessToken, workspaceId, channel, label }: Props) {
+export function ChannelHeader({
+  accessToken,
+  workspaceId,
+  channel,
+  label,
+  onToggleMembers,
+  membersOpen = false,
+}: Props) {
   const navigate = useNavigate()
   const [renaming, setRenaming] = useState(false)
   const [name, setName] = useState(channel.name)
@@ -61,9 +75,12 @@ export function ChannelHeader({ accessToken, workspaceId, channel, label }: Prop
 
   return (
     <header className="flex flex-col gap-2 border-b border-border px-6 py-4">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
         <div className="min-w-0">
-          <h2 data-testid="channel-header-name" className="text-lg font-semibold text-ink">
+          <h2
+            data-testid="channel-header-name"
+            className="text-lg font-semibold break-words text-ink"
+          >
             {!dm && (
               <>
                 <span aria-hidden="true" className="opacity-50">
@@ -76,29 +93,42 @@ export function ChannelHeader({ accessToken, workspaceId, channel, label }: Prop
           {!dm && channel.topic && <p className="text-sm text-ink-muted">{channel.topic}</p>}
         </div>
 
-        {isAdmin && (
-          <div data-testid="channel-controls" className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 flex-wrap gap-2">
+          {onToggleMembers && (
             <button
               type="button"
-              data-testid="channel-rename-open"
-              onClick={() => {
-                setName(channel.name)
-                setRenaming((open) => !open)
-              }}
+              data-testid="members-open"
+              aria-expanded={membersOpen}
+              onClick={onToggleMembers}
               className="rounded border border-border px-2 py-1 text-xs text-ink"
             >
-              Rename
+              Members
             </button>
-            <button
-              type="button"
-              data-testid="channel-archive"
-              onClick={() => setConfirmingArchive(true)}
-              className="rounded border border-border px-2 py-1 text-xs text-danger"
-            >
-              Archive
-            </button>
-          </div>
-        )}
+          )}
+          {isAdmin && (
+            <div data-testid="channel-controls" className="flex gap-2">
+              <button
+                type="button"
+                data-testid="channel-rename-open"
+                onClick={() => {
+                  setName(channel.name)
+                  setRenaming((open) => !open)
+                }}
+                className="rounded border border-border px-2 py-1 text-xs text-ink"
+              >
+                Rename
+              </button>
+              <button
+                type="button"
+                data-testid="channel-archive"
+                onClick={() => setConfirmingArchive(true)}
+                className="rounded border border-border px-2 py-1 text-xs text-danger"
+              >
+                Archive
+              </button>
+            </div>
+          )}
+        </div>
       </div>
 
       {isAdmin && renaming && (

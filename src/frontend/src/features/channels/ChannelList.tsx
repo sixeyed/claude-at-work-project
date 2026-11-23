@@ -21,9 +21,11 @@ import { useChannelListRefresh, useChannels } from './useChannels'
 interface Props {
   accessToken: string
   workspaceId: string | null
+  /** Called when a channel link is followed — the narrow shell closes its drawer. */
+  onNavigate?: () => void
 }
 
-export function ChannelList({ accessToken, workspaceId }: Props) {
+export function ChannelList({ accessToken, workspaceId, onNavigate }: Props) {
   const { data: all, isPending, error } = useChannels(accessToken, workspaceId)
   // Direct messages have a section of their own (`DirectMessageList`).
   const channels = all?.filter((channel) => !isDm(channel))
@@ -66,6 +68,7 @@ export function ChannelList({ accessToken, workspaceId }: Props) {
               to={`/c/${channel.id}`}
               data-testid="channel-list-item"
               data-channel-name={channel.name}
+              onClick={onNavigate}
               className={({ isActive }) =>
                 [
                   'flex items-center justify-between gap-2 rounded px-2 py-1 text-sm',

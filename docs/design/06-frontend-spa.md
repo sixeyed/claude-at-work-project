@@ -82,6 +82,45 @@ need a folder of its own. `/features/canvas`, `/features/presence`,
 `/features/assets` and `/lib/yjs` are the eventual shape and do not exist yet.
 `/features/threads` exists as of 2026-10-02 (§5.2, *Threads*).
 
+### Layout below 768px — added 2026-11-23 (register D48)
+
+A viewport under 768px is the phone layout; 768px and over is the desktop layout, unchanged.
+Responsive web only: no manifest, no service worker (D20 stays open).
+
+- **One hook, one tree.** `useNarrow()` (`lib/layout/useNarrow.ts`) reads
+  `matchMedia('(min-width: 768px)')` through `useSyncExternalStore` and is the only source of
+  "narrow". The shell and the channel view choose classes and attributes from it in
+  JavaScript, never with `md:` variants, so CSS and JS cannot disagree at 767/768 and a test
+  can move the line (jsdom evaluates no media query). **The element tree is the same at every
+  width**: narrow changes classes, attributes and leaf siblings, never the type or position of
+  an ancestor of the route's content, `MessageList`, `MessageComposer` or `ThreadPanel`, so a
+  rotation re-renders and never remounts — drafts and scroll positions survive.
+- **The drawer.** `ChatLayout` shows a top bar with ☰ (**Open sidebar**) on every shell screen
+  (`/`, a channel, a DM, `/search`, `/settings`). The sidebar is the same `<aside>` at every
+  width; narrow and open it is a modal `role="dialog"` named **Sidebar** over a **Dismiss
+  sidebar** backdrop, with `<main>` and the top bar `inert`; narrow and closed it carries
+  `hidden`. Opening focuses **Close sidebar**; Tab and Shift+Tab wrap inside; every close
+  (Close sidebar, the backdrop, Escape, or a navigation made from the drawer) returns focus to
+  ☰. Closing on navigation is an `onNavigate` prop on the channel list, DM list, search box and
+  workspace switcher, plus `CreateChannelDialog`'s `onCreated` — not a location listener, which
+  would miss a search resubmitted on `/search` and a workspace switch. A new DM closes the
+  drawer once it opens, not at the pick; a refused create leaves it open. It opens on arrival
+  whenever the path becomes `/` while narrow (the first load, the return from sign-in, an
+  archive), not on a rotation; opening it closes an open "⋯" menu.
+- **Covering panels.** The thread panel (button **Back to channel**) and the member panel
+  (opened from a **Members** button in the channel header, closed by default; not offered in a
+  DM) cover the message column with an absolutely positioned overlay. The column stays mounted
+  and laid out and is `inert` while covered — never `display:none`, which can lose its scroll
+  position. Back to channel focuses the channel composer. The browser's Back still closes a
+  thread and adds nothing to history; the member panel adds no history entry.
+- **Crossing the breakpoint** keeps the open thread, both drafts and the list's scroll
+  position. The drawer and the member panel take each width's default: crossing to wide
+  closes both (wide shows the member panel beside the list); crossing to narrow leaves the
+  drawer closed, with focus moved to ☰ if it was in the sidebar.
+- **The viewport.** `interactive-widget=resizes-content` in the viewport meta and `#root` at
+  `100dvh`, so the composer stays above an on-screen keyboard. Only a device proves that, and
+  a real rotation.
+
 ---
 
 ## 4. Auth Flow (OIDC + PKCE)
@@ -337,7 +376,8 @@ adopted as it is. The `name` claim in the access token stays stale for up to its
 is in `/features/threads`.
 
 - **The panel** is `<aside aria-label="Thread">`, 20rem wide, in the channel's
-  right column **in place of** the member panel. It shows the root, the replies
+  right column **in place of** the member panel (below 768px it covers the message
+  view instead — §3, *Layout below 768px*). It shows the root, the replies
   oldest first, then a composer, and never touches the channel's read state.
 - **The URL owns it**: `?thread=<rootId>`. Opening pushes (Back steps A → B → none);
   closing replaces and deletes only `thread`, so `?message=` survives and Back does
@@ -529,7 +569,7 @@ Over `GET /api/v1/search/messages` (doc 02, D8c), unchanged.
   `ChatLayout` provides the clock to the three places a time is shown (`MessageItem`,
   `ThreadSummary`, `SearchResult`) through `ClockContext`, so a choice re-renders cached
   messages without refetching them. The Settings page (`/settings`, inside the chat shell,
-  reached from your name in the sidebar) offers Automatic / 12-hour / 24-hour and reads the
+  reached from your name in the sidebar — in the drawer below 768px) offers Automatic / 12-hour / 24-hour and reads the
   profile and preferences from the server on every visit. A theme toggle, a locale and
   notification settings (Worker D18) are each one more validated key — none is built, and the
   palette is still light-only.
