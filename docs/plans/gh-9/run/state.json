@@ -1,10 +1,10 @@
 {
-  "stage": "plan-reviewer",
+  "stage": "plan-writer",
   "status": "running",
-  "step": 3,
-  "review": "",
+  "step": 4,
+  "review": "docs/plans/gh-9/reviews/plan-reviewer-2.md",
   "rounds": {
-    "plan": 2,
+    "plan": 3,
     "test": 1,
     "code": 1,
     "acceptance": 1
