@@ -91,3 +91,9 @@ Layer: V = Vitest, B = BDD. Task numbers are the plan's. "Match" is whether the 
 
 ## Left unproven here, by design
 The 360px reach-and-use of every control, the composer above the keyboard, a real rotation — the acceptance-reviewer and the human, as the plan says.
+
+## Review responses (round 2, to test-reviewer-1)
+1. **Fixed.** The composers are disabled unless `connectionStatus` is `'connected'`. `ChannelView.narrow`'s `renderShell` now sets it (`setup.ts` resets the store after each test). `App.narrow` has a `connected()` helper that sets it on the fresh `chat` module once the shell has mounted; it is called in the draft row, acceptance check 3's order and the focus-crossing row. The draft row now waits on the `Message #general` textbox, not the root's text, which shows twice with a thread open. Rerun: still 38 failed, 1 passed by design, `useNarrow.test.ts` a load failure, and typecheck shows only the one `./useNarrow` error. First lines are unchanged except the draft row, which now fails further on at `Back to channel` (its drafts were typed).
+2. **The sketch-green run of the fixed files was not seen by me**; I built no sketch. I rely on the test-reviewer's 42/42 with this same fix, and on the draft row's red moving past typing. Unverified by me.
+3. Noted for the code-writer: Decision 17's `membersOpenFor` key reopens the panel on a return to the same narrow state. The test is right; reset the member panel on crossing to wide and say so in *Found while building*.
+4. Noted: the journey's `is_where_left` arrangement is unrun; if it trips at the first e2e run, send it back for more filler.

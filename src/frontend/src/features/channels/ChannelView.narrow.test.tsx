@@ -28,6 +28,7 @@ import {
 import { giveLayout } from '../../test/layout'
 import { renderWithProviders } from '../../test/render'
 import { FakeSocket } from '../../test/socket'
+import { useChatStore } from '../../stores/chat'
 import { setViewportWidth } from '../../test/viewport'
 import { ChannelList } from './ChannelList'
 import { ChannelView } from './ChannelView'
@@ -106,6 +107,8 @@ function Shell() {
 function renderShell(width = 390, route = `/c/${GENERAL}`) {
   startServer()
   setViewportWidth(width)
+  // The composers are disabled until the socket is up; setup.ts resets the store after each test.
+  useChatStore.getState().setConnectionStatus('connected')
   const socket = new FakeSocket('token')
   socket.connected = true
   return renderWithProviders(<Shell />, { route, path: '/c/:channelId', socket })

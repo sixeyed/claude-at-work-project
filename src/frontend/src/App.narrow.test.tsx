@@ -165,6 +165,14 @@ async function sidebarIsRendered() {
 /** The message column is covered ⇔ the composer sits inside an `inert` ancestor. */
 const columnIsInert = () => composer().closest('[inert]') !== null
 
+/**
+ * The composers are disabled until the socket is up, and the fake never connects: say
+ * so on the store this file's fresh `App` uses, once the shell has mounted.
+ */
+function connected() {
+  act(() => chat.useChatStore.getState().setConnectionStatus('connected'))
+}
+
 async function waitForFocusOn(element: () => HTMLElement | null) {
   await waitFor(() => {
     const target = element()
@@ -547,6 +555,8 @@ describe('crossing the breakpoint', () => {
     const { user } = renderApp(`/c/${GENERAL}?thread=${ROOT}`, 1024)
     const panel = await findThreadPanel()
     const replyBox = await within(panel).findByRole('textbox', { name: 'Reply' })
+    await screen.findByRole('textbox', { name: 'Message #general' })
+    connected()
     const channelBox = composer()
     await user.type(channelBox, 'channel draft')
     await user.type(replyBox, 'reply draft')
@@ -573,6 +583,7 @@ describe('crossing the breakpoint', () => {
     const { user } = renderApp(`/c/${GENERAL}`, 390)
     await findOpenButton()
     await screen.findByText('the kettle is on')
+    connected()
     await user.type(composer(), 'channel draft')
     fireEvent.click(screen.getByRole('button', { name: /^1 reply/ }))
     const panel = await findThreadPanel()
@@ -678,6 +689,7 @@ describe('crossing the breakpoint', () => {
     renderApp(`/c/${GENERAL}`, 1024)
     const random = await screen.findByRole('link', { name: 'random' })
     await screen.findByText('the kettle is on')
+    connected()
     act(() => random.focus())
     expect(document.activeElement).toBe(random)
 
