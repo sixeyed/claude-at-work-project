@@ -562,7 +562,10 @@ tests/bdd --generate-missing --feature tests/bdd/features` prints nothing. Under
 
 ## Found while building
 
-*Filled in by the code-writer; empty until then.*
+- No departure from the plan. Every GREEN task went green on its first build: 620 Vitest tests, `tsc` clean, e2e 26 of 26 (the touch journey and the five reworked ones).
+- Test-reviewer minors: no `onBlur`/`focusout` handler exists (finding 2); the menu uses `rounded-md` so the page object's four-corner hit test, inset 2px, stays inside the border (finding 3); the unmount "focus elsewhere" half is not relied on (finding 1).
+- The unmount cleanup finds the menu with `document.getElementById(id)` rather than a ref, because the menu node exists only while open and a ref read in a cleanup trips `react-hooks/exhaustive-deps`.
+- Task 9's by-hand first run (last message of a scrolled channel, a reply at the panel's edge, #16's wheel scroll) was not done: no person at a browser. Left for the human and the acceptance-reviewer. No test for it.
 
 ## Not in this plan
 

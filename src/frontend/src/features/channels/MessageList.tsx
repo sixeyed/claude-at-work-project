@@ -298,6 +298,9 @@ export function MessageList({
       onScroll={onScroll}
       data-testid="message-list"
       className="flex-1 overflow-y-auto"
+      // Where focus goes when the row holding it goes away (a live delete).
+      data-focus-fallback
+      tabIndex={-1}
     >
       {isFetchingNextPage && (
         <p data-testid="message-list-older" className="p-2 text-center text-xs text-ink-muted">

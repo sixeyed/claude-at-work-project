@@ -364,6 +364,35 @@ is in `/features/threads`.
   channel) shows "This thread isn't available."; a failed refetch over loaded data
   keeps showing the thread.
 
+**Message actions — added 2026-11-23** (register D47, ADR 261123). Code: `features/channels`.
+
+- **One "⋯" at every width**, in the channel and the thread panel; no hover row. It appears on
+  every message that allows an action and on none that doesn't: `offeredActions`
+  (`actionRules.ts`) is the rule — react always, reply for a top-level row with a thread to open,
+  edit for the author, delete for the author or a channel admin; none for a pending or deleted
+  message. The order is always react, reply, edit, delete. Hiding is a courtesy; the server
+  decides. Delete is immediate.
+- **Markup and keys**: a WAI-ARIA menu button — `aria-label="Message actions"`,
+  `aria-haspopup="menu"`, `aria-expanded`, `aria-controls` — and a `role="menu"` of `menuitem`
+  buttons. Opening focuses the first item; ArrowDown/ArrowUp and Tab/Shift+Tab move, wrapping;
+  Home/End jump; Enter and Space choose. Tab stays in the menu, which is a portal at the end of
+  `<body>`.
+- **React** swaps the menu's items for the six emoji in the same popup (`aria-label="Add a
+  reaction"`), focus on the first.
+- **Placement**: a portal on `document.body`, `position: fixed`, so the scrolling list and panel
+  cannot clip it. `placeMenu` opens it below "⋯" if it fits, otherwise above, clamped 8px inside
+  the viewport, right-aligned to "⋯"; it is placed again on any scroll or resize. A scroll does
+  not close it.
+- **Closing**: a `pointerdown` outside (DOM containment against the portal's node), Escape, or a
+  choice — never blur, which races the option's click. Closing returns focus to "⋯". On an
+  outside press with focus in the menu, "⋯" takes focus first and the press's own default then
+  applies (a press on an input focuses it).
+- **One at a time**: `openMessageMenu` in the chat store holds the open instance's id (client
+  state, D24). The offered actions changing under an open menu closes it, compared by value.
+- **Focus when "⋯" goes away** (a live delete, a role change, the thread closing): to the nearest
+  `[data-focus-fallback]` — the message list's scroller, or the thread panel — never the body.
+  After editing, saved or cancelled, focus returns to "⋯", which stays while editing.
+
 ### 5.4 Search — added 2026-10-02
 
 Over `GET /api/v1/search/messages` (doc 02, D8c), unchanged.

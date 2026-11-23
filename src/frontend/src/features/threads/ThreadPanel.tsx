@@ -136,6 +136,9 @@ export function ThreadPanel({
     <aside
       aria-label="Thread"
       data-testid="thread-panel"
+      // Where focus goes when the row holding it goes away (a live delete).
+      data-focus-fallback
+      tabIndex={-1}
       className="flex w-80 shrink-0 flex-col border-l border-border"
     >
       <header className="flex items-center justify-between border-b border-border px-4 py-3">
